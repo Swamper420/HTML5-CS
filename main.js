@@ -39,11 +39,20 @@ const SPRAY_AK = [
 const SLOT_ORDER = ['ak', 'deagle', 'awp'];
 const MAP_HALF = 34;            // playable half-extent
 const EYE = 1.62;
-const ROUND_TIME = 120;
-const BUY_TIME = 15;
-const KILLS_TO_WIN_ROUND = 15;
+const ROUND_TIME = 120;         // 2:00 round (CS-like, timer starts after freeze)
+const BUY_TIME = 5;             // CS-style short buy window each round start
+const FREEZE_TIME = 3;          // frozen in spawn: look + buy, no move/shoot
+const KILLS_TO_WIN_ROUND = 15;  // legacy (unused — rounds are elimination now)
 const ROUNDS_TO_WIN_MATCH = 7;
-const RESPAWN_DELAY = 3;
+const RESPAWN_DELAY = 3;        // legacy (unused — CS has no mid-round respawns)
+// CS economy
+const MONEY_START = 800;
+const MONEY_KILL = 300;
+const MONEY_WIN = 3250;
+const MONEY_LOSS = 1900;
+const MONEY_DRAW = 2000;
+const MONEY_MAX = 16000;
+const addMoney = (n) => { player.money = clamp(player.money + n, 0, MONEY_MAX); };
 
 const opts = { quality: true, sound: true, difficulty: 1 };
 
@@ -607,16 +616,19 @@ const G = {
   phase: 'menu', // menu | playing | paused | over
   round: 1, score: { ct: 0, t: 0 }, roundKills: { ct: 0, t: 0 },
   timeLeft: ROUND_TIME, buyOpen: false, roundEnding: false,
+  freezeLeft: 0, buyLeft: 0,
   kills: 0, deaths: 0, headshots: 0, shots: 0, hits: 0,
   startTime: 0,
 };
+const isFreeze = () => G.freezeLeft > 0;
+const isBuyTime = () => G.buyLeft > 0 && !G.roundEnding;
 
 const player = {
   pos: new THREE.Vector3(-29, 0, 0), vel: new THREE.Vector3(),
   yaw: -Math.PI / 2, pitch: 0, onGround: true,
-  hp: 100, armor: 100, money: 800, alive: true,
-  weapons: { ak: { owned: true, mag: 30, reserve: 90 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 5, reserve: 0 } },
-  cur: 'ak', last: 'deagle', reloading: 0, reloadDur: 1, nextShot: 0,
+  hp: 100, armor: 0, money: MONEY_START, alive: true,
+  weapons: { ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 5, reserve: 0 } },
+  cur: 'deagle', last: 'ak', reloading: 0, reloadDur: 1, nextShot: 0,
   aiming: false, respawnAt: 0, radius: 0.45, lastDmgDir: 0,
   kills: 0, deaths: 0,
   // gunplay state: bloom heat + spray index + recoverable punch + shake
@@ -876,8 +888,9 @@ function botShoot(bot, t, targetPos) {
 // bot per-frame update
 function updateBot(bot, dt, t) {
   const m = bot.mesh;
-  if (!bot.alive) {
-    if (t >= bot.respawnAt && G.phase === 'playing') resetBot(bot);
+  if (!bot.alive) return; // CS: no mid-round respawns — wait for next round
+  if (isFreeze()) { // frozen: hold position, no thinking/shooting
+    m.position.copy(bot.pos);
     return;
   }
   if (t >= bot.nextThink) botThink(bot, t);
@@ -1040,8 +1053,7 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
   }
   if (bot.hp <= 0) {
     bot.alive = false; bot.hp = 0;
-    bot.respawnAt = performance.now() / 1000 + RESPAWN_DELAY;
-    // death anim: fall over + fade later
+    // death anim: fall over + fade (stays down until next round — CS elimination)
     bot.mesh.rotation.x = -Math.PI / 2;
     bot.mesh.position.y = 0.2;
     setTimeout(() => { if (!bot.alive) bot.mesh.visible = false; }, 2500);
@@ -1052,9 +1064,9 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
     const kt = killerTeam;
     addKillfeed(kn, kt, bot.short, bot.team, currentWeaponName(shooter), head);
     if (killerIsPlayer) {
-      G.kills++; player.kills++; player.money += 300; playerHitmark(head, true);
+      G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(head, true);
       AudioSys.kill();
-      if (head) { G.headshots++; announce('HEADSHOT', 700); }
+      if (head) { G.headshots++; announce('HEADSHOT +$' + MONEY_KILL, 700); }
     }
     if (shooter.bot && shooter.team === 't') { /* enemy got a kill */ }
     updateHUD(); checkRoundEnd();
@@ -1063,7 +1075,8 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
 
 function damagePlayer(dmg, shooter, head) {
   if (!player.alive || G.phase !== 'playing') return;
-  // armor absorbs 50%
+  // CS-like armor: helmet halves headshot bonus, vest absorbs body damage
+  if (head && player.armor > 0) dmg *= 0.6;
   if (player.armor > 0) {
     const absorbed = dmg * 0.5;
     const useArmor = Math.min(player.armor, absorbed);
@@ -1076,9 +1089,10 @@ function damagePlayer(dmg, shooter, head) {
   updateHUD();
   if (player.hp <= 0) {
     player.hp = 0; player.alive = false; player.deaths++;
-    player.respawnAt = performance.now() / 1000 + RESPAWN_DELAY;
+    player.aiming = false;
     const kn = shooter.bot ? shooter.bot.short : 'Enemy';
     $('respawn-killer').textContent = kn + (head ? ' (HEADSHOT)' : '');
+    $('respawn-timer').textContent = 'Waiting for next round… (no respawns — CS elimination)';
     $('respawn-overlay').classList.remove('hidden');
     document.exitPointerLock && document.exitPointerLock();
     const killerTeam = shooter.team || 't';
@@ -1089,13 +1103,14 @@ function damagePlayer(dmg, shooter, head) {
 }
 function currentWeaponName(shooter) {
   if (shooter.isPlayer) return WEAPONS[player.cur].name;
-  return 'AK-47';
+  return G.round <= 1 ? 'Desert Eagle' : 'AK-47'; // pistol round flavor
 }
 
 // ---------------- Player shooting (CS-style recoil + bloom) ----------------
 function playerTryFire(t) {
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!player.alive || player.reloading > 0 || t < player.nextShot) return;
+  if (isFreeze() || G.roundEnding) return; // CS freeze: no shooting
   if (w.mag <= 0) { AudioSys.click(300, 0.06, 0.3); player.nextShot = t + 0.3; startReload(); return; }
   if (!def.auto && !mouseJustDown) return;
   // spray reset after pause (tap = accurate again)
@@ -1246,16 +1261,32 @@ function initInput() {
 }
 
 // ---------------- Buy menu ----------------
+function buyTimeLeft() { return Math.max(0, G.buyLeft); }
 function toggleBuy(force) {
   const want = force !== undefined ? force : !G.buyOpen;
-  if (want && G.timeLeft < ROUND_TIME - BUY_TIME) { announce('BUY TIME OVER', 1000); AudioSys.click(300, 0.1, 0.3); return; }
+  if (want) {
+    if (G.phase !== 'playing' || G.roundEnding) return;
+    if (!player.alive) { announce('CAN\'T BUY WHILE DEAD', 1000); AudioSys.click(300, 0.1, 0.3); return; }
+    if (!isBuyTime()) { announce('BUY TIME OVER (' + BUY_TIME + 'S)', 1000); AudioSys.click(300, 0.1, 0.3); return; }
+  }
   G.buyOpen = want;
   $('buy-menu').classList.toggle('hidden', !want);
   $('buy-money').textContent = '$' + player.money;
+  updateBuyTimer();
   if (want) { document.exitPointerLock && document.exitPointerLock(); }
   else if (G.phase === 'playing' && player.alive) lockPointer();
 }
+function updateBuyTimer() {
+  const el = $('buy-timer');
+  if (el) {
+    if (isBuyTime()) { el.textContent = 'BUY TIME ' + buyTimeLeft().toFixed(1) + 's — frozen ' + Math.max(0, G.freezeLeft).toFixed(1) + 's'; el.style.color = '#7dff9a'; }
+    else { el.textContent = 'BUY CLOSED'; el.style.color = '#ff6b6b'; }
+  }
+}
 function buyItem(kind) {
+  if (!isBuyTime()) { announce('BUY TIME OVER (' + BUY_TIME + 'S)', 1100); AudioSys.click(250, 0.12, 0.35); return; }
+  if (!player.alive) { announce('CAN\'T BUY WHILE DEAD', 1100); AudioSys.click(250, 0.12, 0.35); return; }
+  if (G.roundEnding) return;
   const w = player.weapons;
   const ok = (msg) => { announce(msg, 1100); $('buy-money').textContent = '$' + player.money; updateHUD(); AudioSys.click(1500, 0.07, 0.35); };
   const no = (msg) => { announce(msg, 1100); AudioSys.click(250, 0.12, 0.35); };
@@ -1351,9 +1382,14 @@ function updateHUD() {
     el.classList.toggle('locked', !player.weapons[k].owned);
   });
   $('ct-score').textContent = G.score.ct; $('t-score').textContent = G.score.t;
-  $('timer').textContent = fmtTime(G.timeLeft);
-  $('timer').classList.toggle('low', G.timeLeft < 20);
-  $('round-label').textContent = `ROUND ${G.round} / ${ROUNDS_TO_WIN_MATCH * 2 - 1} · CT ${G.roundKills.ct} — ${G.roundKills.t} T`;
+  $('timer').textContent = isFreeze() ? ('❄ ' + G.freezeLeft.toFixed(1)) : fmtTime(G.timeLeft);
+  $('timer').classList.toggle('low', !isFreeze() && G.timeLeft < 20);
+  const ctAlive = (player.alive ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
+  const tAlive = bots.filter((b) => b.alive && b.team === 't').length;
+  let phase = '';
+  if (isFreeze()) phase = ` · ❄ FREEZE ${G.freezeLeft.toFixed(1)}`;
+  else if (isBuyTime()) phase = ` · BUY ${G.buyLeft.toFixed(1)}s`;
+  $('round-label').textContent = `ROUND ${G.round} / ${ROUNDS_TO_WIN_MATCH * 2 - 1} · CT ${ctAlive} — ${tAlive} T${phase}`;
   $('crosshair').style.setProperty('--gap', crossGap.toFixed(1) + 'px');
 }
 
@@ -1392,13 +1428,19 @@ function drawMinimap(t) {
 }
 
 // ---------------- Round flow ----------------
+function aliveCounts() {
+  const ct = (player.alive ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
+  const t = bots.filter((b) => b.alive && b.team === 't').length;
+  return { ct, t };
+}
 function startMatch() {
   G.phase = 'playing'; G.round = 1; G.score = { ct: 0, t: 0 };
   G.kills = 0; G.deaths = 0; G.headshots = 0; G.shots = 0; G.hits = 0;
   G.startTime = performance.now();
-  player.money = 800; player.kills = 0; player.deaths = 0;
-  player.weapons = { ak: { owned: true, mag: 30, reserve: 90 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 5, reserve: 0 } };
-  player.cur = 'ak';
+  player.money = MONEY_START; player.kills = 0; player.deaths = 0;
+  player.armor = 0;
+  player.weapons = { ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 0, reserve: 0 } };
+  player.cur = 'deagle'; player.last = 'ak';
   startRound(true);
   $('main-menu').classList.add('hidden');
   $('end-screen').classList.add('hidden');
@@ -1406,18 +1448,28 @@ function startMatch() {
   lockPointer();
 }
 function startRound(first = false) {
+  const diedLastRound = !first && !player.alive;
   G.roundKills = { ct: 0, t: 0 };
   G.timeLeft = ROUND_TIME; G.buyOpen = false; G.roundEnding = false;
+  G.freezeLeft = FREEZE_TIME; G.buyLeft = BUY_TIME;
   $('buy-menu').classList.add('hidden');
   $('killfeed').innerHTML = '';
+  // CS loadout rules: survivors keep guns/ammo/armor, dead reset to pistol + no armor
+  if (first || diedLastRound) {
+    if (!first) {
+      player.weapons = { ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 0, reserve: 0 } };
+      player.cur = 'deagle'; player.last = 'ak';
+      player.armor = 0;
+    }
+  }
   // reset actors
-  player.hp = 100; if (first) player.armor = 100;
+  player.hp = 100;
   player.alive = true; player.reloading = 0;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
   vmRig.punchP = 0; vmRig.punchY = 0; vmRig.shake = 0; vmRig.fovKick = 0; vmRig.aimK = 0;
   player.pos.copy(spawns.ct[0]).add(new THREE.Vector3(rand(-1, 1), 0, rand(-2, 2)));
   player.vel.set(0, 0, 0); player.yaw = -Math.PI / 2; player.pitch = 0;
-  for (const k of SLOT_ORDER) { const w = player.weapons[k], d = WEAPONS[k]; if (w.owned) { w.mag = d.magSize; if (first) w.reserve = d.startReserve; else w.reserve = Math.max(w.reserve, (d.magSize * 2) | 0); } }
+  if (!player.weapons[player.cur].owned) player.cur = player.weapons.deagle.owned ? 'deagle' : SLOT_ORDER.find((k) => player.weapons[k].owned) || 'deagle';
   buildViewmodel(player.cur);
   if (viewmodel) viewmodel.visible = true;
   for (const b of bots) { resetBot(b); b.mesh.visible = true; }
@@ -1425,26 +1477,30 @@ function startRound(first = false) {
   bots.filter((b) => b.team === 'ct').forEach((b, i) => { b.pos.copy(spawns.ct[(i + 1) % 4]); });
   bots.filter((b) => b.team === 't').forEach((b, i) => { b.pos.copy(spawns.t[i % 4]); });
   $('respawn-overlay').classList.add('hidden');
-  announce(first ? 'ROUND 1 — ELIMINATE THE ENEMY' : `ROUND ${G.round}`, 1600);
-  if (first) setTimeout(() => { if (G.phase === 'playing') { toggleBuy(true); setTimeout(() => { if (G.buyOpen) toggleBuy(false); }, 9000); } }, 600);
-  else if (G.timeLeft > 0) { toggleBuy(true); setTimeout(() => { if (G.buyOpen) toggleBuy(false); }, 6000); }
+  announce(first ? 'ROUND 1 — PISTOL ROUND · BUY (B) — ' + BUY_TIME + 'S' : `ROUND ${G.round} — BUY (B) — ${BUY_TIME}S`, 1800);
+  setTimeout(() => { if (G.phase === 'playing' && isBuyTime() && player.alive && !G.roundEnding && !G.buyOpen) toggleBuy(true); }, 400);
+  updateBuyTimer();
   updateHUD();
 }
 function checkRoundEnd() {
-  if (G.phase !== 'playing' || G.roundEnding) return;
-  if (G.roundKills.ct >= KILLS_TO_WIN_ROUND || G.roundKills.t >= KILLS_TO_WIN_ROUND) endRound(G.roundKills.ct > G.roundKills.t ? 'ct' : 't');
+  if (G.phase !== 'playing' || G.roundEnding || isFreeze()) return;
+  const { ct, t } = aliveCounts();
+  if (t <= 0 && ct <= 0) endRound('draw');
+  else if (t <= 0) endRound('ct');
+  else if (ct <= 0) endRound('t');
 }
-function endRound(winner) { // 'ct' | 't' | 'draw'
+function endRound(winner, reason) { // 'ct' | 't' | 'draw'
   if (G.phase !== 'playing' || G.roundEnding) return;
   G.roundEnding = true;
-  if (winner === 'ct') { G.score.ct++; player.money += 1400; AudioSys.roundWin(); announce('ROUND WON — +$1400', 2200); }
-  else if (winner === 't') { G.score.t++; player.money += 800; AudioSys.roundLose(); announce('ROUND LOST', 2200); }
-  else { player.money += 800; announce('DRAW', 1800); }
+  if (G.buyOpen) toggleBuy(false);
+  if (winner === 'ct') { G.score.ct++; addMoney(MONEY_WIN); AudioSys.roundWin(); announce((reason || 'ROUND WON') + ' — +$' + MONEY_WIN, 2200); }
+  else if (winner === 't') { G.score.t++; addMoney(MONEY_LOSS); AudioSys.roundLose(); announce((reason || 'ROUND LOST') + ' — +$' + MONEY_LOSS, 2200); }
+  else { addMoney(MONEY_DRAW); announce((reason || 'DRAW') + ' — +$' + MONEY_DRAW, 1800); }
   // bot economy irrelevant
   updateHUD();
   if (G.score.ct >= ROUNDS_TO_WIN_MATCH || G.score.t >= ROUNDS_TO_WIN_MATCH) { endMatch(); return; }
   G.round++;
-  setTimeout(() => { if (G.phase === 'playing') startRound(); }, 2400);
+  setTimeout(() => { if (G.phase === 'playing') startRound(); }, 3000);
 }
 function endMatch() {
   G.phase = 'over';
@@ -1481,26 +1537,15 @@ function lockPointer() {
 let stepAt = 0;
 function updatePlayer(dt, t) {
   if (!player.alive) {
-    const remain = player.respawnAt - t;
-    if (remain <= 0) {
-      player.alive = true; player.hp = 100;
-      player.pos.copy(spawns.ct[0]).add(new THREE.Vector3(rand(-2, 2), 0, rand(-2, 2)));
-      player.vel.set(0, 0, 0);
-      for (const k of SLOT_ORDER) { const w = player.weapons[k]; if (w.owned) w.mag = WEAPONS[k].magSize; }
-      $('respawn-overlay').classList.add('hidden');
-      if (G.phase === 'playing') lockPointer();
-      updateHUD();
-    } else {
-      $('respawn-timer').textContent = `Respawning in ${Math.ceil(remain)}…`;
-      // death cam: slow orbit
-      player.yaw += dt * 0.6;
-    }
+    // CS: dead until round ends — slow orbit death cam, no respawn timer
+    player.yaw += dt * 0.6;
   }
+  const frozen = isFreeze();
   const speedBase = player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
-  const sprint = keys['ShiftLeft'] && !player.aiming && player.vel.lengthSq() > 0.1;
-  const speed = (player.aiming ? speedBase * 0.55 : speedBase) * (sprint ? 1.45 : 1);
+  const sprint = !frozen && keys['ShiftLeft'] && !player.aiming && player.vel.lengthSq() > 0.1;
+  const speed = frozen ? 0 : (player.aiming ? speedBase * 0.55 : speedBase) * (sprint ? 1.45 : 1);
   let ix = 0, iz = 0;
-  if (player.alive && G.phase === 'playing') {
+  if (player.alive && G.phase === 'playing' && !frozen) {
     if (keys['KeyW']) iz -= 1; if (keys['KeyS']) iz += 1;
     if (keys['KeyA']) ix -= 1; if (keys['KeyD']) ix += 1;
   }
@@ -1519,8 +1564,8 @@ function updatePlayer(dt, t) {
   const accel = player.onGround ? 14 : 3;
   player.vel.x += (mx - player.vel.x) * Math.min(1, accel * dt);
   player.vel.z += (mz - player.vel.z) * Math.min(1, accel * dt);
-  // gravity / jump
-  if (player.onGround && keys['Space'] && player.alive) { player.vel.y = 5.2; player.onGround = false; }
+  // gravity / jump (blocked while frozen — CS freeze time)
+  if (player.onGround && keys['Space'] && player.alive && !isFreeze()) { player.vel.y = 5.2; player.onGround = false; }
   player.vel.y -= 13.5 * dt;
   moveWithCollision(player.pos, player.vel.x * dt, player.vel.z * dt, player.radius);
   player.pos.y += player.vel.y * dt;
@@ -1559,8 +1604,8 @@ function updatePlayer(dt, t) {
     player.reloading -= dt;
     if (player.reloading <= 0) finishReload();
   }
-  // firing (also catch fast semi-auto clicks that release within one frame)
-  if ((mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen) {
+  // firing (also catch fast semi-auto clicks that release within one frame; blocked in freeze)
+  if ((mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze() && !G.roundEnding) {
     if (def.auto) playerTryFire(t);
     else if (mouseJustDown) { playerTryFire(t); }
   }
@@ -1632,19 +1677,33 @@ function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = performance.now() / 1000;
   if (G.phase === 'playing') {
-    G.timeLeft -= dt;
-    if (G.timeLeft <= 0) {
-      G.timeLeft = 0;
-      const w = G.roundKills.ct === G.roundKills.t ? 'draw' : (G.roundKills.ct > G.roundKills.t ? 'ct' : 't');
-      endRound(w);
+    // CS timers: freeze first (round clock paused), then live; buy window ticks throughout
+    if (G.freezeLeft > 0) {
+      G.freezeLeft = Math.max(0, G.freezeLeft - dt);
+      if (G.freezeLeft <= 0 && !G.roundEnding) {
+        announce('GO GO GO', 900);
+        AudioSys.click(880, 0.12, 0.4);
+        setTimeout(() => AudioSys.click(1174, 0.14, 0.4), 130);
+      }
+    } else if (!G.roundEnding) {
+      G.timeLeft -= dt;
+      if (G.timeLeft <= 0) {
+        G.timeLeft = 0;
+        endRound('ct', 'TIME — CT WINS'); // CS: defense (CT) wins on time
+      }
+    }
+    if (G.buyLeft > 0) {
+      G.buyLeft = Math.max(0, G.buyLeft - dt);
+      if (G.buyLeft <= 0 && G.buyOpen) toggleBuy(false);
     }
     updatePlayer(dt, t);
     for (const b of bots) updateBot(b, dt, t);
     updateEffects(dt, t);
-    // HUD timer text ~4Hz
-    if ((loop.n = (loop.n || 0) + 1) % 15 === 0) updateHUD();
+    // HUD: ~4Hz normally, every frame during freeze/buy countdown for smooth 0.1s display
+    loop.n = (loop.n || 0) + 1;
+    if (loop.n % 15 === 0 || G.freezeLeft > 0 || (G.buyLeft > 0 && loop.n % 4 === 0)) { updateHUD(); updateBuyTimer(); }
     drawMinimap(t);
-    if (!player.alive) { /* respawn handled in updatePlayer */ }
+    if (!player.alive) { /* CS: dead until next round — no respawn */ }
   } else if (G.phase === 'paused' || G.phase === 'over' || G.phase === 'menu') {
     // idle menu camera orbit
     if (G.phase === 'menu') {
@@ -1673,7 +1732,7 @@ function boot() {
   $('loading-note').textContent = 'Building map…';
   initThree();
   buildMap();
-  buildViewmodel('ak');
+  buildViewmodel('deagle');
   if (viewmodel) viewmodel.visible = false; // hidden until match starts
   for (let i = 0; i < 4; i++) makeBot('ct', i);
   for (let i = 0; i < 4; i++) makeBot('t', i);

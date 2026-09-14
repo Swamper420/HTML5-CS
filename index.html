@@ -64,7 +64,7 @@
 
   <div id="respawn-overlay" class="hidden">
     <div id="respawn-text">ELIMINATED by <span id="respawn-killer">Enemy</span></div>
-    <div id="respawn-timer">Respawning in 3…</div>
+    <div id="respawn-timer">Waiting for next round…</div>
   </div>
 
   <div id="announce" class="hidden"></div>
@@ -75,7 +75,7 @@
 <!-- Buy menu -->
 <div id="buy-menu" class="hidden">
   <h2>BUY MENU <span class="key">B</span></h2>
-  <div class="buy-money">Funds: <span id="buy-money">$800</span></div>
+  <div class="buy-money">Funds: <span id="buy-money">$800</span> · <span id="buy-timer">BUY TIME 5.0s</span></div>
   <div class="buy-grid">
     <button class="buy-item" data-buy="ak"><b>[1] AK-47</b><span>$2500 · rifle</span></button>
     <button class="buy-item" data-buy="awp"><b>[2] AWP</b><span>$4750 · sniper</span></button>
@@ -84,7 +84,7 @@
     <button class="buy-item" data-buy="armor"><b>[5] Armor + Helmet</b><span>$1000</span></button>
     <button class="buy-item" data-buy="hp"><b>[6] Field Kit (+50 HP)</b><span>$500</span></button>
   </div>
-  <p class="buy-note">Press B or ESC to close · Buy only during first 15s of a round</p>
+  <p class="buy-note">Press B or ESC to close · Buy only during first 5s of a round (incl. 3s freeze) · Alive only</p>
 </div>
 
 <!-- Main menu -->
@@ -101,8 +101,8 @@
           <li><b>WASD</b> move · <b>Mouse</b> look · <b>LMB</b> fire</li>
           <li><b>RMB</b> aim / AWP scope · <b>R</b> reload</li>
           <li><b>1 / 2 / 3</b> weapons · <b>Q</b> quick-switch</li>
-          <li><b>B</b> buy menu (round start) · <b>ESC</b> pause</li>
-          <li>First team to <b>win 7 rounds</b> takes the match</li>
+          <li><b>B</b> buy menu (first 5s) · <b>ESC</b> pause</li>
+          <li>3s freeze, then <b>GO</b> · first to <b>win 7 rounds</b> takes the match</li>
         </ul>
       </div>
       <div>
@@ -112,12 +112,13 @@
           <li><b>Desert Eagle</b> — heavy pistol, $700</li>
           <li><b>AWP</b> — 1-shot sniper, scope on RMB</li>
         </ul>
-        <h3>◈ RULES</h3>
+        <h3>◈ RULES (CS)</h3>
         <ul>
-          <li>4v4 — You + 3 CT bots vs 4 T bots</li>
-          <li>Round = 2:00 or team wipe · respawns ON</li>
-          <li>Kills earn <b>+$300</b>, round win <b>+$1400</b></li>
-          <li>Headshots deal <b>×3.5</b> damage</li>
+          <li>4v4 — You + 3 CT bots vs 4 T bots · <b>no respawns</b></li>
+          <li>Round = 2:00 or team wipe · CT wins on time</li>
+          <li>Pistol round start (Deagle) · guns kept if you survive, lost on death</li>
+          <li>Kill <b>+$300</b> · win <b>+$3250</b> · loss <b>+$1900</b> (cap $16k)</li>
+          <li>Armor halves headshot bonus · headshots <b>×3.5</b> unarmored</li>
         </ul>
       </div>
     </div>
