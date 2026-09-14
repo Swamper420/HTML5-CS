@@ -61,6 +61,8 @@ html,body { width:100%; height:100%; overflow:hidden; background:#0a0e14; font-f
 #weapon-name { letter-spacing:3px; font-size:12px; opacity:.8; } #reload-tip { color:#ffd76d; font-weight:800; animation:blink .6s infinite; }
 #respawn-overlay { position:absolute; left:50%; top:38%; transform:translate(-50%,-50%); text-align:center; background:rgba(120,0,0,.72); padding:18px 34px; border-radius:10px; border:1px solid #ff5252; }
 #respawn-text { font-size:18px; font-weight:700; } #respawn-timer { font-size:15px; margin-top:6px; }
+#spectate-text { font-size:15px; font-weight:800; color:#7dff9a; margin-top:8px; letter-spacing:1px; }
+#spectate-hint { font-size:12px; opacity:.75; margin-top:4px; }
 #bomb-status { position:absolute; left:50%; top:74px; transform:translateX(-50%); display:flex; align-items:center; gap:8px; background:rgba(5,10,16,.78); border:1px solid rgba(255,176,32,.5); border-radius:8px; padding:6px 14px; font-weight:800; font-size:14px; letter-spacing:1px; }
 #bomb-status.planted { border-color:#ff5252; animation:blink 1s infinite; }
 #bomb-status.ct { border-color:#2e9bff; }

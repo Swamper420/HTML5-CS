@@ -1058,6 +1058,8 @@ const player = {
   kills: 0, deaths: 0,
   // gunplay state: bloom heat + spray index + recoverable punch + shake
   bloom: 0, sprayIdx: 0, lastShotT: -9,
+  // spectate-after-death state (bot ref + camera mode)
+  specTarget: null, specMode: 'chase', // 'first' | 'chase'
 };
 
 const bots = [];
@@ -1914,6 +1916,8 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
   if (bot.hp <= 0) {
     bot.alive = false; bot.hp = 0;
     bot.planting = false; bot.defusing = false;
+    // Make sure a first-person spectate target is visible again for its death anim.
+    bot.mesh.visible = true;
     if (BOMB.plantingBot === bot) BOMB.plantingBot = null;
     if (BOMB.defuser === bot) BOMB.defuser = null;
     // Bomb carrier drops the C4 where they died (CTs can't pick it up, Ts recover it).
@@ -1971,7 +1975,13 @@ function damagePlayer(dmg, shooter, head) {
       ? 'BOMB IS PLANTED — your team must still defuse it…'
       : 'Waiting for next round… (no respawns — CS elimination)';
     $('respawn-overlay').classList.remove('hidden');
-    document.exitPointerLock && document.exitPointerLock();
+    // Spectate a living teammate immediately — keep pointer lock so the
+    // mouse keeps working for look / click-to-cycle.
+    if (G.buyOpen) toggleBuy(false); // dead players get no buy menu
+    player.specTarget = null;
+    spectateCurrent();
+    updateSpectateOverlay();
+    if (viewmodel) viewmodel.visible = false;
     const killerTeam = shooter.team || 't';
     G.roundKills[killerTeam]++;
     addKillfeed(kn, killerTeam, 'YOU', 'ct', currentWeaponName(shooter), head);
@@ -2088,6 +2098,7 @@ function finishReload() {
   updateHUD();
 }
 function switchWeapon(key) {
+  if (!player.alive) return;
   if (!player.weapons[key].owned || player.cur === key) return;
   player.last = player.cur; player.cur = key;
   player.reloading = 0; $('reload-tip').classList.add('hidden');
@@ -2105,6 +2116,15 @@ function initInput() {
     keys[e.code] = true;
     if (['Space', 'Tab'].includes(e.code)) e.preventDefault();
     if (G.phase !== 'playing') return;
+    if (e.code === 'KeyM') { AudioSys.muted = !AudioSys.muted; announce(AudioSys.muted ? 'SOUND OFF' : 'SOUND ON', 800); return; }
+    if (!player.alive) {
+      // Spectating: cycle targets / toggle camera. (Weapon/buy keys stay blocked.)
+      if (e.code === 'KeyB' || e.code === 'Escape') { if (G.buyOpen) toggleBuy(false); return; }
+      if (e.repeat) return;
+      if (e.code === 'Space' || e.code === 'ArrowRight' || e.code === 'ArrowDown' || e.code === 'KeyN') spectateNext();
+      if (e.code === 'KeyF' || e.code === 'KeyV' || e.code === 'ArrowUp') spectateToggleMode();
+      return;
+    }
     if (e.code === 'Digit1') switchWeapon('ak');
     if (e.code === 'Digit2') switchWeapon('deagle');
     if (e.code === 'Digit3') { if (player.weapons.awp.owned) switchWeapon('awp'); else announce('AWP NOT OWNED — PRESS B', 1200); }
@@ -2112,12 +2132,17 @@ function initInput() {
     if (e.code === 'KeyQ') switchWeapon(player.last && player.weapons[player.last].owned ? player.last : player.cur);
     if (e.code === 'KeyR') startReload();
     if (e.code === 'KeyB') toggleBuy();
-    if (e.code === 'KeyM') { AudioSys.muted = !AudioSys.muted; announce(AudioSys.muted ? 'SOUND OFF' : 'SOUND ON', 800); }
     if (e.code === 'Escape' && G.buyOpen) toggleBuy(false);
   });
   addEventListener('keyup', (e) => { keys[e.code] = false; });
   document.addEventListener('mousedown', (e) => {
     if (G.phase !== 'playing' || !pointerLocked) return;
+    if (!player.alive) {
+      // Spectating: LMB next player, RMB toggle first/chase.
+      if (e.button === 0) spectateNext();
+      if (e.button === 2) spectateToggleMode();
+      return;
+    }
     if (e.button === 0) { mouseDown = true; mouseJustDown = true; }
     if (e.button === 2) player.aiming = true;
   });
@@ -2127,7 +2152,15 @@ function initInput() {
   });
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('mousemove', (e) => {
-    if (!pointerLocked || G.phase !== 'playing' || !player.alive) return;
+    if (!pointerLocked || G.phase !== 'playing') return;
+    if (!player.alive) {
+      // Spectate look (orbit in chase cam, free look in first-person).
+      const sens = 0.0022;
+      player.yaw -= e.movementX * sens;
+      player.pitch -= e.movementY * sens;
+      player.pitch = clamp(player.pitch, -1.45, 1.45);
+      return;
+    }
     const sens = 0.0022 * (player.aiming ? (player.cur === 'awp' ? 0.35 : 0.7) : 1);
     player.yaw -= e.movementX * sens;
     player.pitch -= e.movementY * sens;
@@ -2319,17 +2352,18 @@ function drawMinimap(t) {
     g.fillStyle = '#ff9a2a';
     g.beginPath(); g.arc(px(BOMB.droppedPos.x), pz(BOMB.droppedPos.z), 4.5, 0, 7); g.fill();
   }
-  // bots (bomb carrier gets a white ring)
+  // bots (bomb carrier gets a white ring, spectate target gets a green ring)
   for (const b of bots) {
     if (!b.alive) continue;
     g.fillStyle = b.team === 'ct' ? '#5eb2ff' : '#ff7043';
     g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 3, 0, 7); g.fill();
     if (b.hasBomb) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 5, 0, 7); g.stroke(); }
+    if (!player.alive && player.specTarget === b) { g.strokeStyle = '#3dff7a'; g.lineWidth = 2; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 6, 0, 7); g.stroke(); }
   }
-  // player arrow
+  // player arrow (greyed out while spectating)
   const x = px(player.pos.x), y = pz(player.pos.z);
   g.save(); g.translate(x, y); g.rotate(-player.yaw + Math.PI);
-  g.fillStyle = '#3dff7a';
+  g.fillStyle = player.alive ? '#3dff7a' : 'rgba(140,140,140,0.65)';
   g.beginPath(); g.moveTo(0, -6); g.lineTo(4.5, 5); g.lineTo(-4.5, 5); g.closePath(); g.fill();
   g.restore();
 }
@@ -2339,6 +2373,108 @@ function aliveCounts() {
   const ct = (player.alive ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
   const t = bots.filter((b) => b.alive && b.team === 't').length;
   return { ct, t };
+}
+
+// ---------------- Spectate after death ----------------
+// CS-style: dead players follow a living teammate. Teammates (CT) first,
+// falling back to any living bot so a planted-bomb finish stays watchable.
+function spectateTargets() {
+  const ct = bots.filter((b) => b.alive && b.team === 'ct');
+  if (ct.length) return ct;
+  return bots.filter((b) => b.alive);
+}
+function spectateCurrent() {
+  if (player.alive) return null;
+  const list = spectateTargets();
+  if (!list.length) { player.specTarget = null; return null; }
+  if (player.specTarget && player.specTarget.alive && list.includes(player.specTarget)) {
+    return player.specTarget;
+  }
+  player.specTarget = list[0];
+  // Face the same way as the new target so the view doesn't snap wildly.
+  // (player yaw convention is offset by PI from bot mesh yaw.)
+  player.yaw = player.specTarget.yaw + Math.PI;
+  player.pitch = 0;
+  return player.specTarget;
+}
+function applySpectateVisibility() {
+  const cur = player.alive ? null : player.specTarget;
+  for (const b of bots) {
+    if (!b.alive) continue; // death anim owns dead-bot visibility
+    b.mesh.visible = !(cur && player.specMode === 'first' && b === cur);
+  }
+}
+function updateSpectateOverlay() {
+  const el = $('spectate-text'), hint = $('spectate-hint');
+  if (!el) return;
+  if (player.alive) return;
+  const t = player.specTarget && player.specTarget.alive ? player.specTarget : spectateCurrent();
+  if (!t) {
+    el.textContent = '💀 NO ONE LEFT TO SPECTATE';
+  } else {
+    const tag = t.team === 'ct' ? '[CT]' : '[T]';
+    const mode = player.specMode === 'first' ? 'FIRST-PERSON' : 'CHASE CAM';
+    el.textContent = `👁 SPECTATING ${t.short} ${tag} · ${mode}`;
+  }
+  if (hint) hint.textContent = 'CLICK / SPACE — next player · RMB / F — camera mode';
+  applySpectateVisibility();
+}
+function spectateNext() {
+  if (player.alive) return;
+  const list = spectateTargets();
+  if (!list.length) { player.specTarget = null; updateSpectateOverlay(); return; }
+  const i = list.indexOf(player.specTarget);
+  player.specTarget = list[(i + 1) % list.length];
+  player.yaw = player.specTarget.yaw + Math.PI;
+  player.pitch = 0;
+  AudioSys.click(1200, 0.05, 0.25);
+  updateSpectateOverlay();
+}
+function spectateToggleMode() {
+  if (player.alive) return;
+  player.specMode = player.specMode === 'first' ? 'chase' : 'first';
+  AudioSys.click(900, 0.05, 0.25);
+  updateSpectateOverlay();
+}
+function updateSpectate(dt) {
+  mouseJustDown = false; // clicks while dead cycle targets, never fire
+  const target = spectateCurrent();
+  if (viewmodel) viewmodel.visible = false;
+  $('scope-overlay').classList.add('hidden');
+  $('crosshair').style.opacity = 0;
+  // ease FOV back (e.g. after dying scoped with the AWP)
+  camera.fov += (75 - camera.fov) * Math.min(1, dt * 8);
+  camera.updateProjectionMatrix();
+  camera.rotation.order = 'YXZ';
+  applySpectateVisibility();
+  if (!target) {
+    // Nobody left alive — hold the corpse cam, free look.
+    camera.position.set(player.pos.x, player.pos.y + EYE, player.pos.z);
+    camera.rotation.y = player.yaw;
+    camera.rotation.x = player.pitch;
+    camera.rotation.z = 0;
+    return;
+  }
+  if (player.specMode === 'first') {
+    // Through their eyes, with our own look direction.
+    camera.position.set(target.pos.x, target.pos.y + EYE, target.pos.z);
+    camera.rotation.y = player.yaw;
+    camera.rotation.x = player.pitch;
+    camera.rotation.z = 0;
+  } else {
+    // Third-person chase: orbit behind the target on our yaw/pitch.
+    const chest = new THREE.Vector3(target.pos.x, target.pos.y + 1.4, target.pos.z);
+    const cp = clamp(player.pitch, -1.2, 1.2);
+    const fx = -Math.sin(player.yaw) * Math.cos(cp);
+    const fy = Math.sin(cp);
+    const fz = -Math.cos(player.yaw) * Math.cos(cp);
+    const want = 3.4;
+    const back = new THREE.Vector3(-fx, -fy, -fz).normalize();
+    const clear = rayWallDist(chest, back, want + 0.3);
+    const dist = clamp(Math.min(want, Math.max(0.6, clear - 0.25)), 0.6, want);
+    camera.position.copy(chest).addScaledVector(back, dist).add(new THREE.Vector3(0, 0.55, 0));
+    camera.lookAt(chest.x, chest.y + 0.35, chest.z);
+  }
 }
 function startMatch() {
   G.phase = 'playing'; G.round = 1; G.score = { ct: 0, t: 0 };
@@ -2372,6 +2508,7 @@ function startRound(first = false) {
   // reset actors — defusal spawns: player with CTs east-central, Ts west far.
   player.hp = 100;
   player.alive = true; player.reloading = 0;
+  player.specTarget = null;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
   vmRig.punchP = 0; vmRig.punchY = 0; vmRig.shake = 0; vmRig.fovKick = 0; vmRig.aimK = 0;
   player.pos.copy(spawns.ct[0]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-1, 1)));
@@ -2439,6 +2576,7 @@ function endRound(winner, reason) { // 'ct' | 't' | 'draw'
 function endMatch() {
   G.phase = 'over';
   updateInteractHUD(null);
+  for (const b of bots) if (b.alive) b.mesh.visible = true; // unhide first-person spectate target
   if ($('bomb-status')) $('bomb-status').classList.add('hidden');
   document.exitPointerLock && document.exitPointerLock();
   const win = G.score.ct > G.score.t;
@@ -2473,8 +2611,12 @@ function lockPointer() {
 let stepAt = 0;
 function updatePlayer(dt, t) {
   if (!player.alive) {
-    // CS: dead until round ends — slow orbit death cam, no respawn timer
-    player.yaw += dt * 0.6;
+    // CS: dead until round ends — spectate a living teammate instead of a
+    // static death cam. Auto-advances when the target dies (spectateCurrent).
+    const before = player.specTarget;
+    updateSpectate(dt);
+    if (player.specTarget !== before) updateSpectateOverlay();
+    return;
   }
   const frozen = isFreeze();
   const speedBase = player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
@@ -2685,10 +2827,10 @@ function boot() {
   for (let i = 0; i < 4; i++) makeBot('t', i);
   initInput();
   updateHUD();
-  // click canvas to (re)lock pointer — needed after death/respawn since
-  // browsers only allow pointer lock from a user gesture
+  // click canvas to (re)lock pointer — needed after ESC / buy menu /
+  // spectating (browsers only allow pointer lock from a user gesture)
   renderer.domElement.addEventListener('click', () => {
-    if (G.phase === 'playing' && player.alive && !G.buyOpen && !pointerLocked) lockPointer();
+    if (G.phase === 'playing' && !G.buyOpen && !pointerLocked) lockPointer();
   });
 
   $('opt-quality').addEventListener('change', (e) => {
