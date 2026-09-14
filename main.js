@@ -54,6 +54,34 @@ const MONEY_DRAW = 2000;
 const MONEY_MAX = 16000;
 const addMoney = (n) => { player.money = clamp(player.money + n, 0, MONEY_MAX); };
 
+// ---------------- Defusal (bomb) config ----------------
+// Proper defusal layout: T spawn WEST (far), CT spawn EAST-CENTRAL (between sites).
+// Sites sit on the CT (east) side so T must push across mid / long / tunnels.
+const SITES = [
+  { name: 'A', pos: null, x: 24, z: -20, r: 4.2, color: 0x2e9bff }, // filled with Vector3 in buildMap
+  { name: 'B', pos: null, x: 24, z: 20, r: 4.2, color: 0xffb020 },
+];
+const BOMB_PLANT_TIME = 3.2;   // seconds to plant
+const BOMB_DEFUSE_TIME = 5.0;  // seconds to defuse (no kits in this build)
+const BOMB_TIMER = 35;         // seconds from plant -> detonation
+const BOMB = {
+  carrier: null,        // bot ref carrying the bomb
+  droppedPos: null,     // THREE.Vector3 when dropped on the ground
+  planted: false,
+  site: null,           // 'A' | 'B' once planted
+  pos: null,            // planted Vector3
+  targetSite: null,     // 'A' | 'B' — T objective for this round
+  plantProgress: 0,
+  plantingBot: null,
+  defuseProgress: 0,
+  defuser: null,        // 'player' | bot ref
+  explodeAt: 0,         // performance-time seconds
+  mesh: null,
+  light: null,
+  beepAt: 0,
+  exploded: false,
+};
+
 const opts = { quality: true, sound: true, difficulty: 1 };
 
 // ---------------- Audio (procedural WebAudio) ----------------
@@ -146,6 +174,28 @@ const AudioSys = {
   },
   roundWin() { [523, 659, 784, 1046].forEach((fr, i) => setTimeout(() => this.click(fr, 0.18, 0.35), i * 130)); },
   roundLose() { [400, 340, 280, 200].forEach((fr, i) => setTimeout(() => this.click(fr, 0.2, 0.35), i * 150)); },
+  beep(urgent = false) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this.click(urgent ? 1560 : 1180, urgent ? 0.09 : 0.07, urgent ? 0.5 : 0.35);
+  },
+  plantBeep() { [880, 880, 1174].forEach((fr, i) => setTimeout(() => this.click(fr, 0.09, 0.4), i * 120)); },
+  plantedConfirm() { [660, 880, 660, 880].forEach((fr, i) => setTimeout(() => this.click(fr, 0.12, 0.45), i * 140)); },
+  defuseTick() { this.click(1500, 0.04, 0.22); },
+  explode() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    try {
+      const t = this.now();
+      const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(1.4);
+      const f = this.ctx.createBiquadFilter(); f.type = 'lowpass';
+      f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(60, t + 1.1);
+      const g = this.ctx.createGain(); this.env(g, t, 1.0, 1.2);
+      src.connect(f); f.connect(g); g.connect(this.master); src.start(t); src.stop(t + 1.4);
+      const o = this.ctx.createOscillator(); const g2 = this.ctx.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(110, t);
+      o.frequency.exponentialRampToValueAtTime(28, t + 0.9);
+      this.env(g2, t, 0.9, 1.0); o.connect(g2); g2.connect(this.master); o.start(t); o.stop(t + 1.1);
+    } catch (e) {}
+  },
 };
 
 // ---------------- Three.js setup ----------------
@@ -264,43 +314,94 @@ function buildMap() {
   addSolid(-H - 2, WH / 2 - 0.5, 0, W, WH, H * 2 + 16, wallMat);
   addSolid(H + 2, WH / 2 - 0.5, 0, W, WH, H * 2 + 16, wallMat);
 
-  // Mid wall with double doors (two gaps)
-  addSolid(-22, 2, 0, 8, 4, 2.4, wallMat);
-  addSolid(22, 2, 0, 8, 4, 2.4, wallMat);
-  addSolid(0, 3.4, 0, 36, 1.2, 2.4, darkMat);
-  addSolid(-11.5, 2, 0, 3, 4, 0.6, crateMat);
-  addSolid(11.5, 2, 0, 3, 4, 0.6, crateMat);
+  // ---- DEFUSAL LAYOUT ----
+  // Lanes: north = A Long, center = Mid (3 doors), south = B Tunnels.
+  // T spawn WEST far from sites, CT spawn EAST-CENTRAL between A/B.
 
-  // Long corridor walls (A long top, B tunnels bottom)
+  // Mid dividing wall (z=0): solid with 3 chokes —
+  // west flank x[-18,-13] (5m), mid doors x[-1.5,+1.5] (3m), east flank x[+13,+18] (5m)
+  addSolid(-22, 2, 0, 8, 4, 1.5, wallMat);
+  addSolid(22, 2, 0, 8, 4, 1.5, wallMat);
+  addSolid(-7.25, 2, 0, 11.5, 4, 1.5, wallMat);
+  addSolid(7.25, 2, 0, 11.5, 4, 1.5, wallMat);
+  addSolid(0, 3.4, 0, 4.4, 1.2, 1.8, darkMat);
+  addSolid(-1.9, 2, 0, 0.8, 4, 1.8, darkMat);
+  addSolid(1.9, 2, 0, 0.8, 4, 1.8, darkMat);
+
+  // Long corridor walls (A long north, B south) — create distinct lanes
   addSolid(-8, 1.75, -14, 30, 3.5, 1.2, wallMat);
   addSolid(-8, 1.75, 14, 30, 3.5, 1.2, wallMat);
   addSolid(8, 1.5, -22, 1.2, 3, 16, wallMat);
   addSolid(8, 1.5, 22, 1.2, 3, 16, wallMat);
 
-  // Catwalk / platform mid
-  addSolid(0, 0.35, -8, 10, 0.7, 4, darkMat);
-  addSolid(0, 0.35, 8, 10, 0.7, 4, darkMat);
+  // T-side gate (x=-20): splits T exits into upper-mid / lower-mid doors.
+  // Leaves a wide west staging area + 2x 3m doors + open flanks around z=±14 ends.
+  addSolid(-20, 2, -9.5, 1.5, 4, 9, wallMat);
+  addSolid(-20, 2, 9.5, 1.5, 4, 9, wallMat);
+  addSolid(-20, 2, 0, 1.5, 4, 4, darkMat);
 
-  // Bombsite A (top-right, T side is +x? CT spawn -x, T spawn +x)
-  const siteA = new THREE.Mesh(new THREE.CircleGeometry(4, 24), new THREE.MeshBasicMaterial({ color: 0x2e9bff, transparent: true, opacity: 0.35 }));
-  siteA.rotation.x = -Math.PI / 2; siteA.position.set(24, 0.02, -20); scene.add(siteA);
-  addSolid(24, 3.6, -20, 0.4, 0.4, 8, accentA, false);
-  // Bombsite B
-  const siteB = new THREE.Mesh(new THREE.CircleGeometry(4, 24), new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.35 }));
-  siteB.rotation.x = -Math.PI / 2; siteB.position.set(24, 0.02, 20); scene.add(siteB);
-  addSolid(24, 3.6, 20, 0.4, 0.4, 8, accentB, false);
+  // CT-side defense wall (x=12): separates mid from CT/sites staging.
+  // Two 3m doors (z[-4,-1] and z[+1,+4]) — CT must hold these + site entrances.
+  // Breaks the old huge open sightline from T spawn straight to sites.
+  addSolid(12, 2, -9, 1.5, 4, 10, wallMat);
+  addSolid(12, 2, 9, 1.5, 4, 10, wallMat);
+  addSolid(12, 2, 0, 1.5, 4, 2, darkMat);
 
-  // Crates scattered (classic dust boxes)
+  // Mid cover blocks (break up the old open mid, give post-plant cover)
+  addSolid(0, 1.1, -7, 4, 2.2, 1.2, crateMat);
+  addSolid(0, 1.1, 7, 4, 2.2, 1.2, crateMat);
+  addSolid(-10, 1.1, -7, 1.2, 2.2, 3.5, crateMat);
+  addSolid(-10, 1.1, 7, 1.2, 2.2, 3.5, crateMat);
+  addSolid(5, 1.1, -7, 1.2, 2.2, 3.0, darkMat);
+  addSolid(5, 1.1, 7, 1.2, 2.2, 3.0, darkMat);
+
+  // Bombsite enclosures — each site gets walls forcing 2 entrances + plant cover.
+  // A site (24,-20): west wall + north wall, open south + NE.
+  addSolid(17, 2, -20, 1.2, 4, 9, wallMat);
+  addSolid(23, 2, -25.2, 13, 4, 1.2, wallMat);
+  // B site (24,+20): mirrored.
+  addSolid(17, 2, 20, 1.2, 4, 9, wallMat);
+  addSolid(23, 2, 25.2, 13, 4, 1.2, wallMat);
+
+  // Bombsite visuals (ground ring + overhead bar + floating letter)
+  const mkSiteLabel = (letter, color) => {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.beginPath(); g.arc(64, 64, 60, 0, 7); g.fill();
+    g.fillStyle = color; g.font = '900 84px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(letter, 64, 68);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    sp.scale.set(3.2, 3.2, 1);
+    return sp;
+  };
+  for (const s of SITES) {
+    s.pos = new THREE.Vector3(s.x, 0, s.z);
+    const ring = new THREE.Mesh(new THREE.CircleGeometry(s.r, 28),
+      new THREE.MeshBasicMaterial({ color: s.color, transparent: true, opacity: 0.30 }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(s.x, 0.03, s.z); scene.add(ring);
+    const ringEdge = new THREE.Mesh(new THREE.RingGeometry(s.r - 0.25, s.r, 28),
+      new THREE.MeshBasicMaterial({ color: s.color, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
+    ringEdge.rotation.x = -Math.PI / 2; ringEdge.position.set(s.x, 0.04, s.z); scene.add(ringEdge);
+    const barMat = new THREE.MeshStandardMaterial({ color: s.color, roughness: 0.6, emissive: s.color, emissiveIntensity: 0.25 });
+    addSolid(s.x, 3.6, s.z, 0.4, 0.4, 8, barMat, false);
+    const label = mkSiteLabel(s.name, s.name === 'A' ? '#7cc4ff' : '#ffd27a');
+    label.position.set(s.x, 4.6, s.z); scene.add(label);
+    s.mesh = ring; s.label = label;
+  }
+
+  // Cover crates — kept clear of new walls/doors; site boxes give plant cover.
   const crates = [
-    [-20, -20, 2.4], [-17.5, -20, 1.6], [-20, 20, 2.4], [-17.5, 20, 1.6],
-    [0, -20, 2], [2.2, -20, 1.4], [0, 20, 2], [2.2, 20, 1.4],
-    [14, 0, 2.2], [14, 2.6, 1.5], [-14, 0, 2.2],
-    [24, -14, 2], [24, -11.4, 1.5], [24, 14, 2], [24, 11.4, 1.5],
-    [-26, 0, 2.6], [5, -5, 1.8], [5, 5, 1.8], [-5, -5, 1.4], [-5, 5, 1.4],
+    [-26, -20, 2.4], [-23.4, -20, 1.6], [-26, 20, 2.4], [-23.4, 20, 1.6],
+    [-4, -19.5, 2], [-1.8, -19.5, 1.4], [-4, 19.5, 2], [-1.8, 19.5, 1.4],
+    [15.5, 0, 2.2], [15.5, 2.8, 1.5], [-15.5, 0, 2.2],
+    [21, -17.5, 2], [23.4, -17.2, 1.5], [21, 17.5, 2], [23.4, 17.2, 1.5],
+    [-27, 0, 2.6], [2.5, -10.5, 1.8], [2.5, 10.5, 1.8], [-5, -4.5, 1.4], [-5, 4.5, 1.4],
+    [26.5, -21.5, 1.8], [26.5, 21.5, 1.8], [-26, -8, 1.6], [-26, 8, 1.6],
   ];
   for (const [x, z, s] of crates) addSolid(x, s / 2, z, s, s, s, crateMat);
 
-  // Tunnel arches (B tunnels feel)
+  // Tunnel arches (kept for B-tunnel / A-long flavor at map edges)
   for (const z of [-26, 26]) {
     addSolid(-2, 2.5, z, 8, 1, 6, darkMat);
     addSolid(-6, 1.25, z - 2.7, 1, 2.5, 0.8, wallMat);
@@ -319,14 +420,33 @@ function buildMap() {
     top.position.set(x, 5.4, z); top.castShadow = true; scene.add(top);
   }
 
-  // Spawns: CT west, T east
-  spawns.ct = [new THREE.Vector3(-29, 0, -6), new THREE.Vector3(-29, 0, -2), new THREE.Vector3(-29, 0, 2), new THREE.Vector3(-29, 0, 6)];
-  spawns.t = [new THREE.Vector3(29, 0, -6), new THREE.Vector3(29, 0, -2), new THREE.Vector3(29, 0, 2), new THREE.Vector3(29, 0, 6)];
+  // Spawns — DEFUSAL CORRECT: T far WEST, CT EAST-CENTRAL between A/B (holds sites).
+  // T must push ~45m across mid/long/tunnels; CT starts ~12-15m from either site.
+  spawns.t = [new THREE.Vector3(-29, 0, -5), new THREE.Vector3(-29, 0, -1.7), new THREE.Vector3(-29, 0, 1.7), new THREE.Vector3(-29, 0, 5)];
+  spawns.ct = [new THREE.Vector3(14.5, 0, -2.5), new THREE.Vector3(14.5, 0, 2.5), new THREE.Vector3(18, 0, -2.5), new THREE.Vector3(18, 0, 2.5)];
 
-  // Waypoint grid for bots
-  for (let x = -28; x <= 28; x += 7)
-    for (let z = -24; z <= 24; z += 6)
-      waypoints.push(new THREE.Vector3(x + rand(-1, 1), 0, z + rand(-1, 1)));
+  // Waypoint grid for bots — pruned so none spawn inside the new walls.
+  // (Bots steer straight at waypoints; keeping them out of solids avoids stuck spins.)
+  const _probe = new THREE.Vector3();
+  const _free = (x, z) => {
+    _probe.set(x, 0, z);
+    return !collidesAt(_probe, 0.6);
+  };
+  for (let x = -28; x <= 28; x += 5)
+    for (let z = -24; z <= 24; z += 5) {
+      const jx = x + rand(-1.2, 1.2), jz = z + rand(-1.2, 1.2);
+      if (Math.abs(jx) > MAP_HALF - 1 || Math.abs(jz) > MAP_HALF - 1) continue;
+      if (!_free(jx, jz)) continue;
+      waypoints.push(new THREE.Vector3(jx, 0, jz));
+    }
+  // Guaranteed lane waypoints: T staging, mid doors, CT doors, site entries.
+  const laneWPs = [
+    [-25, 0], [-22, -9], [-22, 9], [-16, 0], [-16, -19], [-16, 19],
+    [0, -2.5], [0, 2.5], [-15.5, -10.5], [-15.5, 10.5],
+    [12, -2.5], [12, 2.5], [9, -19], [9, 19], [15, -11], [15, 11],
+    [20, -14], [20, 14], [24, -20], [24, 20], [28, -20], [28, 20], [16, 0],
+  ];
+  for (const [lx, lz] of laneWPs) if (_free(lx, lz)) waypoints.push(new THREE.Vector3(lx, 0, lz));
 }
 
 // ---------------- Soldier meshes ----------------
@@ -808,31 +928,48 @@ function hasLOS(a, b) {
 }
 
 // ---------------- Bots ----------------
+function faceCenterYaw(pos) { return Math.atan2(-pos.x, -pos.z); } // mesh convention
+function faceCenterYawPlayer(pos) { return Math.atan2(pos.x, pos.z); } // camera convention
 function makeBot(team, idx) {
   const mesh = makeSoldier(team);
   scene.add(mesh);
   const spawn = (team === 'ct' ? spawns.ct : spawns.t)[idx % 4].clone();
   const bot = {
     team, idx, mesh, pos: spawn.clone(), vel: new THREE.Vector3(),
-    yaw: team === 'ct' ? -Math.PI / 2 : Math.PI / 2, hp: 100, alive: true,
+    yaw: faceCenterYaw(spawn), hp: 100, alive: true,
     respawnAt: 0, speed: rand(3.4, 4.6), state: 'roam',
-    wp: randPick(waypoints).clone(), target: null,
+    wp: waypoints.length ? randPick(waypoints).clone() : spawn.clone(), target: null,
     nextThink: Math.random() * 0.5, nextShot: 0, burstLeft: 0, burstAt: 0,
     strafeDir: 1, strafeAt: 0, flashAt: 0, walkPhase: Math.random() * 6,
+    hasBomb: false, guardSite: team === 'ct' ? (idx < 2 ? 'A' : 'B') : null,
+    siteOffset: new THREE.Vector3(rand(-2, 2), 0, rand(-2, 2)),
+    planting: false, defusing: false,
     name: (team === 'ct' ? ['Blaze', 'Falcon', 'Havoc', 'Ghost'][idx] : ['Viper', 'Rattler', 'Jackal', 'Scorpion'][idx]) + (team === 'ct' ? ' [CT]' : ' [T]'),
     short: team === 'ct' ? ['Blaze', 'Falcon', 'Havoc', 'Ghost'][idx] : ['Viper', 'Rattler', 'Jackal', 'Scorpion'][idx],
   };
   mesh.position.copy(spawn);
+  mesh.rotation.y = bot.yaw;
   bots.push(bot);
   return bot;
 }
 function resetBot(bot) {
   const spawn = (bot.team === 'ct' ? spawns.ct : spawns.t)[bot.idx % 4];
   bot.pos.copy(spawn).add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)));
-  bot.hp = 100; bot.alive = true; bot.wp = randPick(waypoints).clone();
+  bot.yaw = faceCenterYaw(bot.pos);
+  bot.hp = 100; bot.alive = true;
+  bot.wp = waypoints.length ? randPick(waypoints).clone() : bot.pos.clone();
   bot.target = null; bot.state = 'roam'; bot.mesh.visible = true;
+  bot.hasBomb = false; bot.planting = false; bot.defusing = false;
+  bot.siteOffset.set(rand(-2, 2), 0, rand(-2, 2));
+  // CTs split to guard A/B; T objective assigned per-round in bombResetRound().
+  if (bot.team === 'ct') bot.guardSite = bot.idx % 2 === 0 ? 'A' : 'B';
   bot.mesh.rotation.set(0, bot.yaw, 0);
   bot.mesh.position.copy(bot.pos);
+}
+function siteByName(n) { return SITES.find((s) => s.name === n); }
+function isInSite(pos, site) {
+  const dx = pos.x - site.x, dz = pos.z - site.z;
+  return Math.hypot(dx, dz) < site.r;
 }
 function botEye(b) { return new THREE.Vector3(b.pos.x, b.pos.y + 1.55, b.pos.z); }
 function botChest(b) { return new THREE.Vector3(b.pos.x, b.pos.y + 1.1, b.pos.z); }
@@ -859,15 +996,169 @@ function nearestEnemy(bot) {
   return best;
 }
 
+function objectiveWaypoint(bot) {
+  // Defusal objectives — T pushes target site, CTs guard / retake.
+  if (BOMB.planted && BOMB.pos) {
+    // Both teams converge on the planted site (with personal offset so they don't stack).
+    return new THREE.Vector3(BOMB.pos.x + bot.siteOffset.x * 0.7, 0, BOMB.pos.z + bot.siteOffset.z * 0.7);
+  }
+  if (bot.team === 't') {
+    // Dropped bomb recovery: nearest living T goes to pick it up.
+    if (BOMB.droppedPos && !BOMB.planted) {
+      // Carrier-less Ts head for the dropped bomb; carrier itself never exists here.
+      return BOMB.droppedPos.clone();
+    }
+    const tgt = siteByName(BOMB.targetSite || 'A');
+    if (bot.hasBomb) return new THREE.Vector3(tgt.x + rand(-1, 1), 0, tgt.z + rand(-1, 1));
+    // Escorts: push the same site with a spread so the team arrives together.
+    return new THREE.Vector3(tgt.x + bot.siteOffset.x * 1.6, 0, tgt.z + bot.siteOffset.z * 1.6);
+  } else {
+    // CT: hold assigned site pre-plant (slight patrol via think jitter).
+    const g = siteByName(bot.guardSite || (bot.idx % 2 === 0 ? 'A' : 'B'));
+    return new THREE.Vector3(g.x + bot.siteOffset.x * 1.4, 0, g.z + bot.siteOffset.z * 1.4);
+  }
+}
+
 function botThink(bot, t) {
   bot.nextThink = t + rand(0.25, 0.5);
   bot.target = nearestEnemy(bot);
   if (bot.target) { bot.state = 'combat'; bot.strafeAt = t + rand(0.5, 1.4); if (Math.random() < 0.5) bot.strafeDir *= -1; }
   else {
-    bot.state = 'roam';
-    if (bot.pos.distanceTo(bot.wp) < 2.5 || Math.random() < 0.12) bot.wp = randPick(waypoints).clone();
+    bot.state = 'objective';
+    // Re-path toward objective when close / periodically so pushes look deliberate.
+    if (bot.pos.distanceTo(bot.wp) < 2.5 || Math.random() < 0.35) {
+      const ow = objectiveWaypoint(bot);
+      // Blend objective with a nearby lane waypoint so bots use doors, not walls.
+      bot.wp.copy(ow);
+      if (Math.random() < 0.3 && waypoints.length) {
+        const near = randPick(waypoints);
+        if (near.distanceTo(bot.pos) < bot.pos.distanceTo(ow)) bot.wp.copy(near);
+      }
+    }
   }
   if (bot.target && Math.random() < 0.3) { bot.burstLeft = 2 + (Math.random() * 3 | 0); bot.burstAt = t; }
+}
+
+// ---------------- Bomb (defusal) ----------------
+function bombClearMesh() {
+  if (BOMB.mesh) { scene.remove(BOMB.mesh); BOMB.mesh = null; }
+  if (BOMB.light) { scene.remove(BOMB.light); BOMB.light = null; }
+}
+function bombResetRound() {
+  bombClearMesh();
+  BOMB.carrier = null; BOMB.droppedPos = null; BOMB.planted = false;
+  BOMB.site = null; BOMB.pos = null; BOMB.targetSite = Math.random() < 0.5 ? 'A' : 'B';
+  BOMB.plantProgress = 0; BOMB.plantingBot = null;
+  BOMB.defuseProgress = 0; BOMB.defuser = null;
+  BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0;
+  const aliveT = bots.filter((b) => b.team === 't');
+  if (aliveT.length) {
+    BOMB.carrier = randPick(aliveT);
+    for (const b of aliveT) b.hasBomb = (b === BOMB.carrier);
+  }
+  for (const b of bots) if (b.team === 'ct') { b.guardSite = b.idx % 2 === 0 ? 'A' : 'B'; b.wp.copy(objectiveWaypoint(b)); }
+  for (const b of bots) if (b.team === 't') b.wp.copy(objectiveWaypoint(b));
+  updateBombHUD(0);
+}
+function bombDropAt(pos) {
+  BOMB.droppedPos = pos.clone(); BOMB.droppedPos.y = 0;
+  BOMB.carrier = null; BOMB.plantProgress = 0; BOMB.plantingBot = null;
+  spawnBombMesh(BOMB.droppedPos, false);
+  announce('BOMB DROPPED', 1400);
+  updateBombHUD(performance.now() / 1000);
+}
+function spawnBombMesh(pos, planted) {
+  bombClearMesh();
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.28, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5, metalness: 0.5 }));
+  body.position.y = 0.16; body.castShadow = true; g.add(body);
+  const led = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xff2222, emissiveIntensity: 2 }));
+  led.position.set(0.12, 0.33, 0); g.add(led);
+  g.userData.led = led;
+  g.position.copy(pos); g.position.y = 0;
+  scene.add(g);
+  BOMB.mesh = g;
+  if (planted) {
+    BOMB.light = new THREE.PointLight(0xff3333, 2, 9, 2);
+    BOMB.light.position.copy(pos).add(new THREE.Vector3(0, 1, 0));
+    scene.add(BOMB.light);
+  }
+}
+function plantBomb(bot, site, t) {
+  BOMB.planted = true; BOMB.site = site.name;
+  BOMB.pos = bot.pos.clone(); BOMB.pos.y = 0;
+  BOMB.carrier = null; bot.hasBomb = false;
+  BOMB.droppedPos = null; BOMB.plantProgress = 0; BOMB.plantingBot = null;
+  BOMB.explodeAt = t + BOMB_TIMER; BOMB.beepAt = t;
+  BOMB.defuseProgress = 0; BOMB.defuser = null;
+  spawnBombMesh(BOMB.pos, true);
+  AudioSys.plantedConfirm();
+  announce(`BOMB PLANTED ON ${site.name} — DEFUSE IT!`, 2600);
+  addKillfeed(bot.short, 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
+  updateBombHUD(t);
+}
+function explodeBomb(t) {
+  if (BOMB.exploded || G.roundEnding) return;
+  BOMB.exploded = true;
+  AudioSys.explode();
+  const p = BOMB.pos ? BOMB.pos.clone().add(new THREE.Vector3(0, 1, 0)) : new THREE.Vector3(24, 1, 0);
+  spawnBurst(p, 0xffd27a, 40, 12, 0.9, 0.22);
+  spawnBurst(p, 0xff6a2a, 30, 9, 1.1, 0.3);
+  spawnBurst(p, 0x555555, 24, 6, 1.6, 0.35);
+  spawnSmoke(p, 1.6, 2.2, 0x444444);
+  muzzleLight.position.copy(p); muzzleLight.intensity = 10; muzzleLight.distance = 40;
+  if (camera) {
+    const d = camera.position.distanceTo(p);
+    vmRig.shake += clamp(0.09 * (1 - d / 50), 0.01, 0.09);
+    vmRig.fovKick += clamp(6 * (1 - d / 50), 0, 6);
+  }
+  setTimeout(() => bombClearMesh(), 2500);
+  BOMB.planted = false; // stop the HUD timer — round is decided, mesh burns out visually
+  endRound('t', '💥 BOMB DETONATED');
+}
+function defuseBomb(byPlayer, t) {
+  if (G.roundEnding) return;
+  AudioSys.roundWin();
+  announce(byPlayer ? 'BOMB DEFUSED — YOU SAVED THE SITE!' : 'BOMB DEFUSED — CT WINS', 2400);
+  bombClearMesh();
+  BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
+  BOMB.defuseProgress = 0; BOMB.defuser = null;
+  endRound('ct', 'BOMB DEFUSED');
+}
+function updateBombHUD(t) {
+  const bar = $('bomb-status'), txt = $('bomb-text'), tmr = $('bomb-timer');
+  if (!bar) return;
+  if (G.phase !== 'playing') { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  bar.classList.remove('planted', 'ct');
+  if (BOMB.planted && BOMB.pos) {
+    const left = Math.max(0, BOMB.explodeAt - t);
+    bar.classList.add('planted');
+    txt.innerHTML = `💣 BOMB ON <span class="t">${BOMB.site}</span> — DEFUSE!`;
+    tmr.textContent = left.toFixed(1) + 's';
+  } else if (BOMB.droppedPos) {
+    txt.innerHTML = `<span class="t">BOMB DROPPED</span> — T must recover`;
+    tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
+  } else if (BOMB.carrier && BOMB.carrier.alive) {
+    bar.classList.add('ct');
+    txt.innerHTML = `<span class="t">💣 ${BOMB.carrier.short}</span> heading <span class="t">${BOMB.targetSite}</span>`;
+    tmr.textContent = 'STOP THE PLANT';
+  } else {
+    txt.textContent = 'BOMB IN PLAY';
+    tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
+  }
+}
+function updateInteractHUD(label, frac, isDefuse) {
+  const bar = $('interact-bar');
+  if (!bar) return;
+  if (!label) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  $('interact-label').textContent = label;
+  const f = $('interact-fill');
+  f.style.width = (clamp(frac, 0, 1) * 100).toFixed(1) + '%';
+  f.classList.toggle('defuse', !!isDefuse);
 }
 
 function botShoot(bot, t, targetPos) {
@@ -885,43 +1176,143 @@ function botShoot(bot, t, targetPos) {
   bot.flashAt = t + 0.05;
 }
 
-// bot per-frame update
+// bot per-frame update (defusal-aware: plant / defend / defuse / recover)
 function updateBot(bot, dt, t) {
   const m = bot.mesh;
   if (!bot.alive) return; // CS: no mid-round respawns — wait for next round
   if (isFreeze()) { // frozen: hold position, no thinking/shooting
     m.position.copy(bot.pos);
+    bot.planting = false; bot.defusing = false;
     return;
   }
   if (t >= bot.nextThink) botThink(bot, t);
   let moveDir = null, speed = bot.speed;
 
+  // --- Bomb pickup (T walks over dropped bomb) ---
+  if (bot.team === 't' && !BOMB.planted && BOMB.droppedPos && !BOMB.carrier) {
+    if (bot.pos.distanceTo(BOMB.droppedPos) < 1.6) {
+      BOMB.carrier = bot; bot.hasBomb = true; BOMB.droppedPos = null;
+      bombClearMesh();
+      announce(`${bot.short} PICKED UP THE BOMB`, 1400);
+      AudioSys.plantBeep();
+      bot.wp.copy(objectiveWaypoint(bot));
+      updateBombHUD(t);
+    }
+  }
+
+  // --- Plant attempt (carrier inside its target site, holds still) ---
+  let isPlanting = false;
+  if (bot.team === 't' && bot.hasBomb && !BOMB.planted && !G.roundEnding) {
+    const tgt = siteByName(BOMB.targetSite || 'A');
+    if (tgt && isInSite(bot.pos, tgt)) {
+      const enemyClose = bot.target && bot.target.d < 12;
+      if (!enemyClose) {
+        isPlanting = true;
+        bot.planting = true;
+        BOMB.plantingBot = bot;
+        // Face site center while planting.
+        bot.yaw = Math.atan2(tgt.x - bot.pos.x, tgt.z - bot.pos.z);
+        BOMB.plantProgress += dt;
+        // Audio tick each ~0.8s while planting.
+        if (!bot._plantTick || t - bot._plantTick > 0.8) { bot._plantTick = t; AudioSys.click(980, 0.06, 0.3); }
+        if (BOMB.plantProgress >= BOMB_PLANT_TIME) {
+          plantBomb(bot, tgt, t);
+          bot.planting = false;
+          return; // planted — next frames defend.
+        }
+      }
+    }
+  }
+  if (!isPlanting && BOMB.plantingBot === bot) { BOMB.plantingBot = null; }
+  if (!isPlanting) {
+    bot.planting = false;
+    // Plant progress decays if carrier is interrupted (moved/fought), not instant reset
+    // so brief peeks don't fully punish — but dropping the bomb resets it.
+    if (BOMB.plantingBot === null && BOMB.plantProgress > 0 && !BOMB.planted) {
+      BOMB.plantProgress = Math.max(0, BOMB.plantProgress - dt * 1.5);
+    }
+  }
+
+  // --- Defuse attempt (CT near planted bomb, holds still) ---
+  let isDefusing = false;
+  if (bot.team === 'ct' && BOMB.planted && BOMB.pos && !G.roundEnding) {
+    const dBomb = bot.pos.distanceTo(BOMB.pos);
+    if (dBomb < 2.6) {
+      const tAlive = bots.some((o) => o.alive && o.team === 't');
+      const enemyClose = bot.target && bot.target.d < 11 && tAlive;
+      // Only the closest CT defuses; others cover. If no defuser yet, claim it.
+      const claimable = !BOMB.defuser || BOMB.defuser === bot || !BOMB.defuser.alive;
+      if ((!enemyClose || !tAlive) && claimable) {
+        // Check this bot is (one of) the closest — avoids 3 bots stacking on bomb.
+        let closest = bot, bestD = dBomb;
+        for (const o of bots) {
+          if (!o.alive || o.team !== 'ct' || o === bot) continue;
+          const dd = o.pos.distanceTo(BOMB.pos);
+          if (dd < bestD) { bestD = dd; closest = o; }
+        }
+        if (closest === bot) {
+          isDefusing = true;
+          bot.defusing = true;
+          BOMB.defuser = bot;
+          bot.yaw = Math.atan2(BOMB.pos.x - bot.pos.x, BOMB.pos.z - bot.pos.z);
+          BOMB.defuseProgress += dt;
+          if (!bot._defTick || t - bot._defTick > 0.5) { bot._defTick = t; AudioSys.defuseTick(); }
+          if (BOMB.defuseProgress >= BOMB_DEFUSE_TIME) {
+            defuseBomb(false, t);
+            return;
+          }
+        }
+      }
+    }
+  }
+  if (!isDefusing && BOMB.defuser === bot) BOMB.defuser = null;
+  if (!isDefusing) bot.defusing = false;
+
+  // Planting / defusing bots stand still and don't shoot (CS interaction locks weapon).
+  if (isPlanting || isDefusing) {
+    m.position.copy(bot.pos);
+    let dy0 = bot.yaw - m.rotation.y;
+    while (dy0 > Math.PI) dy0 -= Math.PI * 2; while (dy0 < -Math.PI) dy0 += Math.PI * 2;
+    m.rotation.y += dy0 * Math.min(1, dt * 10);
+    m.userData.legL.rotation.x *= 0.8; m.userData.legR.rotation.x *= 0.8;
+    return;
+  }
+
   if (bot.state === 'combat' && bot.target) {
     let tp = null;
     if (bot.target.type === 'player') tp = new THREE.Vector3(player.pos.x, player.pos.y + 1.2, player.pos.z);
     else if (bot.target.bot.alive) tp = botChest(bot.target.bot);
-    else { bot.target = null; bot.state = 'roam'; }
+    else { bot.target = null; bot.state = 'objective'; }
     if (tp) {
       // face target
       const dx = tp.x - bot.pos.x, dz = tp.z - bot.pos.z;
-      bot.yaw = Math.atan2(-dx, -dz) + Math.PI; // mesh faces -z? adjust: our gun at +z so yaw = atan2(dx,dz)
       bot.yaw = Math.atan2(dx, dz);
       const dist = Math.hypot(dx, dz);
-      // strafe perpendicular, keep ideal range 8-18
-      if (t > bot.strafeAt) { bot.strafeAt = t + rand(0.6, 1.5); bot.strafeDir *= -1; }
-      const nx = dx / (dist || 1), nz = dz / (dist || 1);
-      let mx = -nz * bot.strafeDir, mz = nx * bot.strafeDir;
-      if (dist > 18) { mx += nx * 0.9; mz += nz * 0.9; }
-      else if (dist < 7) { mx -= nx; mz -= nz; }
-      moveDir = new THREE.Vector3(mx, 0, mz).normalize();
-      speed *= 0.7;
-      // shoot if roughly LOS + aimed
-      if (dist < 50) {
-        const eye = botEye(bot);
-        if (hasLOS(eye, tp)) {
-          const aimAt = tp.clone();
-          // lead / error: worse vs moving player
-          botShoot(bot, t, aimAt);
+      // Carrier with bomb prefers to break contact and run to site if enemy is far;
+      // if enemy is close, fight normally.
+      const carrierFleeing = bot.hasBomb && !BOMB.planted && dist > 16;
+      if (carrierFleeing) {
+        const tgt = siteByName(BOMB.targetSite || 'A');
+        const ex = tgt.x - bot.pos.x, ez = tgt.z - bot.pos.z;
+        const ed = Math.hypot(ex, ez) || 1;
+        moveDir = new THREE.Vector3(ex / ed, 0, ez / ed);
+        // Still snap-shoot while fleeing if very close? No — run.
+      } else {
+        // strafe perpendicular, keep ideal range 8-18
+        if (t > bot.strafeAt) { bot.strafeAt = t + rand(0.6, 1.5); bot.strafeDir *= -1; }
+        const nx = dx / (dist || 1), nz = dz / (dist || 1);
+        let mx = -nz * bot.strafeDir, mz = nx * bot.strafeDir;
+        if (dist > 18) { mx += nx * 0.9; mz += nz * 0.9; }
+        else if (dist < 7) { mx -= nx; mz -= nz; }
+        moveDir = new THREE.Vector3(mx, 0, mz).normalize();
+        speed *= 0.7;
+        // shoot if roughly LOS + aimed
+        if (dist < 50) {
+          const eye = botEye(bot);
+          if (hasLOS(eye, tp)) {
+            const aimAt = tp.clone();
+            botShoot(bot, t, aimAt);
+          }
         }
       }
     }
@@ -931,13 +1322,24 @@ function updateBot(bot, dt, t) {
     if (dist > 1.5) {
       moveDir = new THREE.Vector3(dx / dist, 0, dz / dist);
       bot.yaw = Math.atan2(dx, dz);
+    } else {
+      // Reached objective: CTs hold (scan), Ts push on.
+      if (bot.team === 'ct' && !BOMB.planted) {
+        bot.yaw += Math.sin(t * 0.9 + bot.idx) * dt * 0.6; // idle scan
+      } else if (waypoints.length && Math.random() < 0.02) {
+        bot.wp.copy(objectiveWaypoint(bot));
+      }
     }
   }
   if (moveDir) {
-    const step = moveDir.multiplyScalar(speed * dt);
+    const step = moveDir.clone().multiplyScalar(speed * dt);
     const ox = bot.pos.x, oz = bot.pos.z;
     moveWithCollision(bot.pos, step.x, step.z, 0.42);
-    if (Math.abs(bot.pos.x - ox) + Math.abs(bot.pos.z - oz) < 0.001) bot.wp = randPick(waypoints).clone(); // stuck
+    if (Math.abs(bot.pos.x - ox) + Math.abs(bot.pos.z - oz) < 0.001) {
+      // Stuck on a wall corner — pick a nearby free waypoint instead of purely random.
+      bot.wp.copy(objectiveWaypoint(bot));
+      if (Math.random() < 0.5 && waypoints.length) bot.wp.copy(randPick(waypoints));
+    }
     bot.walkPhase += dt * 9;
   }
   m.position.copy(bot.pos);
@@ -949,6 +1351,87 @@ function updateBot(bot, dt, t) {
   const sw = moveDir ? Math.sin(bot.walkPhase) * 0.5 : 0;
   m.userData.legL.rotation.x = sw; m.userData.legR.rotation.x = -sw;
   m.position.y = moveDir ? Math.abs(Math.sin(bot.walkPhase)) * 0.05 : 0;
+}
+
+// Per-frame bomb tick: beeps, LED pulse, explosion, player defuse, HUD.
+function updateBomb(dt, t) {
+  if (G.phase !== 'playing') { updateInteractHUD(null); return; }
+  // Planted: beeping accelerates + LED pulse + explosion on timer.
+  if (BOMB.planted && BOMB.pos && !G.roundEnding) {
+    const left = BOMB.explodeAt - t;
+    if (left <= 0) { explodeBomb(t); updateInteractHUD(null); return; }
+    // Beep interval shrinks as detonation nears (CS-like urgency).
+    const interval = left > 20 ? 1.0 : left > 10 ? 0.55 : 0.28;
+    if (t - BOMB.beepAt > interval) {
+      BOMB.beepAt = t;
+      AudioSys.beep(left < 10);
+      if (BOMB.mesh && BOMB.mesh.userData.led) {
+        BOMB.mesh.userData.led.material.emissiveIntensity = 4;
+        setTimeout(() => { if (BOMB.mesh && BOMB.mesh.userData.led) BOMB.mesh.userData.led.material.emissiveIntensity = 1.2; }, 120);
+      }
+      if (BOMB.light) BOMB.light.intensity = left < 10 ? 3.2 : 1.8;
+    }
+    // --- Player defuse (hold E near bomb) ---
+    let showDefuse = false;
+    if (player.alive && !G.roundEnding) {
+      const d = Math.hypot(player.pos.x - BOMB.pos.x, player.pos.z - BOMB.pos.z);
+      if (d < 2.8) {
+        if (keys['KeyE']) {
+          // Only one defuser counts — if a CT bot is already defusing, player helps? CS: one at a time.
+          // Let player take over (feels responsive) and pause bot progress confusion by sharing one bar.
+          BOMB.defuser = 'player';
+          BOMB.defuseProgress += dt;
+          showDefuse = true;
+          if (Math.floor(t * 2) !== Math.floor((t - dt) * 2)) AudioSys.defuseTick();
+          updateInteractHUD('DEFUSING…', BOMB.defuseProgress / BOMB_DEFUSE_TIME, true);
+          if (BOMB.defuseProgress >= BOMB_DEFUSE_TIME) {
+            updateInteractHUD(null);
+            defuseBomb(true, t);
+            return;
+          }
+        } else {
+          // In range but not holding E — prompt.
+          updateInteractHUD('HOLD E TO DEFUSE', BOMB.defuseProgress / BOMB_DEFUSE_TIME, true);
+          showDefuse = true;
+          // If player released, keep progress? CS keeps kit progress partially — keep, don't reset.
+          if (BOMB.defuser === 'player') BOMB.defuser = null;
+        }
+      } else {
+        if (BOMB.defuser === 'player') { BOMB.defuser = null; }
+      }
+    }
+    // --- Bot defuse progress bar (when a CT bot is defusing and player isn't) ---
+    if (!showDefuse) {
+      if (BOMB.defuser && BOMB.defuser !== 'player' && BOMB.defuser.alive) {
+        const dd = BOMB.defuser.pos.distanceTo(BOMB.pos);
+        if (dd < 3.2) updateInteractHUD(`${BOMB.defuser.short.toUpperCase()} DEFUSING…`, BOMB.defuseProgress / BOMB_DEFUSE_TIME, true);
+        else updateInteractHUD(null);
+      } else if (BOMB.plantingBot && BOMB.plantingBot.alive && !BOMB.planted) {
+        // handled below
+      } else {
+        updateInteractHUD(null);
+      }
+    }
+    // If defuser died / walked off, progress slowly decays (not instant reset).
+    const defuserValid = (BOMB.defuser === 'player' && player.alive) ||
+      (BOMB.defuser && BOMB.defuser !== 'player' && BOMB.defuser.alive && BOMB.defuser.pos.distanceTo(BOMB.pos) < 3.2);
+    if (!defuserValid && BOMB.defuseProgress > 0 && !showDefuse) {
+      // Only decay when nobody is actively defusing (checked via per-bot flags each frame is complex;
+      // decay slowly so interrupts cost time but don't fully reset).
+      const anyDefusing = bots.some((b) => b.alive && b.defusing);
+      if (!anyDefusing) BOMB.defuseProgress = Math.max(0, BOMB.defuseProgress - dt * 0.6);
+    }
+    updateBombHUD(t);
+    return;
+  }
+  // Not planted: show carrier plant progress if actively planting.
+  if (BOMB.plantingBot && BOMB.plantingBot.alive && BOMB.plantProgress > 0.05) {
+    updateInteractHUD(`BOMB PLANTING ON ${BOMB.targetSite} — STOP THEM!`, BOMB.plantProgress / BOMB_PLANT_TIME, false);
+  } else {
+    // Player near dropped bomb? Just informational (CT can't pick up).
+    updateInteractHUD(null);
+  }
+  updateBombHUD(t);
 }
 
 // ---------------- Hitscan firing ----------------
@@ -1051,8 +1534,22 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
     G.hits++; playerHitmark(head, false);
     AudioSys.hit(head);
   }
+  // Being shot interrupts planting/defusing.
+  if (bot.planting) { bot.planting = false; if (BOMB.plantingBot === bot) BOMB.plantingBot = null; }
+  if (bot.defusing) { bot.defusing = false; if (BOMB.defuser === bot) BOMB.defuser = null; }
   if (bot.hp <= 0) {
     bot.alive = false; bot.hp = 0;
+    bot.planting = false; bot.defusing = false;
+    if (BOMB.plantingBot === bot) BOMB.plantingBot = null;
+    if (BOMB.defuser === bot) BOMB.defuser = null;
+    // Bomb carrier drops the C4 where they died (CTs can't pick it up, Ts recover it).
+    if (bot.hasBomb && !BOMB.planted) {
+      bot.hasBomb = false;
+      const tNow = performance.now() / 1000;
+      bombDropAt(bot.pos);
+      // Reassign remaining Ts to recover it.
+      for (const o of bots) if (o.alive && o.team === 't') o.wp.copy(objectiveWaypoint(o));
+    }
     // death anim: fall over + fade (stays down until next round — CS elimination)
     bot.mesh.rotation.x = -Math.PI / 2;
     bot.mesh.position.y = 0.2;
@@ -1066,10 +1563,13 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
     if (killerIsPlayer) {
       G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(head, true);
       AudioSys.kill();
-      if (head) { G.headshots++; announce('HEADSHOT +$' + MONEY_KILL, 700); }
+      if (head && !G.roundEnding) { G.headshots++; announce('HEADSHOT +$' + MONEY_KILL, 700); }
     }
     if (shooter.bot && shooter.team === 't') { /* enemy got a kill */ }
     updateHUD(); checkRoundEnd();
+  } else {
+    // Wounding the planter buys time — knock a chunk off plant progress.
+    if (bot.hasBomb && BOMB.plantProgress > 0) BOMB.plantProgress = Math.max(0, BOMB.plantProgress - 0.5);
   }
 }
 
@@ -1090,9 +1590,12 @@ function damagePlayer(dmg, shooter, head) {
   if (player.hp <= 0) {
     player.hp = 0; player.alive = false; player.deaths++;
     player.aiming = false;
+    if (BOMB.defuser === 'player') BOMB.defuser = null;
     const kn = shooter.bot ? shooter.bot.short : 'Enemy';
     $('respawn-killer').textContent = kn + (head ? ' (HEADSHOT)' : '');
-    $('respawn-timer').textContent = 'Waiting for next round… (no respawns — CS elimination)';
+    $('respawn-timer').textContent = BOMB.planted
+      ? 'BOMB IS PLANTED — your team must still defuse it…'
+      : 'Waiting for next round… (no respawns — CS elimination)';
     $('respawn-overlay').classList.remove('hidden');
     document.exitPointerLock && document.exitPointerLock();
     const killerTeam = shooter.team || 't';
@@ -1106,11 +1609,17 @@ function currentWeaponName(shooter) {
   return G.round <= 1 ? 'Desert Eagle' : 'AK-47'; // pistol round flavor
 }
 
+function playerNearPlantedBomb(range = 2.8) {
+  if (!BOMB.planted || !BOMB.pos) return false;
+  return Math.hypot(player.pos.x - BOMB.pos.x, player.pos.z - BOMB.pos.z) < range;
+}
+
 // ---------------- Player shooting (CS-style recoil + bloom) ----------------
 function playerTryFire(t) {
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!player.alive || player.reloading > 0 || t < player.nextShot) return;
   if (isFreeze() || G.roundEnding) return; // CS freeze: no shooting
+  if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
   if (w.mag <= 0) { AudioSys.click(300, 0.06, 0.3); player.nextShot = t + 0.3; startReload(); return; }
   if (!def.auto && !mouseJustDown) return;
   // spray reset after pause (tap = accurate again)
@@ -1382,8 +1891,15 @@ function updateHUD() {
     el.classList.toggle('locked', !player.weapons[k].owned);
   });
   $('ct-score').textContent = G.score.ct; $('t-score').textContent = G.score.t;
-  $('timer').textContent = isFreeze() ? ('❄ ' + G.freezeLeft.toFixed(1)) : fmtTime(G.timeLeft);
-  $('timer').classList.toggle('low', !isFreeze() && G.timeLeft < 20);
+  if (BOMB.planted && BOMB.pos && !G.roundEnding) {
+    const tNow = performance.now() / 1000;
+    const left = Math.max(0, BOMB.explodeAt - tNow);
+    $('timer').textContent = '💣 ' + left.toFixed(1);
+    $('timer').classList.toggle('low', true);
+  } else {
+    $('timer').textContent = isFreeze() ? ('❄ ' + G.freezeLeft.toFixed(1)) : fmtTime(G.timeLeft);
+    $('timer').classList.toggle('low', !isFreeze() && G.timeLeft < 20);
+  }
   const ctAlive = (player.alive ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
   const tAlive = bots.filter((b) => b.alive && b.team === 't').length;
   let phase = '';
@@ -1410,14 +1926,31 @@ function drawMinimap(t) {
     if (w < 1 || h < 1 || b.max.y < 1.5) continue;
     g.fillRect(px(b.min.x), pz(b.min.z), Math.max(1.5, w), Math.max(1.5, h));
   }
-  // sites
-  g.fillStyle = '#2e9bff'; g.beginPath(); g.arc(px(24), pz(-20), 4, 0, 7); g.fill();
-  g.fillStyle = '#ffb020'; g.beginPath(); g.arc(px(24), pz(20), 4, 0, 7); g.fill();
-  // bots
+  // sites (A north, B south) + target highlight
+  for (const s of SITES) {
+    const isTarget = !BOMB.planted && BOMB.targetSite === s.name;
+    g.fillStyle = s.name === 'A' ? '#2e9bff' : '#ffb020';
+    g.beginPath(); g.arc(px(s.x), pz(s.z), isTarget ? 5.5 : 4, 0, 7); g.fill();
+    if (isTarget) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(px(s.x), pz(s.z), 6.5, 0, 7); g.stroke(); }
+    g.fillStyle = '#0a0e14'; g.font = 'bold 7px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(s.name, px(s.x), pz(s.z));
+  }
+  // bomb: planted (blinking red) / dropped (orange) / carrier (ring the carrier)
+  const tNow2 = performance.now() / 1000;
+  if (BOMB.planted && BOMB.pos) {
+    if (Math.floor(tNow2 * 3) % 2 === 0) g.fillStyle = '#ff2222'; else g.fillStyle = '#ff8888';
+    g.beginPath(); g.arc(px(BOMB.pos.x), pz(BOMB.pos.z), 5, 0, 7); g.fill();
+    g.strokeStyle = '#fff'; g.lineWidth = 1; g.beginPath(); g.arc(px(BOMB.pos.x), pz(BOMB.pos.z), 7, 0, 7); g.stroke();
+  } else if (BOMB.droppedPos) {
+    g.fillStyle = '#ff9a2a';
+    g.beginPath(); g.arc(px(BOMB.droppedPos.x), pz(BOMB.droppedPos.z), 4.5, 0, 7); g.fill();
+  }
+  // bots (bomb carrier gets a white ring)
   for (const b of bots) {
     if (!b.alive) continue;
     g.fillStyle = b.team === 'ct' ? '#5eb2ff' : '#ff7043';
     g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 3, 0, 7); g.fill();
+    if (b.hasBomb) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 5, 0, 7); g.stroke(); }
   }
   // player arrow
   const x = px(player.pos.x), y = pz(player.pos.z);
@@ -1462,22 +1995,31 @@ function startRound(first = false) {
       player.armor = 0;
     }
   }
-  // reset actors
+  // reset actors — defusal spawns: player with CTs east-central, Ts west far.
   player.hp = 100;
   player.alive = true; player.reloading = 0;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
   vmRig.punchP = 0; vmRig.punchY = 0; vmRig.shake = 0; vmRig.fovKick = 0; vmRig.aimK = 0;
-  player.pos.copy(spawns.ct[0]).add(new THREE.Vector3(rand(-1, 1), 0, rand(-2, 2)));
-  player.vel.set(0, 0, 0); player.yaw = -Math.PI / 2; player.pitch = 0;
+  player.pos.copy(spawns.ct[0]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-1, 1)));
+  player.vel.set(0, 0, 0); player.yaw = faceCenterYawPlayer(player.pos); player.pitch = 0;
   if (!player.weapons[player.cur].owned) player.cur = player.weapons.deagle.owned ? 'deagle' : SLOT_ORDER.find((k) => player.weapons[k].owned) || 'deagle';
   buildViewmodel(player.cur);
   if (viewmodel) viewmodel.visible = true;
   for (const b of bots) { resetBot(b); b.mesh.visible = true; }
-  // scatter bots to their spawns
-  bots.filter((b) => b.team === 'ct').forEach((b, i) => { b.pos.copy(spawns.ct[(i + 1) % 4]); });
-  bots.filter((b) => b.team === 't').forEach((b, i) => { b.pos.copy(spawns.t[i % 4]); });
+  // scatter bots to their spawns (face center) — CTs hold east, Ts push from west.
+  bots.filter((b) => b.team === 'ct').forEach((b, i) => {
+    b.pos.copy(spawns.ct[(i + 1) % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
+    b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
+  });
+  bots.filter((b) => b.team === 't').forEach((b, i) => {
+    b.pos.copy(spawns.t[i % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
+    b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
+  });
+  bombResetRound();
+  const tSite = BOMB.targetSite || 'A';
+  const carrierName = BOMB.carrier ? BOMB.carrier.short : 'T';
   $('respawn-overlay').classList.add('hidden');
-  announce(first ? 'ROUND 1 — PISTOL ROUND · BUY (B) — ' + BUY_TIME + 'S' : `ROUND ${G.round} — BUY (B) — ${BUY_TIME}S`, 1800);
+  announce(first ? `ROUND 1 — PISTOL · T PUSH ${tSite} (${carrierName} HAS BOMB)` : `ROUND ${G.round} — T PUSH ${tSite} · HOLD THE SITES`, 2200);
   setTimeout(() => { if (G.phase === 'playing' && isBuyTime() && player.alive && !G.roundEnding && !G.buyOpen) toggleBuy(true); }, 400);
   updateBuyTimer();
   updateHUD();
@@ -1485,14 +2027,32 @@ function startRound(first = false) {
 function checkRoundEnd() {
   if (G.phase !== 'playing' || G.roundEnding || isFreeze()) return;
   const { ct, t } = aliveCounts();
+  // Bomb planted changes everything (CS rules):
+  // - killing all Ts does NOT win — CTs must still defuse before it blows.
+  // - killing all CTs while planted still waits for detonation (handled via quick fuse below).
+  if (BOMB.planted) {
+    if (ct <= 0 && t <= 0) { // mutual wipe after plant — bomb still blows, T wins.
+      explodeBomb(performance.now() / 1000);
+      return;
+    }
+    if (ct <= 0) {
+      // No one left to defuse — fast-forward to detonation for pacing.
+      BOMB.explodeAt = Math.min(BOMB.explodeAt, performance.now() / 1000 + 2.5);
+      announce('ALL CT DOWN — BOMB WILL DETONATE', 1800);
+      return;
+    }
+    return; // Ts all dead but bomb ticking — play the defuse!
+  }
   if (t <= 0 && ct <= 0) endRound('draw');
-  else if (t <= 0) endRound('ct');
-  else if (ct <= 0) endRound('t');
+  else if (t <= 0) endRound('ct', BOMB.droppedPos ? 'T WIPED — SITE HELD' : 'T WIPED');
+  else if (ct <= 0) endRound('t', 'CT WIPED');
 }
 function endRound(winner, reason) { // 'ct' | 't' | 'draw'
   if (G.phase !== 'playing' || G.roundEnding) return;
   G.roundEnding = true;
   if (G.buyOpen) toggleBuy(false);
+  updateInteractHUD(null);
+  for (const b of bots) { b.planting = false; b.defusing = false; }
   if (winner === 'ct') { G.score.ct++; addMoney(MONEY_WIN); AudioSys.roundWin(); announce((reason || 'ROUND WON') + ' — +$' + MONEY_WIN, 2200); }
   else if (winner === 't') { G.score.t++; addMoney(MONEY_LOSS); AudioSys.roundLose(); announce((reason || 'ROUND LOST') + ' — +$' + MONEY_LOSS, 2200); }
   else { addMoney(MONEY_DRAW); announce((reason || 'DRAW') + ' — +$' + MONEY_DRAW, 1800); }
@@ -1504,6 +2064,8 @@ function endRound(winner, reason) { // 'ct' | 't' | 'draw'
 }
 function endMatch() {
   G.phase = 'over';
+  updateInteractHUD(null);
+  if ($('bomb-status')) $('bomb-status').classList.add('hidden');
   document.exitPointerLock && document.exitPointerLock();
   const win = G.score.ct > G.score.t;
   $('end-title').textContent = win ? '🏆 VICTORY' : '💀 DEFEAT';
@@ -1686,10 +2248,15 @@ function loop() {
         setTimeout(() => AudioSys.click(1174, 0.14, 0.4), 130);
       }
     } else if (!G.roundEnding) {
-      G.timeLeft -= dt;
-      if (G.timeLeft <= 0) {
+      if (BOMB.planted) {
+        // Bomb live — round clock is irrelevant now; it plays to boom/defuse.
         G.timeLeft = 0;
-        endRound('ct', 'TIME — CT WINS'); // CS: defense (CT) wins on time
+      } else {
+        G.timeLeft -= dt;
+        if (G.timeLeft <= 0) {
+          G.timeLeft = 0;
+          endRound('ct', 'TIME — CT WINS'); // CS: defense wins on time if no plant
+        }
       }
     }
     if (G.buyLeft > 0) {
@@ -1698,10 +2265,11 @@ function loop() {
     }
     updatePlayer(dt, t);
     for (const b of bots) updateBot(b, dt, t);
+    updateBomb(dt, t);
     updateEffects(dt, t);
-    // HUD: ~4Hz normally, every frame during freeze/buy countdown for smooth 0.1s display
+    // HUD: ~4Hz normally, every frame during freeze/buy/bomb countdown for smooth display
     loop.n = (loop.n || 0) + 1;
-    if (loop.n % 15 === 0 || G.freezeLeft > 0 || (G.buyLeft > 0 && loop.n % 4 === 0)) { updateHUD(); updateBuyTimer(); }
+    if (loop.n % 15 === 0 || G.freezeLeft > 0 || BOMB.planted || (G.buyLeft > 0 && loop.n % 4 === 0)) { updateHUD(); updateBuyTimer(); }
     drawMinimap(t);
     if (!player.alive) { /* CS: dead until next round — no respawn */ }
   } else if (G.phase === 'paused' || G.phase === 'over' || G.phase === 'menu') {

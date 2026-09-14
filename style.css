@@ -61,7 +61,19 @@ html,body { width:100%; height:100%; overflow:hidden; background:#0a0e14; font-f
 #weapon-name { letter-spacing:3px; font-size:12px; opacity:.8; } #reload-tip { color:#ffd76d; font-weight:800; animation:blink .6s infinite; }
 #respawn-overlay { position:absolute; left:50%; top:38%; transform:translate(-50%,-50%); text-align:center; background:rgba(120,0,0,.72); padding:18px 34px; border-radius:10px; border:1px solid #ff5252; }
 #respawn-text { font-size:18px; font-weight:700; } #respawn-timer { font-size:15px; margin-top:6px; }
-#announce { position:absolute; left:50%; top:24%; transform:translateX(-50%); font-size:34px; font-weight:900; letter-spacing:2px; text-shadow:0 3px 12px #000; }
+#bomb-status { position:absolute; left:50%; top:74px; transform:translateX(-50%); display:flex; align-items:center; gap:8px; background:rgba(5,10,16,.78); border:1px solid rgba(255,176,32,.5); border-radius:8px; padding:6px 14px; font-weight:800; font-size:14px; letter-spacing:1px; }
+#bomb-status.planted { border-color:#ff5252; animation:blink 1s infinite; }
+#bomb-status.ct { border-color:#2e9bff; }
+#bomb-status .t { color:#ffb020; } #bomb-status .ct { color:#6db3ff; }
+#bomb-timer { font-variant-numeric:tabular-nums; color:#ffd76d; }
+#bomb-status.planted #bomb-timer { color:#ff6b6b; }
+#interact-bar { position:absolute; left:50%; top:58%; transform:translateX(-50%); text-align:center; background:rgba(5,10,16,.8); border:1px solid #ffd76d; border-radius:8px; padding:10px 18px; min-width:260px; }
+#interact-label { font-weight:900; letter-spacing:2px; font-size:15px; margin-bottom:6px; }
+.interact-track { height:10px; background:#222; border-radius:5px; overflow:hidden; }
+#interact-fill { height:100%; width:0%; background:linear-gradient(90deg,#ffb020,#ff5252); transition:width .05s linear; }
+#interact-fill.defuse { background:linear-gradient(90deg,#2e9bff,#7ad7ff); }
+#interact-hint { font-size:11px; opacity:.7; margin-top:5px; }
+#announce { position:absolute; left:50%; top:24%; transform:translateX(-50%); font-size:34px; font-weight:900; letter-spacing:2px; text-shadow:0 3px 12px #000; text-align:center; }
 #fps-counter { position:absolute; bottom:4px; left:8px; font-size:11px; opacity:.5; }
 #hint-bar { position:absolute; bottom:4px; width:100%; text-align:center; font-size:11px; opacity:.45; }
 

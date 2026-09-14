@@ -31,6 +31,12 @@
     <div id="killfeed"></div>
   </div>
 
+  <div id="bomb-status" class="hidden"><span id="bomb-icon">💣</span><span id="bomb-text">BOMB</span><span id="bomb-timer"></span></div>
+  <div id="interact-bar" class="hidden">
+    <div id="interact-label">PLANTING…</div>
+    <div class="interact-track"><div id="interact-fill"></div></div>
+    <div id="interact-hint">Hold <b>E</b> to defuse · stay close</div>
+  </div>
   <div id="crosshair">
     <div class="ch-dot"></div>
     <div class="ch-line ch-t"></div>
@@ -69,7 +75,7 @@
 
   <div id="announce" class="hidden"></div>
   <div id="fps-counter">60 FPS</div>
-  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 weapons · RMB aim · B buy · M mute</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 weapons · RMB aim · <b>E</b> defuse bomb · B buy · M mute</div>
 </div>
 
 <!-- Buy menu -->
@@ -112,13 +118,14 @@
           <li><b>Desert Eagle</b> — heavy pistol, $700</li>
           <li><b>AWP</b> — 1-shot sniper, scope on RMB</li>
         </ul>
-        <h3>◈ RULES (CS)</h3>
+        <h3>◈ RULES (DEFUSAL)</h3>
         <ul>
-          <li>4v4 — You + 3 CT bots vs 4 T bots · <b>no respawns</b></li>
-          <li>Round = 2:00 or team wipe · CT wins on time</li>
+          <li>4v4 defusal — You + 3 CT bots vs 4 T bots · <b>no respawns</b></li>
+          <li>T pushes from <b>WEST</b> to plant on <b>A (north)</b> or <b>B (south)</b> · CT holds from east</li>
+          <li>Round = 2:00 · CT wins on time <b>unless bomb is planted</b> (35s to explode)</li>
+          <li>Plant takes 3.2s · defuse takes 5s — hold <b>E</b> next to the bomb</li>
           <li>Pistol round start (Deagle) · guns kept if you survive, lost on death</li>
           <li>Kill <b>+$300</b> · win <b>+$3250</b> · loss <b>+$1900</b> (cap $16k)</li>
-          <li>Armor halves headshot bonus · headshots <b>×3.5</b> unarmored</li>
         </ul>
       </div>
     </div>
