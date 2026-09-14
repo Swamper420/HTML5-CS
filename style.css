@@ -3,6 +3,12 @@ html,body { width:100%; height:100%; overflow:hidden; background:#0a0e14; font-f
 #game-container, #game-container canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
 .hidden { display:none !important; }
 #vignette { position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%); z-index:5; }
+/* cinematic screen feel: grain + sun glare + low-hp + explosion flash (all pointer-transparent) */
+#grain { position:fixed; inset:-40px; pointer-events:none; z-index:6; opacity:.055; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E"); animation:grainShift 0.9s steps(3) infinite; }
+@keyframes grainShift { 0%{transform:translate(0,0);} 33%{transform:translate(-14px,9px);} 66%{transform:translate(11px,-13px);} 100%{transform:translate(0,0);} }
+#glare { position:fixed; inset:0; pointer-events:none; z-index:6; opacity:0; background:radial-gradient(circle at 50% 34%, rgba(255,236,200,.55), rgba(255,210,140,.18) 22%, transparent 55%); transition:opacity .25s; mix-blend-mode:screen; }
+#lowhp { position:fixed; inset:0; pointer-events:none; z-index:6; opacity:0; background:radial-gradient(ellipse at center, transparent 42%, rgba(160,0,0,.5) 100%); transition:opacity .3s; }
+#boomflash { position:fixed; inset:0; pointer-events:none; z-index:7; opacity:0; background:radial-gradient(circle at 50% 55%, rgba(255,240,220,.95), rgba(255,180,100,.45) 40%, transparent 75%); }
 
 /* ---------- HUD ---------- */
 #hud { position:fixed; inset:0; pointer-events:none; z-index:10; }
