@@ -94,7 +94,7 @@ const BOMB = {
   exploded: false,
 };
 
-const opts = { quality: true, sound: true, difficulty: 1 };
+const opts = { quality: true, sound: true, music: true, difficulty: 1 };
 
 // ---------------- Audio (procedural WebAudio, full 3D) ----------------
 // Realistic + dynamic: inverse-distance volume, stereo pan from listener yaw,
@@ -103,6 +103,7 @@ const opts = { quality: true, sound: true, difficulty: 1 };
 const AudioSys = {
   ctx: null, master: null, shaper: null, comp: null, verb: null, verbGain: null,
   echo: null, echoFb: null, echoOut: null, muted: false,
+  musicGain: null, _activeMusic: null, _winIdx: 0, _lossIdx: 0,
   _white: null, _brown: null, _ambient: false, _stepAlt: false,
   _voices: 0, _lastShootAt: 0,
   _buf: null, _loadingSamples: false,
@@ -129,6 +130,10 @@ const AudioSys = {
       this.comp.threshold.value = -12; this.comp.knee.value = 14;
       this.comp.ratio.value = 4; this.comp.attack.value = 0.004; this.comp.release.value = 0.18;
       this.master.connect(this.shaper); this.shaper.connect(this.comp); this.comp.connect(this.ctx.destination);
+      // Dedicated 2D stereo non-diegetic music channel
+      this.musicGain = this.ctx.createGain();
+      this.musicGain.gain.value = 0.85;
+      this.musicGain.connect(this.master);
       // short outdoor slap: 0.45s fast-decay stereo IR, kept quiet so guns stay dry
       const sr = this.ctx.sampleRate, len = Math.floor(sr * 0.45);
       const ir = this.ctx.createBuffer(2, len, sr);
@@ -207,6 +212,20 @@ const AudioSys = {
     reload_pump: 'sounds/reload_pump.mp3', reload_move: 'sounds/reload_move.mp3',
     click: 'sounds/click.mp3', steps: 'sounds/steps.mp3', crack: 'sounds/crack.mp3',
     impact: 'sounds/impact.mp3', clang: 'sounds/clang.mp3',
+    music_beethoven: 'sounds/music_beethoven.mp3',
+    music_valkyrie: 'sounds/music_valkyrie.mp3',
+    music_chopin: 'sounds/music_chopin.mp3',
+    music_lacrimosa: 'sounds/music_lacrimosa.mp3',
+    music_verdi: 'sounds/music_verdi.mp3',
+    music_bach: 'sounds/music_bach.mp3',
+  },
+  CLASSICAL_TRACKS: {
+    beethoven: { name: 'music_beethoven', title: 'Beethoven — Symphony No. 5 (Fate)', composer: 'Ludwig van Beethoven', dur: 7.5, type: 'win' },
+    valkyrie: { name: 'music_valkyrie', title: 'Wagner — Ride of the Valkyries', composer: 'Richard Wagner', dur: 8.0, type: 'win' },
+    chopin: { name: 'music_chopin', title: 'Chopin — Funeral March (Op. 35)', composer: 'Frédéric Chopin', dur: 8.0, type: 'loss' },
+    lacrimosa: { name: 'music_lacrimosa', title: 'Mozart — Requiem (Lacrimosa)', composer: 'W. A. Mozart', dur: 8.5, type: 'loss' },
+    verdi: { name: 'music_verdi', title: 'Verdi — Requiem (Dies Irae)', composer: 'Giuseppe Verdi', dur: 6.5, type: 'loss' },
+    bach: { name: 'music_bach', title: 'J.S. Bach — Toccata & Fugue in D Minor', composer: 'Johann Sebastian Bach', dur: 8.5, type: 'dramatic' },
   },
   STEP_SLICES: [0.94, 1.64, 2.43, 3.17], // step onsets inside steps.mp3 (0.3s windows)
   _loadSamples() {
@@ -686,19 +705,197 @@ const AudioSys = {
     if (this._sample({ name: 'clang', peak: 0.1, rate: 1.8, dur: 0.15, pos, kind: 'impact', verb: 0.05 })) return;
     this._noise({ dur: 0.025, type: 'highpass', freq: 5200, peak: 0.05, decay: 0.02, rate: 1.7, pos, kind: 'impact', verb: 0.06 });
   },
-  roundWin() {
-    if (!this.ctx || !opts.sound || this.muted) return;
-    // won round: radio squelch + single low resolve tone. No arpeggio.
+  roundWin(reason = '') {
+    if (!this.ctx || !opts.sound || this.muted) return null;
+    // radio squelch + low resolve tone
     this._noise({ dur: 0.09, type: 'bandpass', freq: 1800, Q: 0.9, peak: 0.2, decay: 0.08, rate: 1.3, verb: 0.1 });
     this._tone({ type: 'sine', f0: 196, f1: 185, dur: 0.35, peak: 0.26, decay: 0.32, verb: 0.12, at: 0.09 });
-    this._noise({ dur: 0.4, type: 'lowpass', freq: 600, sweepTo: 200, peak: 0.12, decay: 0.35, rate: 0.7, verb: 0.14, at: 0.09, brown: true });
+    if (!opts.music) return null;
+    const winKeys = ['beethoven', 'valkyrie'];
+    const trackKey = winKeys[(this._winIdx++) % winKeys.length];
+    return this.playMusic(trackKey);
   },
-  roundLose() {
-    if (!this.ctx || !opts.sound || this.muted) return;
-    // lost round: duller squelch + lower single tone, shorter.
+  roundLose(reason = '') {
+    if (!this.ctx || !opts.sound || this.muted) return null;
+    // radio squelch + dull tone
     this._noise({ dur: 0.09, type: 'bandpass', freq: 1300, Q: 0.9, peak: 0.18, decay: 0.08, rate: 1.1, verb: 0.1 });
     this._tone({ type: 'sine', f0: 147, f1: 130, dur: 0.32, peak: 0.24, decay: 0.3, verb: 0.12, at: 0.09 });
-    this._noise({ dur: 0.35, type: 'lowpass', freq: 480, sweepTo: 160, peak: 0.11, decay: 0.32, rate: 0.65, verb: 0.14, at: 0.09, brown: true });
+    if (!opts.music) return null;
+    if (reason && (reason.includes('BOMB') || reason.includes('DETONAT') || reason.includes('💥'))) {
+      const bombKeys = ['bach', 'verdi'];
+      const trackKey = bombKeys[Math.floor(Math.random() * bombKeys.length)];
+      return this.playMusic(trackKey);
+    }
+    const lossKeys = ['chopin', 'lacrimosa', 'verdi'];
+    const trackKey = lossKeys[(this._lossIdx++) % lossKeys.length];
+    return this.playMusic(trackKey);
+  },
+  bombDetonated() {
+    if (!this.ctx || !opts.sound || this.muted || !opts.music) return null;
+    return this.playMusic('bach');
+  },
+  tenSecWarning() {
+    if (!this.ctx || !opts.sound || this.muted || !opts.music) return;
+    const chord = [146.83, 174.61, 220.0, 293.66]; // D minor tension chord
+    chord.forEach((f) => {
+      this._tone({ type: 'triangle', f0: f, f1: f * 0.99, dur: 2.2, peak: 0.16, decay: 1.8 });
+      this._tone({ type: 'sawtooth', f0: f / 2, f1: f / 2, dur: 2.5, peak: 0.12, decay: 2.0 });
+    });
+    this._tone({ type: 'sine', f0: 73.42, f1: 36.7, dur: 2.6, peak: 0.36, decay: 2.2 });
+    this._noise({ dur: 0.4, type: 'lowpass', freq: 300, sweepTo: 60, peak: 0.3, decay: 0.35, brown: true });
+  },
+  playMusic(trackKey, volume = 0.85) {
+    if (!this.ctx || !opts.sound || this.muted || !opts.music) return null;
+    this.stopMusic(0.25);
+    const track = this.CLASSICAL_TRACKS[trackKey];
+    if (!track) return null;
+    const buf = this._buf && this._buf[track.name];
+    const t0 = this.now();
+    if (buf) {
+      try {
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf;
+        const g = this.ctx.createGain();
+        const playDur = Math.min(track.dur, buf.duration);
+        const fadeStart = Math.max(0.3, playDur - 1.5);
+        g.gain.setValueAtTime(0.001, t0);
+        g.gain.linearRampToValueAtTime(volume, t0 + 0.08);
+        g.gain.setValueAtTime(volume, t0 + fadeStart);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + playDur);
+        src.connect(g);
+        if (!this.musicGain) {
+          this.musicGain = this.ctx.createGain();
+          this.musicGain.gain.value = 0.85;
+          this.musicGain.connect(this.master);
+        }
+        g.connect(this.musicGain);
+        src.start(t0);
+        src.stop(t0 + playDur + 0.1);
+        this._activeMusic = { src, gain: g, name: trackKey };
+        src.onended = () => {
+          if (this._activeMusic && this._activeMusic.src === src) this._activeMusic = null;
+        };
+      } catch (e) {
+        this._playProceduralClassical(trackKey, volume);
+      }
+    } else {
+      this._playProceduralClassical(trackKey, volume);
+    }
+    return track;
+  },
+  stopMusic(fadeTime = 1.0) {
+    if (!this._activeMusic || !this.ctx) return;
+    const { src, gain } = this._activeMusic;
+    this._activeMusic = null;
+    try {
+      const t = this.now();
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(0.05, fadeTime));
+      setTimeout(() => {
+        try { src.stop(); src.disconnect(); gain.disconnect(); } catch (e) {}
+      }, (fadeTime + 0.1) * 1000);
+    } catch (e) {
+      try { src.stop(); } catch (err) {}
+    }
+  },
+  _playProceduralClassical(trackKey, volume = 0.8) {
+    if (!this.ctx) return;
+    const t0 = this.now();
+    const gMaster = this.ctx.createGain();
+    gMaster.gain.setValueAtTime(0.001, t0);
+    gMaster.gain.linearRampToValueAtTime(volume, t0 + 0.05);
+    gMaster.connect(this.musicGain || this.master);
+
+    const playTone = (f, startOffset, dur, type = 'sawtooth', vol = 0.3, lp = 2600) => {
+      const o = this.ctx.createOscillator();
+      o.type = type;
+      o.frequency.setValueAtTime(f, t0 + startOffset);
+      const flt = this.ctx.createBiquadFilter();
+      flt.type = 'lowpass';
+      flt.frequency.value = lp;
+      const g = this.ctx.createGain();
+      this.env(g, t0 + startOffset, vol, dur * 0.85, 0.02);
+      o.connect(flt); flt.connect(g); g.connect(gMaster);
+      try {
+        o.start(t0 + startOffset);
+        o.stop(t0 + startOffset + dur + 0.1);
+      } catch (e) {}
+    };
+
+    if (trackKey === 'beethoven' || trackKey === 'valkyrie') {
+      // Beethoven Symphony No. 5 "Fate motif": G G G Eb | F F F D
+      const notes = [
+        { f: 392, t: 0.0, d: 0.2 },
+        { f: 392, t: 0.22, d: 0.2 },
+        { f: 392, t: 0.44, d: 0.2 },
+        { f: 311.13, t: 0.66, d: 1.6 },
+        { f: 349.23, t: 2.3, d: 0.2 },
+        { f: 349.23, t: 2.52, d: 0.2 },
+        { f: 349.23, t: 2.74, d: 0.2 },
+        { f: 293.66, t: 2.96, d: 2.2 },
+      ];
+      notes.forEach((n) => {
+        playTone(n.f, n.t, n.d, 'sawtooth', 0.26, 2800);
+        playTone(n.f * 1.003, n.t, n.d, 'sawtooth', 0.18, 3000);
+        playTone(n.f / 2, n.t, n.d, 'sawtooth', 0.24, 1500);
+        playTone(n.f / 4, n.t, n.d, 'triangle', 0.32, 600);
+      });
+      this._noise({ dur: 0.8, type: 'lowpass', freq: 160, sweepTo: 45, peak: 0.6, decay: 0.7, at: 0.66, brown: true });
+      this._noise({ dur: 1.0, type: 'lowpass', freq: 150, sweepTo: 40, peak: 0.65, decay: 0.9, at: 2.96, brown: true });
+    } else if (trackKey === 'bach') {
+      // Bach Toccata in D minor
+      const notes = [
+        { f: 440, t: 0.0, d: 0.16 },
+        { f: 392, t: 0.16, d: 0.16 },
+        { f: 440, t: 0.32, d: 1.4 },
+        { f: 392, t: 1.9, d: 0.14 },
+        { f: 349.23, t: 2.05, d: 0.14 },
+        { f: 329.63, t: 2.2, d: 0.14 },
+        { f: 293.66, t: 2.35, d: 0.14 },
+        { f: 277.18, t: 2.5, d: 0.18 },
+        { f: 293.66, t: 2.7, d: 0.9 },
+      ];
+      notes.forEach((n) => {
+        playTone(n.f, n.t, n.d, 'triangle', 0.28, 3600);
+        playTone(n.f * 2, n.t, n.d, 'sine', 0.18, 5000);
+        playTone(n.f / 2, n.t, n.d, 'triangle', 0.22, 1400);
+      });
+      [146.83, 220.0, 293.66, 349.23, 440.0].forEach((f) => {
+        playTone(f, 3.8, 3.2, 'sawtooth', 0.18, 2200);
+        playTone(f, 3.8, 3.2, 'triangle', 0.22, 1800);
+      });
+      playTone(73.42, 3.8, 3.5, 'sine', 0.5, 400);
+    } else if (trackKey === 'verdi') {
+      // Verdi Requiem Dies Irae: 4 thunderous blasts
+      for (let i = 0; i < 4; i++) {
+        const at = i * 0.48;
+        [98, 146.83, 196, 233.08, 293.66].forEach((f) => {
+          playTone(f, at, 0.4, 'sawtooth', 0.25, 2800);
+        });
+        this._noise({ dur: 0.55, type: 'lowpass', freq: 220, sweepTo: 40, peak: 0.75, decay: 0.45, at, brown: true });
+        this._tone({ type: 'sine', f0: 110, f1: 35, dur: 0.5, peak: 0.6, decay: 0.45, at });
+      }
+    } else {
+      // Chopin Funeral March (Bb minor)
+      const march = [
+        { f: 233.08, t: 0.0, d: 0.48 },
+        { f: 233.08, t: 0.55, d: 0.48 },
+        { f: 233.08, t: 1.1, d: 0.48 },
+        { f: 233.08, t: 1.65, d: 0.7 },
+        { f: 277.18, t: 2.4, d: 0.48 },
+        { f: 261.63, t: 2.9, d: 0.35 },
+        { f: 261.63, t: 3.3, d: 0.35 },
+        { f: 233.08, t: 3.7, d: 1.8 },
+      ];
+      march.forEach((n) => {
+        playTone(n.f, n.t, n.d, 'triangle', 0.32, 1800);
+        playTone(n.f / 2, n.t, n.d, 'triangle', 0.28, 900);
+        playTone(n.f / 4, n.t, n.d, 'sine', 0.35, 400);
+      });
+      this._tone({ type: 'triangle', f0: 932.33, f1: 466.16, dur: 1.2, peak: 0.12, decay: 1.0, at: 0.0, verb: 0.3 });
+      this._tone({ type: 'triangle', f0: 932.33, f1: 466.16, dur: 1.2, peak: 0.12, decay: 1.0, at: 2.4, verb: 0.3 });
+    }
   },
   beep(urgent = false, pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
@@ -3629,7 +3826,7 @@ function bombResetRound() {
   BOMB.site = null; BOMB.pos = null; BOMB.targetSite = Math.random() < 0.5 ? 'A' : 'B';
   BOMB.plantProgress = 0; BOMB.plantingBot = null;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
-  BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0;
+  BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0; BOMB._tenSecWarned = false;
   if (isMultiplayer()) {
     // Pure PvP: no bot carrier — T players carry (player.hasBomb set in startRound).
     for (const b of bots) b.hasBomb = false;
@@ -3747,17 +3944,16 @@ function explodeBomb(t, reason, fromNet = false) {
   BOMB.planted = false; // stop the HUD timer — round is decided, mesh burns out visually
   BOMB.droppedPos = null; BOMB.carrier = null; BOMB.plantingBot = null;
   BOMB.defuser = null;
+  AudioSys.bombDetonated();
   endRound('t', reason || '💥 BOMB DETONATED');
 }
 function defuseBomb(byPlayer, t, fromNet = false) {
   if (G.roundEnding) return;
   try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'defuse', by: player.name || 'CT' }); } catch {}
-  AudioSys.roundWin();
-  announce(byPlayer ? 'BOMB DEFUSED — YOU SAVED THE SITE!' : 'BOMB DEFUSED — CT WINS', 2400);
   bombClearMesh();
   BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
-  endRound('ct', 'BOMB DEFUSED');
+  endRound('ct', byPlayer ? 'BOMB DEFUSED — YOU SAVED THE SITE!' : 'BOMB DEFUSED — CT WINS');
 }
 // ---- Remote bomb/round application (PvP sync, last-write-wins for bomb) ----
 function applyRemoteBomb(m) {
@@ -3783,9 +3979,7 @@ function applyRemoteBomb(m) {
     bombClearMesh();
     BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
     BOMB.defuseProgress = 0; BOMB.defuser = null;
-    AudioSys.roundWin();
-    announce(`BOMB DEFUSED BY ${m.by || m.fromName || 'CT'} — CT WINS`, 2400);
-    endRound('ct', 'BOMB DEFUSED', true);
+    endRound('ct', `BOMB DEFUSED BY ${m.by || m.fromName || 'CT'}`);
   } else if (act === 'drop') {
     if (BOMB.planted) return;
     BOMB.droppedPos = new THREE.Vector3(m.x || 0, 0, m.z || 0);
@@ -3822,6 +4016,10 @@ function updateBombHUD(t) {
   bar.classList.remove('planted', 'ct');
   if (BOMB.planted && BOMB.pos) {
     const left = Math.max(0, BOMB.explodeAt - t);
+    if (left <= 10.0 && left > 0 && !BOMB._tenSecWarned && !G.roundEnding) {
+      BOMB._tenSecWarned = true;
+      AudioSys.tenSecWarning();
+    }
     bar.classList.add('planted');
     txt.innerHTML = `💣 BOMB ON <span class="t">${BOMB.site}</span> — DEFUSE!`;
     tmr.textContent = left.toFixed(1) + 's';
@@ -5778,7 +5976,16 @@ function updateScreenFeel(dt, t) {
 let announceTimer = null;
 function announce(msg, ms = 1200) {
   const a = $('announce');
-  a.textContent = msg; a.classList.remove('hidden');
+  a.innerHTML = `<div class="announce-title">${msg}</div>`;
+  a.classList.remove('hidden');
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => a.classList.add('hidden'), ms);
+}
+function announceRoundEnd(title, moneyText, track, ms = 3400) {
+  const a = $('announce');
+  const musicHtml = track ? `<div class="announce-music"><span>🎵</span> <span>${track.title}</span></div>` : '';
+  a.innerHTML = `<div class="announce-title">${title} — ${moneyText}</div>${musicHtml}`;
+  a.classList.remove('hidden');
   clearTimeout(announceTimer);
   announceTimer = setTimeout(() => a.classList.add('hidden'), ms);
 }
@@ -6108,6 +6315,7 @@ function updateSpectate(dt) {
   }
 }
 function startMatch() {
+  AudioSys.stopMusic(0.2);
   G.phase = 'playing'; G.round = 1; G.score = { ct: 0, t: 0 };
   G.kills = 0; G.deaths = 0; G.headshots = 0; G.shots = 0; G.hits = 0;
   G.startTime = performance.now();
@@ -6229,9 +6437,25 @@ function endRound(winner, reason, fromNet = false) { // 'ct' | 't' | 'draw'
   updateInteractHUD(null);
   for (const b of bots) { b.planting = false; b.defusing = false; }
   try { if (isOnline() && !fromNet) Net.sendRound({ action: 'end', winner, reason: reason || '', round: G.round }); } catch {}
-  if (winner === 'ct') { G.score.ct++; addMoney(MONEY_WIN); AudioSys.roundWin(); announce((reason || 'ROUND WON') + ' — +$' + MONEY_WIN, 2200); }
-  else if (winner === 't') { G.score.t++; addMoney(MONEY_LOSS); AudioSys.roundLose(); announce((reason || 'ROUND LOST') + ' — +$' + MONEY_LOSS, 2200); }
-  else { addMoney(MONEY_DRAW); announce((reason || 'DRAW') + ' — +$' + MONEY_DRAW, 1800); }
+
+  const myTeam = player.team || 'ct';
+  let track = null;
+  if (winner === 'ct') { G.score.ct++; }
+  else if (winner === 't') { G.score.t++; }
+
+  if (winner === 'draw') {
+    addMoney(MONEY_DRAW);
+    track = AudioSys.roundLose(reason);
+    announceRoundEnd(reason || 'ROUND DRAW', '+$' + MONEY_DRAW, track, 3400);
+  } else if (winner === myTeam) {
+    addMoney(MONEY_WIN);
+    track = AudioSys.roundWin(reason);
+    announceRoundEnd(reason || 'ROUND WON', '+$' + MONEY_WIN, track, 3400);
+  } else {
+    addMoney(MONEY_LOSS);
+    track = AudioSys.roundLose(reason);
+    announceRoundEnd(reason || 'ROUND LOST', '+$' + MONEY_LOSS, track, 3400);
+  }
   // bot economy irrelevant
   updateHUD();
   if (G.score.ct >= ROUNDS_TO_WIN_MATCH || G.score.t >= ROUNDS_TO_WIN_MATCH) { endMatch(); return; }
@@ -6239,11 +6463,11 @@ function endRound(winner, reason, fromNet = false) { // 'ct' | 't' | 'draw'
   // Online: host drives the next round; guests wait for 'round/start' (plus fallback timer).
   try {
     if (isOnline() && !isRoundHost()) {
-      setTimeout(() => { if (G.phase === 'playing' && G.roundEnding) startRound(false, true); }, 3400);
+      setTimeout(() => { if (G.phase === 'playing' && G.roundEnding) startRound(false, true); }, 4000);
       return;
     }
   } catch {}
-  setTimeout(() => { if (G.phase === 'playing') startRound(); }, 3000);
+  setTimeout(() => { if (G.phase === 'playing') startRound(); }, 3800);
 }
 function endMatch() {
   G.phase = 'over';
@@ -6258,9 +6482,10 @@ function endMatch() {
   const acc = G.shots ? Math.round((G.hits / G.shots) * 100) : 0;
   const mins = ((performance.now() - G.startTime) / 60000).toFixed(1);
   $('end-sub').textContent = `Final: CT ${G.score.ct} — ${G.score.t} T · ${mins} min`;
-  $('end-stats').innerHTML = `Kills <b>${G.kills}</b> · Deaths <b>${player.deaths}</b> · Headshots <b>${G.headshots}</b><br>Accuracy <b>${acc}%</b> (${G.hits}/${G.shots}) · Cash <b>$${player.money}</b>`;
+  const track = win ? AudioSys.roundWin('MATCH_WIN') : AudioSys.roundLose('MATCH_LOSS');
+  const trackInfo = track ? `<br><span style="color:#ffd76d;font-size:14px;letter-spacing:1px;font-weight:700;">🎵 ${track.title}</span>` : '';
+  $('end-stats').innerHTML = `Kills <b>${G.kills}</b> · Deaths <b>${player.deaths}</b> · Headshots <b>${G.headshots}</b><br>Accuracy <b>${acc}%</b> (${G.hits}/${G.shots}) · Cash <b>$${player.money}</b>${trackInfo}`;
   $('end-screen').classList.remove('hidden');
-  win ? AudioSys.roundWin() : AudioSys.roundLose();
 }
 function pauseGame() {
   if (G.phase !== 'playing') return;
@@ -6465,6 +6690,7 @@ function loop() {
       G.freezeLeft = Math.max(0, G.freezeLeft - dt);
       if (G.freezeLeft <= 0 && !G.roundEnding) {
         announce('GO GO GO', 900);
+        AudioSys.stopMusic(1.5);
         AudioSys.click(880, 0.12, 0.4);
         setTimeout(() => AudioSys.click(1174, 0.14, 0.4), 130);
       }
@@ -6583,7 +6809,8 @@ function boot() {
     renderer.shadowMap.enabled = opts.quality;
     sunLight.castShadow = opts.quality;
   });
-  $('opt-sound').addEventListener('change', (e) => { opts.sound = e.target.checked; });
+  $('opt-sound').addEventListener('change', (e) => { opts.sound = e.target.checked; if (!opts.sound) AudioSys.stopMusic(0.2); });
+  if ($('opt-music')) $('opt-music').addEventListener('change', (e) => { opts.music = e.target.checked; if (!opts.music) AudioSys.stopMusic(0.2); });
   $('opt-diff').addEventListener('change', (e) => { opts.difficulty = parseFloat(e.target.value); });
   const mpNote = (msg) => {
     const el = document.getElementById('mp-note');
@@ -6612,8 +6839,8 @@ function boot() {
   if (legacyPlay && !soloBtn) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
   else if (legacyPlay) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
   $('resume-btn').addEventListener('click', resumeGame);
-  $('restart-btn').addEventListener('click', () => { $('pause-menu').classList.add('hidden'); G.phase = 'playing'; startMatch(); });
-  $('again-btn').addEventListener('click', () => startMatch());
+  $('restart-btn').addEventListener('click', () => { $('pause-menu').classList.add('hidden'); G.phase = 'playing'; AudioSys.stopMusic(0.2); startMatch(); });
+  $('again-btn').addEventListener('click', () => { AudioSys.stopMusic(0.2); startMatch(); });
 
   $('loading-note').textContent = 'Ready. Click DEPLOY.';
   loop();

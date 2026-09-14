@@ -92,7 +92,13 @@ html,body { width:100%; height:100%; overflow:hidden; background:#0a0e14; font-f
 #interact-fill { height:100%; width:0%; background:linear-gradient(90deg,#ffb020,#ff5252); transition:width .05s linear; }
 #interact-fill.defuse { background:linear-gradient(90deg,#2e9bff,#7ad7ff); }
 #interact-hint { font-size:11px; opacity:.7; margin-top:5px; }
-#announce { position:absolute; left:50%; top:24%; transform:translateX(-50%); font-size:34px; font-weight:900; letter-spacing:2px; text-shadow:0 3px 12px #000; text-align:center; }
+#announce { position:absolute; left:50%; top:24%; transform:translateX(-50%); font-size:34px; font-weight:900; letter-spacing:2px; text-shadow:0 3px 12px #000; text-align:center; pointer-events:none; z-index:25; display:flex; flex-direction:column; align-items:center; gap:8px; width:max-content; max-width:90vw; }
+#announce .announce-title { font-size:32px; font-weight:900; letter-spacing:2px; text-shadow:0 3px 14px #000; }
+#announce .announce-music { font-size:13px; font-weight:800; letter-spacing:1.5px; color:#ffd76d; text-shadow:0 2px 8px rgba(0,0,0,0.9); opacity:0.95; display:inline-flex; align-items:center; gap:8px; background:rgba(6,10,18,0.85); padding:6px 18px; border-radius:24px; border:1px solid rgba(255,215,109,0.45); box-shadow:0 4px 18px rgba(0,0,0,0.6); text-transform:uppercase; animation:musicBadgeGlow 1.8s ease-in-out infinite alternate; }
+@keyframes musicBadgeGlow {
+  0% { transform:scale(0.98); box-shadow:0 0 10px rgba(255,215,109,0.2), 0 4px 18px rgba(0,0,0,0.6); }
+  100% { transform:scale(1.02); box-shadow:0 0 20px rgba(255,215,109,0.5), 0 4px 22px rgba(0,0,0,0.8); }
+}
 #fps-counter { position:absolute; bottom:4px; left:8px; font-size:11px; opacity:.5; }
 #hint-bar { position:absolute; bottom:4px; width:100%; text-align:center; font-size:11px; opacity:.45; }
 

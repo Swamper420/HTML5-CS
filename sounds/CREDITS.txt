@@ -21,4 +21,19 @@ Mixkit Sound Effects License (free for commercial use, no attribution required):
 - impact.mp3 — "Impact of a blow" (trimmed) https://mixkit.co/free-sound-effects/impact/
 - clang.mp3 — "Metal hammer hit" (trimmed) https://mixkit.co/free-sound-effects/metal/
 
-All files peak-normalized to -1 dBFS, mono, 44.1 kHz. Total ~220 KB.
+Classical Music Stings (Round ends, Victory, Defeat, Bomb detonate):
+- music_beethoven.mp3 — Ludwig van Beethoven: Symphony No. 5 in C minor, Op. 67 (I. Allegro con brio)
+  Performed by Fulda Symphonic Orchestra, conducted by Simon Schindler. EFF Open Audio License.
+- music_valkyrie.mp3 — Richard Wagner: Ride of the Valkyries (Die Walküre)
+  American Symphony Orchestra / Musopen (Public Domain).
+- music_chopin.mp3 — Frédéric Chopin: Piano Sonata No. 2 in B-flat minor, Op. 35 (III. Marche funèbre)
+  Performed by Paul Pitman / Musopen (Public Domain).
+- music_lacrimosa.mp3 — Wolfgang Amadeus Mozart: Requiem in D minor, K. 626 (VIII. Lacrimosa)
+  Performed by Josef Krips, Wiener Hofmusikkapelle (1950, Public Domain).
+- music_verdi.mp3 — Giuseppe Verdi: Messa da Requiem (Dies Irae)
+  Recorded by ICBSA (Public Domain).
+- music_bach.mp3 — Johann Sebastian Bach: Toccata and Fugue in D minor, BWV 565
+  Organ performance by Kevin MacLeod (incompetech.com, CC-BY 3.0 / Public Domain composition).
+
+All sound effects and classical music stings are normalized to -1 dBFS, 44.1/48 kHz.
+
