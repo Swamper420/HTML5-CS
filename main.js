@@ -1099,11 +1099,27 @@ function plantBomb(bot, site, t) {
   addKillfeed(bot.short, 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
   updateBombHUD(t);
 }
-function explodeBomb(t) {
+function bombDroppedHit(origin, dir, maxT) {
+  // Ray vs dropped C4 only — planted C4 is bulletproof by design.
+  // Returns distance or null. Small ground target: sphere at y~0.3, r~0.55.
+  if (BOMB.planted || !BOMB.droppedPos || G.roundEnding || G.phase !== 'playing') return null;
+  const cx = BOMB.droppedPos.x, cy = 0.3, cz = BOMB.droppedPos.z;
+  const r = 0.55;
+  const ox = origin.x - cx, oy = origin.y - cy, oz = origin.z - cz;
+  const b = ox * dir.x + oy * dir.y + oz * dir.z;
+  const c = ox * ox + oy * oy + oz * oz - r * r;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const tt = -b - Math.sqrt(disc);
+  if (tt > 0.3 && tt < maxT) return tt;
+  return null;
+}
+function explodeBomb(t, reason) {
   if (BOMB.exploded || G.roundEnding) return;
   BOMB.exploded = true;
   AudioSys.explode();
-  const p = BOMB.pos ? BOMB.pos.clone().add(new THREE.Vector3(0, 1, 0)) : new THREE.Vector3(24, 1, 0);
+  const groundZero = BOMB.planted && BOMB.pos ? BOMB.pos : BOMB.droppedPos;
+  const p = groundZero ? groundZero.clone().add(new THREE.Vector3(0, 1, 0)) : new THREE.Vector3(24, 1, 0);
   spawnBurst(p, 0xffd27a, 40, 12, 0.9, 0.22);
   spawnBurst(p, 0xff6a2a, 30, 9, 1.1, 0.3);
   spawnBurst(p, 0x555555, 24, 6, 1.6, 0.35);
@@ -1116,7 +1132,9 @@ function explodeBomb(t) {
   }
   setTimeout(() => bombClearMesh(), 2500);
   BOMB.planted = false; // stop the HUD timer — round is decided, mesh burns out visually
-  endRound('t', '💥 BOMB DETONATED');
+  BOMB.droppedPos = null; BOMB.carrier = null; BOMB.plantingBot = null;
+  BOMB.defuser = null;
+  endRound('t', reason || '💥 BOMB DETONATED');
 }
 function defuseBomb(byPlayer, t) {
   if (G.roundEnding) return;
@@ -1139,7 +1157,7 @@ function updateBombHUD(t) {
     txt.innerHTML = `💣 BOMB ON <span class="t">${BOMB.site}</span> — DEFUSE!`;
     tmr.textContent = left.toFixed(1) + 's';
   } else if (BOMB.droppedPos) {
-    txt.innerHTML = `<span class="t">BOMB DROPPED</span> — T must recover`;
+    txt.innerHTML = `<span class="t">BOMB DROPPED</span> — UNSTABLE, DO NOT SHOOT`;
     tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
   } else if (BOMB.carrier && BOMB.carrier.alive) {
     bar.classList.add('ct');
@@ -1488,6 +1506,27 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
     if (r && r.d < bestT) { bestT = r.d; hitPlayer = true; hitBot = null; head = r.head; }
   }
   // teammates (CT bots) can be hit by... nobody (no friendly fire) — skip.
+
+  // Dropped C4 is shoot-to-detonate (planted C4 is bulletproof — bombDroppedHit
+  // returns null when planted). Closest-hit wins: body/wall in front still blocks.
+  const bombT = bombDroppedHit(origin, dir, bestT);
+  if (bombT !== null) {
+    const bombEnd = origin.clone().add(dir.clone().multiplyScalar(bombT));
+    spawnTracer(origin.clone(), bombEnd.clone(), wdef.tracer);
+    if (shooter.isPlayer) {
+      muzzleLight.position.copy(origin).add(dir.clone().multiplyScalar(0.6));
+      muzzleLight.intensity = wdef.sound === 'sniper' ? 5 : 3.2;
+      muzzleLight.distance = wdef.sound === 'sniper' ? 20 : 14;
+    }
+    const distSndBomb = shooter.isPlayer ? 0 : origin.distanceTo(new THREE.Vector3(player.pos.x, player.pos.y + EYE, player.pos.z));
+    AudioSys.shoot(wdef.sound, distSndBomb);
+    spawnBurst(bombEnd, 0xffd27a, 10, 6, 0.4, 0.1);
+    const shooterName = shooter.isPlayer ? 'YOU' : (shooter.bot ? shooter.bot.short : '???');
+    const shooterTeam = shooter.isPlayer ? 'ct' : shooter.team;
+    addKillfeed(shooterName, shooterTeam, 'DROPPED BOMB', 't', '💥 C4', false);
+    explodeBomb(t, '💥 C4 SHOT — DETONATED');
+    return { hit: true, d: bombT, bombDetonated: true };
+  }
 
   const end = origin.clone().add(dir.clone().multiplyScalar(bestT));
   // effects
