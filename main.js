@@ -101,62 +101,182 @@ const opts = { quality: true, sound: true, difficulty: 1 };
 // air-absorption lowpass, wall occlusion, speed-of-sound delay, shared
 // generated-impulse reverb + slap echo, per-weapon randomized layers.
 const AudioSys = {
-  ctx: null, master: null, comp: null, verb: null, verbGain: null,
+  ctx: null, master: null, shaper: null, comp: null, verb: null, verbGain: null,
   echo: null, echoFb: null, echoOut: null, muted: false,
-  _white: null, _ambient: false, _stepAlt: false,
+  _white: null, _brown: null, _ambient: false, _stepAlt: false,
+  _voices: 0, _lastShootAt: 0,
+  _buf: null, _loadingSamples: false,
   init() {
     if (this.ctx) return;
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AC();
-      // master -> compressor -> destination (glue + anti-clip when many guns)
+      // master -> soft clipper -> gentle glue compressor -> destination.
+      // Keeps stacked AK sprays punchy instead of pumping flat.
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.62;
+      this.master.gain.value = 0.85;
+      this.shaper = this.ctx.createWaveShaper();
+      try {
+        const curve = new Float32Array(256);
+        for (let i = 0; i < 256; i++) {
+          const x = (i / 128) - 1;
+          curve[i] = Math.tanh(1.6 * x);
+        }
+        this.shaper.curve = curve;
+        this.shaper.oversample = '2x';
+      } catch (e) {}
       this.comp = this.ctx.createDynamicsCompressor();
-      this.comp.threshold.value = -16; this.comp.knee.value = 18;
-      this.comp.ratio.value = 7; this.comp.attack.value = 0.003; this.comp.release.value = 0.16;
-      this.master.connect(this.comp); this.comp.connect(this.ctx.destination);
-      // generated stereo impulse reverb (outdoor slap / courtyard feel)
-      const sr = this.ctx.sampleRate, len = Math.floor(sr * 1.7);
+      this.comp.threshold.value = -12; this.comp.knee.value = 14;
+      this.comp.ratio.value = 4; this.comp.attack.value = 0.004; this.comp.release.value = 0.18;
+      this.master.connect(this.shaper); this.shaper.connect(this.comp); this.comp.connect(this.ctx.destination);
+      // short outdoor slap: 0.45s fast-decay stereo IR, kept quiet so guns stay dry
+      const sr = this.ctx.sampleRate, len = Math.floor(sr * 0.45);
       const ir = this.ctx.createBuffer(2, len, sr);
       for (let ch = 0; ch < 2; ch++) {
         const d = ir.getChannelData(ch);
         for (let i = 0; i < len; i++) {
           const k = i / len;
-          d[i] = (Math.random() * 2 - 1) * Math.pow(1 - k, 2.6) * 0.55;
+          d[i] = (Math.random() * 2 - 1) * Math.pow(1 - k, 3.4) * 0.5;
         }
       }
       this.verb = this.ctx.createConvolver(); this.verb.buffer = ir;
-      this.verbGain = this.ctx.createGain(); this.verbGain.gain.value = 0.42;
+      this.verbGain = this.ctx.createGain(); this.verbGain.gain.value = 0.16;
       this.verb.connect(this.verbGain); this.verbGain.connect(this.master);
       // shared slap echo for distant gun tails / bomb beeps
-      this.echo = this.ctx.createDelay(1.0); this.echo.delayTime.value = 0.21;
-      this.echoFb = this.ctx.createGain(); this.echoFb.gain.value = 0.32;
-      this.echoOut = this.ctx.createGain(); this.echoOut.gain.value = 0.22;
+      this.echo = this.ctx.createDelay(1.0); this.echo.delayTime.value = 0.19;
+      this.echoFb = this.ctx.createGain(); this.echoFb.gain.value = 0.28;
+      this.echoOut = this.ctx.createGain(); this.echoOut.gain.value = 0.14;
       this.echo.connect(this.echoFb); this.echoFb.connect(this.echo);
       this.echo.connect(this.echoOut); this.echoOut.connect(this.master);
-      // cached 1s white noise (reused with playbackRate jitter for variety)
+      // cached 1s white noise (cracks, mech, foley) + brown-ish noise (booms)
       const wb = this.ctx.createBuffer(1, sr, sr);
       const wd = wb.getChannelData(0);
       for (let i = 0; i < wd.length; i++) wd[i] = Math.random() * 2 - 1;
       this._white = wb;
+      const bb = this.ctx.createBuffer(1, sr, sr);
+      const bd = bb.getChannelData(0);
+      let last = 0;
+      for (let i = 0; i < bd.length; i++) {
+        const w = Math.random() * 2 - 1;
+        last = (last + 0.02 * w) / 1.02;
+        bd[i] = last * 3.2;
+      }
+      this._brown = bb;
+      this._buf = {};
+      this._loadSamples();
       this._startAmbient();
     } catch (e) { /* no audio */ }
   },
   resume() {
     if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
     if (this.ctx && !this._ambient) this._startAmbient();
+    if (this.ctx) this._loadSamples(); // retry until all samples decode
   },
   now() { return this.ctx ? this.ctx.currentTime : 0; },
-  env(gainNode, t, peak, decay) {
-    gainNode.gain.setValueAtTime(Math.max(0.0002, peak), t);
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+  env(gainNode, t, peak, decay, attack = 0.002) {
+    // fast fade-in kills the instant-jump click, then natural exp decay
+    const p = Math.max(0.0002, peak);
+    gainNode.gain.setValueAtTime(0.0001, t);
+    gainNode.gain.linearRampToValueAtTime(p, t + attack);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+  },
+  _claimVoice(vol) {
+    // polyphony guard: during full sprays drop the quietest far layers first
+    if (this._voices > 26 && vol < 0.2) return false;
+    if (this._voices > 40) return false;
+    this._voices++;
+    return true;
+  },
+  _releaseVoiceAt(t) {
+    try {
+      const dt = Math.max(0, (t - this.ctx.currentTime) * 1000);
+      setTimeout(() => { this._voices = Math.max(0, this._voices - 1); }, dt + 30);
+    } catch (e) { this._voices = Math.max(0, this._voices - 1); }
   },
   noiseBuffer(dur) {
     const sr = this.ctx.sampleRate, buf = this.ctx.createBuffer(1, Math.max(1, Math.floor(sr * dur)), sr);
     const d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     return buf;
+  },
+  // Real recorded samples (see sounds/CREDITS.txt). Loaded async; every caller
+  // falls back to procedural synthesis when a buffer isn't decoded yet.
+  SAMPLES: {
+    rifle: 'sounds/rifle.mp3', pistol: 'sounds/pistol.mp3', sniper: 'sounds/sniper.mp3',
+    explosion: 'sounds/explosion.mp3', he: 'sounds/he.mp3',
+    reload_pump: 'sounds/reload_pump.mp3', reload_move: 'sounds/reload_move.mp3',
+    click: 'sounds/click.mp3', steps: 'sounds/steps.mp3', crack: 'sounds/crack.mp3',
+    impact: 'sounds/impact.mp3', clang: 'sounds/clang.mp3',
+  },
+  STEP_SLICES: [0.94, 1.64, 2.43, 3.17], // step onsets inside steps.mp3 (0.3s windows)
+  _loadSamples() {
+    if (!this.ctx || this._loadingSamples) return;
+    const names = Object.keys(this.SAMPLES).filter((n) => !this._buf[n]);
+    if (!names.length) return;
+    this._loadingSamples = true;
+    const done = () => { this._loadingSamples = false; };
+    try {
+      Promise.all(names.map((n) =>
+        fetch(this.SAMPLES[n]).then((r) => {
+          if (!r.ok) throw new Error('http ' + r.status);
+          return r.arrayBuffer();
+        }).then((ab) => this.ctx.decodeAudioData(ab)).then((buf) => {
+          this._buf[n] = buf;
+        }).catch(() => { /* keep procedural fallback */ })
+      )).then(done, done);
+    } catch (e) { done(); }
+  },
+  // Play a decoded sample through the same 3D path (vol/pan/air/verb/echo).
+  // Returns true when the sample path handled it (played or culled quiet),
+  // false when no buffer is ready (caller should use procedural fallback).
+  _sample({ name, peak = 0.8, rate = 1, offset = 0, dur = 0, pos = null, kind = 'sfx', verb = null, echo = 0, at = 0, lp = 0, pan = null }) {
+    if (!this.ctx) return false;
+    const buf = this._buf && this._buf[name];
+    if (!buf) return false;
+    const s = this._spatial(pos, kind);
+    const scaled = peak * s.vol;
+    if (scaled < 0.004) return true;
+    if (!this._claimVoice(s.vol)) return true;
+    const t0 = this.now() + s.delay + at;
+    const playDur = dur > 0 ? dur : (buf.duration - offset);
+    const tEnd = t0 + playDur + 0.08;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate * rand(0.96, 1.04);
+    const g = this.ctx.createGain();
+    this.env(g, t0, scaled, Math.max(0.05, playDur * 0.85));
+    const chain = [src, g];
+    let head = src;
+    // air absorption on top of the baked recording so distance still reads
+    const lpF = lp > 0 ? Math.min(lp, s.lp) : s.lp;
+    if (lpF < 17000) {
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass'; f.frequency.value = lpF; f.Q.value = 0.4;
+      head.connect(f); head = f; chain.push(f);
+    }
+    head.connect(g);
+    const p = this._pan(pan !== null ? pan : s.pan);
+    g.connect(p);
+    if (p !== this.master) chain.push(p);
+    const vAmt = verb !== null ? verb : s.verb;
+    if (vAmt > 0.01) {
+      const vs = this.ctx.createGain(); vs.gain.value = vAmt;
+      g.connect(vs); vs.connect(this.verb);
+      chain.push(vs);
+    }
+    if (echo > 0.01 && this.echo) {
+      const es = this.ctx.createGain(); es.gain.value = echo * clamp(s.dist / 30, 0.15, 1);
+      const ef = this.ctx.createBiquadFilter(); ef.type = 'lowpass'; ef.frequency.value = clamp(s.lp * 0.4, 300, 4000);
+      g.connect(ef); ef.connect(es); es.connect(this.echo);
+      chain.push(ef, es);
+    }
+    try {
+      src.start(t0, Math.min(offset, Math.max(0, buf.duration - 0.05)), Math.max(0.05, playDur));
+      src.stop(tEnd);
+    } catch (e) {}
+    this._cleanup(src, chain, tEnd);
+    this._releaseVoiceAt(tEnd);
+    return true;
   },
   _startAmbient() {
     try {
@@ -193,7 +313,7 @@ const AudioSys = {
   },
   // Core 3D model: returns {vol, pan, lp, delay, verb, dist, occluded}
   _spatial(pos, kind = 'sfx') {
-    const fallback = { vol: 1, pan: 0, lp: 19000, delay: 0, verb: 0.08, dist: 0, occluded: false };
+    const fallback = { vol: 1, pan: 0, lp: 19000, delay: 0, verb: 0.035, dist: 0, occluded: false };
     if (!pos || typeof pos.x !== 'number') return fallback;
     const lp0 = this._listenerPos();
     const dx = pos.x - lp0.x, dy = (pos.y ?? 1.4) - lp0.y, dz = pos.z - lp0.z;
@@ -235,7 +355,7 @@ const AudioSys = {
       }
     } catch (e) {}
     if (occluded) { vol *= 0.30; lpF *= 0.36; }
-    const verb = clamp(0.06 + dist / 52 + (occluded ? 0.22 : 0), 0.05, 0.62);
+    const verb = clamp(0.035 + dist / 70 + (occluded ? 0.18 : 0), 0.03, 0.4);
     const delay = Math.min(dist / 343, 0.24); // speed of sound
     return { vol, pan, lp: lpF, delay, verb, dist, occluded };
   },
@@ -250,257 +370,335 @@ const AudioSys = {
     } catch (e) {}
     return this.master; // fallback: mono
   },
+  _cleanup(src, nodes, tEnd) {
+    // disconnect the whole chain shortly after the voice ends — stops node leak buildup
+    try {
+      if (src.onended !== undefined) {
+        src.onended = () => {
+          try { nodes.forEach((n) => { try { n.disconnect(); } catch (e) {} }); } catch (e) {}
+        };
+      } else {
+        const dt = Math.max(0, (tEnd - this.ctx.currentTime) * 1000);
+        setTimeout(() => { try { nodes.forEach((n) => { try { n.disconnect(); } catch (e) {} }); } catch (e) {} }, dt + 60);
+      }
+    } catch (e) {}
+  },
   // generic filtered-noise hit routed through pan + reverb send
-  _noise({ dur = 0.2, type = 'lowpass', freq = 1500, Q = 0.8, peak = 0.5, decay = 0.15, rate = 1, pos = null, kind = 'sfx', verb = null, echo = 0, at = 0, sweepTo = 0 }) {
+  _noise({ dur = 0.2, type = 'lowpass', freq = 1500, Q = 0.8, peak = 0.5, decay = 0.15, rate = 1, pos = null, kind = 'sfx', verb = null, echo = 0, at = 0, sweepTo = 0, brown = false }) {
     if (!this.ctx) return;
     const s = this._spatial(pos, kind);
+    const scaled = peak * s.vol;
+    if (scaled < 0.004) return;
+    if (!this._claimVoice(s.vol)) return;
     const t0 = this.now() + s.delay + at;
+    const tEnd = t0 + dur + 0.1;
     const src = this.ctx.createBufferSource();
-    src.buffer = this._white; src.loop = true;
+    src.buffer = (brown && this._brown) ? this._brown : this._white; src.loop = true;
     src.playbackRate.value = rate * rand(0.94, 1.06);
     const f = this.ctx.createBiquadFilter();
     f.type = type; f.frequency.setValueAtTime(Math.min(freq * rand(0.92, 1.08), s.lp), t0);
-    if (sweepTo > 0) f.frequency.exponentialRampToValueAtTime(Math.max(40, sweepTo), t0 + decay);
+    if (sweepTo > 0) f.frequency.exponentialRampToValueAtTime(Math.max(40, sweepTo), t0 + 0.002 + decay);
     f.Q.value = Q;
     const g = this.ctx.createGain();
-    this.env(g, t0, Math.max(0.0002, peak * s.vol), decay);
+    this.env(g, t0, scaled, decay);
     const p = this._pan(s.pan);
     src.connect(f); f.connect(g); g.connect(p);
+    const chain = [src, f, g];
+    if (p !== this.master) chain.push(p);
     const vAmt = verb !== null ? verb : s.verb;
     if (vAmt > 0.01) {
       const vs = this.ctx.createGain(); vs.gain.value = vAmt;
       g.connect(vs); vs.connect(this.verb);
+      chain.push(vs);
     }
     if (echo > 0.01 && this.echo) {
       const es = this.ctx.createGain(); es.gain.value = echo * clamp(s.dist / 30, 0.15, 1);
       // echo itself muffled with distance
       const ef = this.ctx.createBiquadFilter(); ef.type = 'lowpass'; ef.frequency.value = clamp(s.lp * 0.4, 300, 4000);
       g.connect(ef); ef.connect(es); es.connect(this.echo);
+      chain.push(ef, es);
     }
-    const stopJit = dur + 0.08;
-    try { src.start(t0, Math.random() * 0.5); src.stop(t0 + stopJit); } catch (e) {}
+    const stopJit = dur + 0.1;
+    try { src.start(t0, Math.random() * 0.5); src.stop(tEnd); } catch (e) {}
+    this._cleanup(src, chain, tEnd);
+    this._releaseVoiceAt(tEnd);
   },
   _tone({ type = 'sine', f0 = 440, f1 = 0, dur = 0.2, peak = 0.4, decay = 0.15, pos = null, kind = 'sfx', verb = null, at = 0 }) {
     if (!this.ctx) return;
+    if (type === 'square' || type === 'sawtooth') type = 'triangle'; // never ship 8-bit waves
     const s = this._spatial(pos, kind);
+    const scaled = peak * s.vol;
+    if (scaled < 0.004) return;
+    if (!this._claimVoice(s.vol)) return;
     const t0 = this.now() + s.delay + at;
+    const tEnd = t0 + dur + 0.06;
     const o = this.ctx.createOscillator();
     o.type = type;
     o.frequency.setValueAtTime(Math.max(20, f0 * rand(0.97, 1.03)), t0);
-    if (f1 > 0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + decay);
+    if (f1 > 0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + 0.002 + decay);
     const g = this.ctx.createGain();
-    this.env(g, t0, Math.max(0.0002, peak * s.vol), decay);
+    this.env(g, t0, scaled, decay);
     const p = this._pan(s.pan);
     o.connect(g); g.connect(p);
+    const chain = [o, g];
+    if (p !== this.master) chain.push(p);
     const vAmt = verb !== null ? verb : s.verb;
     if (vAmt > 0.01) {
       const vs = this.ctx.createGain(); vs.gain.value = vAmt;
       g.connect(vs); vs.connect(this.verb);
+      chain.push(vs);
     }
-    try { o.start(t0); o.stop(t0 + dur + 0.05); } catch (e) {}
+    try { o.start(t0); o.stop(tEnd); } catch (e) {}
+    this._cleanup(o, chain, tEnd);
+    this._releaseVoiceAt(tEnd);
   },
   _asPos(distOrPos) {
     // backward compat: old callers passed a distance number; new callers pass a Vector3
     if (distOrPos && typeof distOrPos.x === 'number') return distOrPos;
     return null; // number/undefined -> treat as non-positional (full vol, shaped by legacy dist)
   },
-  // ---- GUNS: first-person (pos=null) is dry/punchy; world guns are fully spatial ----
+  // ---- GUNS: real recordings first, procedural fallback until decoded ----
+  // Layers are gain-staged to sum ~1.0 so sprays don't slam the compressor flat.
   shoot(kind, distOrPos = 0) {
     if (!this.ctx || !opts.sound || this.muted) return;
     const pos = this._asPos(distOrPos);
     const legacyVol = (typeof distOrPos === 'number') ? clamp(1 - distOrPos / 70, 0.08, 1) : 1;
     const firstPerson = !pos;
-    const P = firstPerson ? 1 : 0; // helper to scale first-person-only extras
+    const dry = firstPerson ? 0.035 : null; // FP stays dry, world uses distance verb
+    const lv = legacyVol;
     if (kind === 'rifle') {
-      // supersonic crack
-      this._noise({ dur: 0.1, type: 'highpass', freq: 2100, peak: 0.55 * legacyVol, decay: 0.055, rate: 1.15, pos, kind: 'gun', echo: 0.05 });
-      // receiver punch (mid bark)
-      this._noise({ dur: 0.22, type: 'lowpass', freq: 2500, sweepTo: 500, peak: 0.95 * legacyVol, decay: 0.15, rate: 1.0, pos, kind: 'gun', echo: 0.10 });
-      // chest thump
-      this._tone({ type: 'sine', f0: 168, f1: 43, dur: 0.16, peak: 0.6 * legacyVol, decay: 0.13, pos, kind: 'gun' });
-      // grit + mech, close only
-      this._noise({ dur: 0.05, type: 'bandpass', freq: 3800, Q: 1.4, peak: 0.22 * legacyVol, decay: 0.035, rate: 1.3, pos, kind: 'gun' });
+      // AK-47 recording + felt chest thump + close action clack
+      const ok = this._sample({ name: 'rifle', peak: 0.82 * lv, dur: 0.32, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.08 });
+      this._tone({ type: 'sine', f0: 150, f1: 44, dur: 0.14, peak: (firstPerson ? 0.4 : 0.3) * lv, decay: 0.11, pos, kind: 'gun', verb: dry });
       if (firstPerson || (pos && this._spatial(pos, 'gun').dist < 14)) {
         const mp = firstPerson ? null : pos;
-        this._tone({ type: 'square', f0: 4300, dur: 0.03, peak: 0.10 * legacyVol, decay: 0.03, pos: mp, kind: 'sfx', verb: 0.03 });
+        this._noise({ dur: 0.03, type: 'bandpass', freq: 3400, Q: 2, peak: 0.08 * lv, decay: 0.022, rate: 1.5, pos: mp, kind: 'sfx', verb: 0.02, at: 0.03 });
       }
+      if (ok) return;
+      // fallback: sharp supersonic crack + mid-forward receiver bark + chest thump
+      this._noise({ dur: 0.03, type: 'highpass', freq: 3400, peak: 0.34 * lv, decay: 0.018, rate: 1.35, pos, kind: 'gun', verb: dry });
+      this._noise({ dur: 0.09, type: 'highpass', freq: 1700, peak: 0.32 * lv, decay: 0.045, rate: 1.2, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.06 });
+      this._noise({ dur: 0.2, type: 'lowpass', freq: 2100, sweepTo: 420, peak: (firstPerson ? 0.62 : 0.54) * lv, decay: 0.13, rate: 0.95, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.1, brown: true });
+      this._tone({ type: 'sine', f0: 150, f1: 44, dur: 0.14, peak: (firstPerson ? 0.55 : 0.44) * lv, decay: 0.11, pos, kind: 'gun', verb: dry });
+      this._noise({ dur: 0.04, type: 'bandpass', freq: 2200, Q: 1.6, peak: 0.12 * lv, decay: 0.032, rate: 1.3, pos, kind: 'gun', verb: dry, at: 0.035 });
     } else if (kind === 'pistol') {
-      this._noise({ dur: 0.09, type: 'highpass', freq: 2900, peak: 0.6 * legacyVol, decay: 0.05, rate: 1.2, pos, kind: 'gun', echo: 0.04 });
-      this._noise({ dur: 0.2, type: 'bandpass', freq: 1150, Q: 0.9, peak: 1.0 * legacyVol, decay: 0.14, rate: 1.0, pos, kind: 'gun', echo: 0.08 });
-      this._tone({ type: 'sine', f0: 148, f1: 48, dur: 0.15, peak: 0.65 * legacyVol, decay: 0.12, pos, kind: 'gun' });
-      this._noise({ dur: 0.04, type: 'highpass', freq: 5200, peak: 0.18 * legacyVol, decay: 0.03, rate: 1.4, pos, kind: 'gun' });
-    } else { // sniper / awp: huge boom + long rolling echo
-      this._noise({ dur: 0.16, type: 'highpass', freq: 850, peak: 0.75 * legacyVol, decay: 0.11, rate: 1.0, pos, kind: 'gun', echo: 0.12 });
-      this._noise({ dur: 0.65, type: 'lowpass', freq: 950, sweepTo: 220, peak: 1.0 * legacyVol, decay: 0.5, rate: 0.85, pos, kind: 'gun', echo: 0.30 });
-      this._tone({ type: 'sine', f0: 118, f1: 27, dur: 0.6, peak: 0.9 * legacyVol, decay: 0.5, pos, kind: 'gun', verb: 0.3 });
-      // rolling thunder tail (two delayed low washes)
-      this._noise({ dur: 0.5, type: 'lowpass', freq: 520, sweepTo: 150, peak: 0.4 * legacyVol, decay: 0.55, rate: 0.7, pos, kind: 'gun', verb: 0.55, echo: 0.4, at: 0.16 });
-      this._noise({ dur: 0.6, type: 'lowpass', freq: 380, sweepTo: 120, peak: 0.26 * legacyVol, decay: 0.6, rate: 0.6, pos, kind: 'gun', verb: 0.6, echo: 0.45, at: 0.34 });
-      void P;
+      // Desert Eagle recording + deep sub
+      const ok = this._sample({ name: 'pistol', peak: 0.85 * lv, dur: 0.5, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.06 });
+      this._tone({ type: 'sine', f0: 130, f1: 40, dur: 0.15, peak: (firstPerson ? 0.42 : 0.32) * lv, decay: 0.13, pos, kind: 'gun', verb: dry });
+      if (ok) return;
+      // fallback: heavier snap + hollow chamber + deep sub — bigger and slower than the AK
+      this._noise({ dur: 0.03, type: 'highpass', freq: 3200, peak: 0.34 * lv, decay: 0.02, rate: 1.3, pos, kind: 'gun', verb: dry });
+      this._noise({ dur: 0.08, type: 'highpass', freq: 2200, peak: 0.34 * lv, decay: 0.05, rate: 1.2, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.05 });
+      this._noise({ dur: 0.19, type: 'bandpass', freq: 900, Q: 0.9, peak: (firstPerson ? 0.66 : 0.56) * lv, decay: 0.13, rate: 0.95, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.08, brown: true });
+      this._tone({ type: 'sine', f0: 130, f1: 40, dur: 0.15, peak: (firstPerson ? 0.58 : 0.46) * lv, decay: 0.13, pos, kind: 'gun', verb: dry });
+    } else { // sniper / awp: cannon recording + long brown-woof tail + felt sub
+      const ok = this._sample({ name: 'sniper', peak: 0.9 * lv, dur: 1.1, rate: 0.95, pos, kind: 'gun', verb: firstPerson ? 0.08 : null, echo: firstPerson ? 0.04 : 0.14 });
+      this._tone({ type: 'sine', f0: 95, f1: 27, dur: 0.6, peak: 0.5 * lv, decay: 0.5, pos, kind: 'gun', verb: firstPerson ? 0.06 : null });
+      this._noise({ dur: 0.6, type: 'lowpass', freq: 380, sweepTo: 100, peak: 0.2 * lv, decay: 0.6, rate: 0.6, pos, kind: 'gun', verb: 0.35, echo: 0.35, at: 0.2, brown: true });
+      if (ok) return;
+      // fallback synth layers under the same tail
+      this._noise({ dur: 0.035, type: 'highpass', freq: 2600, peak: 0.4 * lv, decay: 0.022, rate: 1.25, pos, kind: 'gun', verb: dry });
+      this._noise({ dur: 0.14, type: 'highpass', freq: 750, peak: 0.44 * lv, decay: 0.1, rate: 1.0, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0.04 : 0.12 });
+      this._noise({ dur: 0.55, type: 'lowpass', freq: 800, sweepTo: 110, peak: 0.7 * lv, decay: 0.42, rate: 0.85, pos, kind: 'gun', verb: firstPerson ? 0.1 : null, echo: 0.25, brown: true });
     }
   },
   mech(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._tone({ type: 'square', f0: 4300, dur: 0.025, peak: 0.12, decay: 0.025, pos, kind: 'sfx', verb: 0.04 });
-    this._noise({ dur: 0.04, type: 'bandpass', freq: 3200, Q: 2, peak: 0.16, decay: 0.035, rate: 1.5, pos, kind: 'sfx' });
-    setTimeout(() => {
-      this._tone({ type: 'square', f0: 2500, dur: 0.03, peak: 0.11, decay: 0.03, pos, kind: 'sfx', verb: 0.04 });
-      this._noise({ dur: 0.05, type: 'bandpass', freq: 2000, Q: 1.6, peak: 0.14, decay: 0.04, rate: 1.2, pos, kind: 'sfx' });
-    }, 55);
+    // bolt clack: two dry metal snaps, no pitched ring — staged on the ctx clock
+    this._noise({ dur: 0.03, type: 'bandpass', freq: 3200, Q: 2.2, peak: 0.16, decay: 0.028, rate: 1.5, pos, kind: 'sfx' });
+    this._noise({ dur: 0.025, type: 'highpass', freq: 5200, peak: 0.08, decay: 0.02, rate: 1.7, pos, kind: 'sfx' });
+    this._noise({ dur: 0.04, type: 'bandpass', freq: 2000, Q: 1.8, peak: 0.15, decay: 0.035, rate: 1.2, pos, kind: 'sfx', at: 0.055 });
+    this._noise({ dur: 0.025, type: 'highpass', freq: 4600, peak: 0.07, decay: 0.02, rate: 1.6, pos, kind: 'sfx', at: 0.055 });
   },
   click(freq = 2000, dur = 0.05, vol = 0.25, pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    // metallic UI blip: square body + breath of noise for texture
-    this._tone({ type: 'square', f0: freq, dur, peak: vol * 0.8, decay: dur, pos, kind: 'sfx', verb: 0.05 });
-    this._noise({ dur: 0.03, type: 'highpass', freq: freq * 1.5, peak: vol * 0.25, decay: 0.025, rate: 1.6, pos, kind: 'sfx' });
+    // real recorded click; freq steers playback rate, never a pitched note
+    if (this._sample({ name: 'click', peak: vol * 0.9, rate: clamp(freq / 2000, 0.75, 1.6), dur: Math.min(dur + 0.02, 0.12), pos, kind: 'sfx', verb: 0.03 })) return;
+    // fallback: dry filtered snap only
+    const d = Math.min(dur, 0.03);
+    this._noise({ dur: d + 0.01, type: 'bandpass', freq: clamp(freq, 900, 4200), Q: 1.4, peak: vol * 0.7, decay: d, rate: 1.6, pos, kind: 'sfx' });
   },
-  dryfire() { this.click(300, 0.06, 0.3); },
+  dryfire() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    if (this._sample({ name: 'click', peak: 0.3, rate: 0.75, dur: 0.2, verb: 0.03 })) {
+      this._sample({ name: 'click', peak: 0.18, rate: 1.25, dur: 0.12, verb: 0.03, at: 0.05 });
+      return;
+    }
+    // fallback: dull hammer fall + hollow trigger snap, no tone
+    this._noise({ dur: 0.04, type: 'lowpass', freq: 900, peak: 0.22, decay: 0.035, rate: 0.9 });
+    this._noise({ dur: 0.03, type: 'bandpass', freq: 2100, Q: 1.6, peak: 0.14, decay: 0.025, rate: 1.4, at: 0.045 });
+  },
   reload(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    // staged: mag out (clack) -> mag in (chunk) -> charge (shick-clack)
-    this._noise({ dur: 0.06, type: 'bandpass', freq: 950, Q: 1.8, peak: 0.4, decay: 0.06, rate: 1.1, pos, kind: pos ? 'gun' : 'sfx' });
-    this._tone({ type: 'square', f0: 900, dur: 0.07, peak: 0.22, decay: 0.07, pos, kind: 'sfx', verb: 0.06 });
-    setTimeout(() => {
-      this._noise({ dur: 0.06, type: 'bandpass', freq: 1500, Q: 1.8, peak: 0.42, decay: 0.06, rate: 1.25, pos, kind: pos ? 'gun' : 'sfx' });
-      this._tone({ type: 'square', f0: 1400, dur: 0.07, peak: 0.22, decay: 0.07, pos, kind: 'sfx', verb: 0.06 });
-    }, 180);
-    setTimeout(() => {
-      this._noise({ dur: 0.05, type: 'bandpass', freq: 2600, Q: 2, peak: 0.34, decay: 0.05, rate: 1.4, pos, kind: pos ? 'gun' : 'sfx' });
-      this._tone({ type: 'square', f0: 700, dur: 0.09, peak: 0.26, decay: 0.09, pos, kind: 'sfx', verb: 0.07 });
-    }, 700);
+    const k = pos ? 'gun' : 'sfx';
+    // real handling foley staged on ctx time: mag out -> mag in -> charge
+    const a = this._sample({ name: 'reload_pump', peak: 0.5, dur: 0.28, pos, kind: k });
+    const b = this._sample({ name: 'reload_move', peak: 0.5, dur: 0.24, pos, kind: k, at: 0.18 });
+    const c = this._sample({ name: 'reload_pump', peak: 0.52, rate: 1.18, dur: 0.26, pos, kind: k, at: 0.7 });
+    if (a && b && c) {
+      this._sample({ name: 'click', peak: 0.2, rate: 1.4, dur: 0.1, pos, kind: k, at: 0.7 });
+      return;
+    }
+    // fallback foley: noise only, same staging
+    this._noise({ dur: 0.055, type: 'bandpass', freq: 950, Q: 1.8, peak: 0.3, decay: 0.05, rate: 1.1, pos, kind: k });
+    this._noise({ dur: 0.03, type: 'highpass', freq: 3600, peak: 0.09, decay: 0.025, rate: 1.5, pos, kind: k });
+    this._noise({ dur: 0.055, type: 'bandpass', freq: 1450, Q: 1.8, peak: 0.32, decay: 0.05, rate: 1.25, pos, kind: k, at: 0.18 });
+    this._noise({ dur: 0.03, type: 'highpass', freq: 4200, peak: 0.09, decay: 0.025, rate: 1.5, pos, kind: k, at: 0.18 });
+    this._noise({ dur: 0.045, type: 'bandpass', freq: 2700, Q: 2.2, peak: 0.3, decay: 0.04, rate: 1.4, pos, kind: k, at: 0.7 });
+    this._noise({ dur: 0.05, type: 'lowpass', freq: 800, peak: 0.2, decay: 0.045, rate: 0.9, pos, kind: k, at: 0.7 });
   },
   hit(headshot) {
     if (!this.ctx || !opts.sound || this.muted) return;
+    // dry hit tick from the real click recording. Headshot = brighter + sharper.
+    if (this._sample({ name: 'click', peak: headshot ? 0.34 : 0.3, rate: headshot ? 1.5 : 1.25, dur: 0.09, verb: 0.02 })) {
+      if (headshot) this._noise({ dur: 0.05, type: 'lowpass', freq: 900, peak: 0.16, decay: 0.045, rate: 0.9 });
+      return;
+    }
+    // fallback: felt impact through the stock, not a synth note
     if (headshot) {
-      // bright skull-ping: metallic triangle + sizzle
-      this._tone({ type: 'triangle', f0: 2750, f1: 2100, dur: 0.08, peak: 0.42, decay: 0.07, verb: 0.12 });
-      this._noise({ dur: 0.05, type: 'highpass', freq: 4200, peak: 0.2, decay: 0.04, rate: 1.5 });
+      this._noise({ dur: 0.035, type: 'bandpass', freq: 3400, Q: 1.6, peak: 0.32, decay: 0.03, rate: 1.5, verb: 0.03 });
+      this._noise({ dur: 0.05, type: 'lowpass', freq: 900, peak: 0.2, decay: 0.045, rate: 0.9 });
     } else {
-      this._tone({ type: 'triangle', f0: 1950, f1: 1500, dur: 0.07, peak: 0.38, decay: 0.06, verb: 0.1 });
-      this._noise({ dur: 0.04, type: 'highpass', freq: 3200, peak: 0.14, decay: 0.035, rate: 1.4 });
+      this._noise({ dur: 0.035, type: 'bandpass', freq: 2400, Q: 1.4, peak: 0.28, decay: 0.032, rate: 1.35, verb: 0.03 });
+      this._noise({ dur: 0.05, type: 'lowpass', freq: 750, peak: 0.18, decay: 0.045, rate: 0.85 });
     }
   },
   kill() {
     if (!this.ctx || !opts.sound || this.muted) return;
-    // punchy two-tone confirm with harmonic sheen
-    this._tone({ type: 'triangle', f0: 620, dur: 0.1, peak: 0.42, decay: 0.1, verb: 0.16 });
-    this._tone({ type: 'sine', f0: 1240, dur: 0.08, peak: 0.14, decay: 0.08, verb: 0.14 });
-    setTimeout(() => {
-      this._tone({ type: 'triangle', f0: 930, dur: 0.13, peak: 0.44, decay: 0.12, verb: 0.18 });
-      this._tone({ type: 'sine', f0: 1860, dur: 0.1, peak: 0.13, decay: 0.1, verb: 0.16 });
-    }, 105);
+    // kill confirm: single dull chest-thump + dry tick. No melody — CS has no kill jingle.
+    this._tone({ type: 'sine', f0: 140, f1: 55, dur: 0.11, peak: 0.34, decay: 0.1, verb: 0.05 });
+    this._noise({ dur: 0.04, type: 'bandpass', freq: 2600, Q: 1.5, peak: 0.2, decay: 0.035, rate: 1.4, verb: 0.04, at: 0.02 });
   },
   hurt() {
     if (!this.ctx || !opts.sound || this.muted) return;
-    // body thud + grunt-ish saw drop + breath noise
-    this._tone({ type: 'sawtooth', f0: 210, f1: 82, dur: 0.24, peak: 0.4, decay: 0.22, verb: 0.08 });
-    this._tone({ type: 'sine', f0: 95, f1: 45, dur: 0.2, peak: 0.5, decay: 0.18 });
-    this._noise({ dur: 0.14, type: 'lowpass', freq: 700, sweepTo: 200, peak: 0.3, decay: 0.13, rate: 0.8 });
+    // body thud + soft grunt drop + breath — round waves only, no saw buzz
+    this._tone({ type: 'triangle', f0: 190, f1: 85, dur: 0.2, peak: 0.32, decay: 0.19, verb: 0.06 });
+    this._tone({ type: 'sine', f0: 95, f1: 45, dur: 0.19, peak: 0.42, decay: 0.17 });
+    this._noise({ dur: 0.13, type: 'lowpass', freq: 650, sweepTo: 200, peak: 0.24, decay: 0.12, rate: 0.8 });
   },
   headpop(pos = null) {
     // wet skull crunch: sharp crack + pulpy burst + hollow knock — positional
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._noise({ dur: 0.07, type: 'highpass', freq: 1800, peak: 0.7, decay: 0.06, rate: 1.4, pos, kind: 'impact' });
-    this._noise({ dur: 0.22, type: 'lowpass', freq: 1400, sweepTo: 220, peak: 0.75, decay: 0.2, rate: 0.9, pos, kind: 'impact' });
-    this._tone({ type: 'sine', f0: 320, f1: 70, dur: 0.14, peak: 0.5, decay: 0.13, pos, kind: 'impact' });
-    this._tone({ type: 'triangle', f0: 900, f1: 300, dur: 0.07, peak: 0.22, decay: 0.06, pos, kind: 'impact', verb: 0.2 });
-    // delayed wet splat as chunks land
-    setTimeout(() => {
-      this._noise({ dur: 0.12, type: 'lowpass', freq: 800, sweepTo: 200, peak: 0.3, decay: 0.11, rate: 0.7, pos, kind: 'impact' });
-    }, 160 + Math.random() * 120);
+    this._noise({ dur: 0.06, type: 'highpass', freq: 1800, peak: 0.5, decay: 0.05, rate: 1.4, pos, kind: 'impact' });
+    this._noise({ dur: 0.2, type: 'lowpass', freq: 1300, sweepTo: 220, peak: 0.58, decay: 0.18, rate: 0.9, pos, kind: 'impact', brown: true });
+    this._tone({ type: 'sine', f0: 300, f1: 70, dur: 0.13, peak: 0.4, decay: 0.12, pos, kind: 'impact' });
+    this._tone({ type: 'triangle', f0: 850, f1: 300, dur: 0.06, peak: 0.16, decay: 0.055, pos, kind: 'impact', verb: 0.15 });
+    // delayed wet splat as chunks land (ctx-timed, keeps position)
+    this._noise({ dur: 0.11, type: 'lowpass', freq: 750, sweepTo: 200, peak: 0.22, decay: 0.1, rate: 0.7, pos, kind: 'impact', at: 0.16 + Math.random() * 0.12 });
   },
   gib(pos = null, big = false) {
     // full dismemberment splat: meatier + longer than headpop, with bone rattle
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._noise({ dur: 0.1, type: 'highpass', freq: 1200, peak: big ? 0.85 : 0.65, decay: 0.08, rate: 1.2, pos, kind: 'explosion', echo: 0.05 });
-    this._noise({ dur: 0.35, type: 'lowpass', freq: 1100, sweepTo: 150, peak: big ? 0.9 : 0.7, decay: 0.32, rate: 0.8, pos, kind: 'explosion' });
-    this._tone({ type: 'sine', f0: 200, f1: 45, dur: 0.25, peak: 0.55, decay: 0.22, pos, kind: 'explosion' });
+    this._noise({ dur: 0.09, type: 'highpass', freq: 1200, peak: big ? 0.6 : 0.48, decay: 0.07, rate: 1.2, pos, kind: 'explosion', echo: 0.04 });
+    this._noise({ dur: 0.32, type: 'lowpass', freq: 1050, sweepTo: 150, peak: big ? 0.68 : 0.55, decay: 0.29, rate: 0.8, pos, kind: 'explosion', brown: true });
+    this._tone({ type: 'sine', f0: 190, f1: 45, dur: 0.23, peak: 0.44, decay: 0.2, pos, kind: 'explosion' });
     for (let i = 0; i < (big ? 4 : 2); i++) {
-      this._noise({ dur: 0.06, type: 'bandpass', freq: rand(900, 2400), Q: 1.6, peak: 0.2, decay: 0.055, rate: rand(0.9, 1.3), pos, kind: 'impact', at: rand(0.12, 0.5) });
+      this._noise({ dur: 0.055, type: 'bandpass', freq: rand(900, 2400), Q: 1.6, peak: 0.15, decay: 0.05, rate: rand(0.9, 1.3), pos, kind: 'impact', at: rand(0.12, 0.5) });
     }
   },
   helmetHit(pos) {
-    // helmet clatter: hollow metallic tok + ring, positional
+    // helmet clatter: short dull tok from the real metal recording — positional
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     const s = this._spatial(pos, 'impact');
     if (s.vol < 0.02) return;
-    this._tone({ type: 'triangle', f0: rand(700, 950), f1: 320, dur: 0.09, peak: 0.28, decay: 0.09, pos, kind: 'impact', verb: 0.25 });
-    this._noise({ dur: 0.04, type: 'highpass', freq: 3000, peak: 0.16, decay: 0.035, rate: 1.4, pos, kind: 'impact' });
+    if (this._sample({ name: 'clang', peak: 0.26, rate: rand(0.85, 1.0), dur: 0.22, pos, kind: 'impact', verb: 0.1 })) return;
+    this._tone({ type: 'triangle', f0: rand(650, 850), f1: 300, dur: 0.05, peak: 0.15, decay: 0.05, pos, kind: 'impact', verb: 0.12 });
+    this._noise({ dur: 0.03, type: 'highpass', freq: 3000, peak: 0.09, decay: 0.025, rate: 1.4, pos, kind: 'impact' });
   },
   step(pos = null, sprint = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
     const isSelf = !pos || typeof pos.x !== 'number';
     this._stepAlt = !this._stepAlt;
+    // real boot crunch: cycle slice windows so consecutive steps differ
+    const slice = this.STEP_SLICES[(Math.random() * this.STEP_SLICES.length) | 0];
     if (isSelf) {
-      // own boots: alternating L/R micro-pan, gravel crunch + soft thud
       const pan = (this._stepAlt ? -1 : 1) * 0.12;
+      if (this._sample({ name: 'steps', peak: sprint ? 0.34 : 0.26, offset: slice + rand(-0.03, 0.03), dur: 0.3, pan, verb: 0.03 })) return;
+      // fallback: alternating L/R micro-pan gravel crunch + soft thud
       const t0 = this.now();
       const mk = (freq, peak, rate) => {
+        if (!this._claimVoice(1)) return;
         const src = this.ctx.createBufferSource(); src.buffer = this._white; src.loop = true;
         src.playbackRate.value = rate * rand(0.88, 1.12);
         const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = freq * rand(0.9, 1.1);
-        const g = this.ctx.createGain(); this.env(g, t0, peak * rand(0.85, 1.15), 0.075);
+        const g = this.ctx.createGain(); this.env(g, t0, peak * rand(0.85, 1.15), 0.07);
         const p = this._pan(pan);
         src.connect(f); f.connect(g); g.connect(p);
-        try { src.start(t0, Math.random() * 0.6); src.stop(t0 + 0.14); } catch (e) {}
+        const tEnd = t0 + 0.14;
+        const chain = p !== this.master ? [src, f, g, p] : [src, f, g];
+        try { src.start(t0, Math.random() * 0.6); src.stop(tEnd); } catch (e) {}
+        this._cleanup(src, chain, tEnd);
+        this._releaseVoiceAt(tEnd);
       };
-      mk(sprint ? 750 : 580, sprint ? 0.17 : 0.12, 0.9);
-      mk(1400, 0.05, 1.5); // grit
-      this._tone({ type: 'sine', f0: 85, f1: 50, dur: 0.07, peak: 0.10, decay: 0.07 });
+      mk(sprint ? 700 : 540, sprint ? 0.15 : 0.11, 0.9);
+      mk(1350, 0.045, 1.5); // grit
+      this._tone({ type: 'sine', f0: 82, f1: 50, dur: 0.06, peak: 0.09, decay: 0.06 });
     } else {
-      // world boots: fully spatial, quiet, fade fast with distance
+      // world boots: fully spatial real crunch, quiet, fades fast with distance
       const s = this._spatial(pos, 'step');
       if (s.vol < 0.015) return;
-      this._noise({ dur: 0.09, type: 'lowpass', freq: rand(380, 640), peak: (sprint ? 0.5 : 0.36), decay: 0.075, rate: 0.85, pos, kind: 'step' });
+      if (this._sample({ name: 'steps', peak: (sprint ? 0.5 : 0.36), offset: slice + rand(-0.03, 0.03), dur: 0.3, pos, kind: 'step' })) return;
+      this._noise({ dur: 0.085, type: 'lowpass', freq: rand(360, 600), peak: (sprint ? 0.42 : 0.3), decay: 0.07, rate: 0.85, pos, kind: 'step' });
     }
   },
   land(hard = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._tone({ type: 'sine', f0: hard ? 110 : 90, f1: 42, dur: 0.12, peak: hard ? 0.4 : 0.22, decay: 0.11 });
-    this._noise({ dur: 0.1, type: 'lowpass', freq: hard ? 650 : 450, peak: hard ? 0.35 : 0.18, decay: 0.09, rate: 0.8 });
+    this._tone({ type: 'sine', f0: hard ? 105 : 88, f1: 42, dur: 0.11, peak: hard ? 0.34 : 0.19, decay: 0.1 });
+    this._noise({ dur: 0.09, type: 'lowpass', freq: hard ? 600 : 430, peak: hard ? 0.28 : 0.15, decay: 0.08, rate: 0.8 });
   },
   impact(pos, big = false) {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     const s = this._spatial(pos, 'impact');
     if (s.vol < 0.012) return;
-    // concrete snap + dust wash + faint metallic ring
-    this._noise({ dur: 0.07, type: 'highpass', freq: 2400, peak: big ? 0.5 : 0.34, decay: 0.05, rate: 1.3, pos, kind: 'impact' });
-    this._noise({ dur: 0.16, type: 'lowpass', freq: 900, sweepTo: 250, peak: 0.3, decay: 0.12, rate: 0.9, pos, kind: 'impact' });
-    if (Math.random() < 0.4) this._tone({ type: 'triangle', f0: rand(2600, 3400), f1: 1700, dur: 0.09, peak: 0.10, decay: 0.09, pos, kind: 'impact', verb: 0.25 });
+    // real recorded impact + dust wash. No ring — concrete doesn't ring.
+    if (this._sample({ name: 'impact', peak: big ? 0.55 : 0.4, dur: 0.4, pos, kind: 'impact' })) {
+      this._noise({ dur: 0.14, type: 'lowpass', freq: 850, sweepTo: 250, peak: 0.14, decay: 0.11, rate: 0.9, pos, kind: 'impact' });
+      return;
+    }
+    this._noise({ dur: 0.06, type: 'highpass', freq: 2400, peak: big ? 0.4 : 0.27, decay: 0.045, rate: 1.3, pos, kind: 'impact' });
+    this._noise({ dur: 0.14, type: 'lowpass', freq: 850, sweepTo: 250, peak: 0.24, decay: 0.11, rate: 0.9, pos, kind: 'impact' });
   },
   crack() {
-    // supersonic whizz-by when a round snaps past the camera
+    // real supersonic flyby snap when a round whips past the camera
     if (!this.ctx || !opts.sound || this.muted) return;
+    if (this._sample({ name: 'crack', peak: rand(0.3, 0.42), dur: 0.55, verb: 0.04 })) return;
+    if (!this._claimVoice(1)) return;
     const t0 = this.now();
+    const tEnd = t0 + 0.16;
     const src = this.ctx.createBufferSource(); src.buffer = this._white; src.loop = true;
     src.playbackRate.value = rand(1.4, 1.8);
     const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.1;
     f.frequency.setValueAtTime(rand(2800, 3800), t0);
     f.frequency.exponentialRampToValueAtTime(rand(900, 1300), t0 + 0.09);
-    const g = this.ctx.createGain(); this.env(g, t0, rand(0.22, 0.34), 0.09);
+    const g = this.ctx.createGain(); this.env(g, t0, rand(0.16, 0.24), 0.085);
     const p = this._pan(rand(-0.7, 0.7));
     src.connect(f); f.connect(g); g.connect(p);
-    try { src.start(t0, Math.random() * 0.5); src.stop(t0 + 0.16); } catch (e) {}
+    const chain = p !== this.master ? [src, f, g, p] : [src, f, g];
+    try { src.start(t0, Math.random() * 0.5); src.stop(tEnd); } catch (e) {}
+    this._cleanup(src, chain, tEnd);
+    this._releaseVoiceAt(tEnd);
   },
   shellTick(pos) {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     const s = this._spatial(pos, 'impact');
     if (s.vol < 0.03 || s.dist > 14) return;
-    this._tone({ type: 'triangle', f0: rand(3800, 5200), f1: 2600, dur: 0.03, peak: 0.07, decay: 0.03, pos, kind: 'impact', verb: 0.1 });
+    // real brass tick, barely audible
+    if (this._sample({ name: 'clang', peak: 0.1, rate: 1.8, dur: 0.15, pos, kind: 'impact', verb: 0.05 })) return;
+    this._noise({ dur: 0.025, type: 'highpass', freq: 5200, peak: 0.05, decay: 0.02, rate: 1.7, pos, kind: 'impact', verb: 0.06 });
   },
   roundWin() {
     if (!this.ctx || !opts.sound || this.muted) return;
-    [523.25, 659.25, 783.99, 1046.5].forEach((fr, i) => setTimeout(() => {
-      this._tone({ type: 'triangle', f0: fr, dur: 0.22, peak: 0.34, decay: 0.2, verb: 0.3 });
-      this._tone({ type: 'sine', f0: fr * 2, dur: 0.16, peak: 0.08, decay: 0.15, verb: 0.28 });
-    }, i * 128));
+    // won round: radio squelch + single low resolve tone. No arpeggio.
+    this._noise({ dur: 0.09, type: 'bandpass', freq: 1800, Q: 0.9, peak: 0.2, decay: 0.08, rate: 1.3, verb: 0.1 });
+    this._tone({ type: 'sine', f0: 196, f1: 185, dur: 0.35, peak: 0.26, decay: 0.32, verb: 0.12, at: 0.09 });
+    this._noise({ dur: 0.4, type: 'lowpass', freq: 600, sweepTo: 200, peak: 0.12, decay: 0.35, rate: 0.7, verb: 0.14, at: 0.09, brown: true });
   },
   roundLose() {
     if (!this.ctx || !opts.sound || this.muted) return;
-    [392, 329.6, 261.6, 196].forEach((fr, i) => setTimeout(() => {
-      this._tone({ type: 'sawtooth', f0: fr, dur: 0.22, peak: 0.16, decay: 0.2, verb: 0.25 });
-      this._tone({ type: 'triangle', f0: fr / 2, dur: 0.22, peak: 0.3, decay: 0.2, verb: 0.25 });
-    }, i * 148));
+    // lost round: duller squelch + lower single tone, shorter.
+    this._noise({ dur: 0.09, type: 'bandpass', freq: 1300, Q: 0.9, peak: 0.18, decay: 0.08, rate: 1.1, verb: 0.1 });
+    this._tone({ type: 'sine', f0: 147, f1: 130, dur: 0.32, peak: 0.24, decay: 0.3, verb: 0.12, at: 0.09 });
+    this._noise({ dur: 0.35, type: 'lowpass', freq: 480, sweepTo: 160, peak: 0.11, decay: 0.32, rate: 0.65, verb: 0.14, at: 0.09, brown: true });
   },
   beep(urgent = false, pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
@@ -511,16 +709,25 @@ const AudioSys = {
       else if (!p && typeof BOMB !== 'undefined' && BOMB.droppedPos) p = BOMB.droppedPos;
     } catch (e) {}
     const f = urgent ? 1560 : 1180;
-    this._tone({ type: 'sine', f0: f, dur: 0.09, peak: urgent ? 0.5 : 0.36, decay: urgent ? 0.09 : 0.07, pos: p, kind: 'beep', verb: 0.3 });
-    this._tone({ type: 'sine', f0: f * 2, dur: 0.05, peak: 0.08, decay: 0.05, pos: p, kind: 'beep' });
+    this._tone({ type: 'sine', f0: f, dur: 0.08, peak: urgent ? 0.4 : 0.3, decay: urgent ? 0.08 : 0.065, pos: p, kind: 'beep', verb: 0.2 });
+    this._tone({ type: 'sine', f0: f * 2, dur: 0.045, peak: 0.06, decay: 0.045, pos: p, kind: 'beep' });
   },
-  plantBeep() { [880, 880, 1174.7].forEach((fr, i) => setTimeout(() => this.click(fr, 0.09, 0.38), i * 118)); },
-  plantedConfirm() { [659.25, 880, 659.25, 880].forEach((fr, i) => setTimeout(() => this.click(fr, 0.12, 0.42), i * 138)); },
+  plantBeep() {
+    // planter feedback: three short dry ticks, same pitch — no melody.
+    for (let i = 0; i < 3; i++) {
+      this._noise({ dur: 0.035, type: 'bandpass', freq: 2000, Q: 2.5, peak: 0.22, decay: 0.03, rate: 1.5, verb: 0.04, at: i * 0.118 });
+    }
+  },
+  plantedConfirm() {
+    // bomb armed: two dull clunks, not a jingle.
+    this._noise({ dur: 0.06, type: 'lowpass', freq: 700, peak: 0.3, decay: 0.055, rate: 0.9, verb: 0.06 });
+    this._noise({ dur: 0.06, type: 'lowpass', freq: 620, peak: 0.3, decay: 0.055, rate: 0.85, verb: 0.06, at: 0.16 });
+  },
   defuseTick(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
     let p = pos;
     try { if (!p && typeof BOMB !== 'undefined' && BOMB.pos) p = BOMB.pos; } catch (e) {}
-    this._tone({ type: 'sine', f0: 1500, dur: 0.04, peak: 0.2, decay: 0.04, pos: p, kind: 'beep', verb: 0.2 });
+    this._tone({ type: 'sine', f0: 1500, dur: 0.035, peak: 0.15, decay: 0.035, pos: p, kind: 'beep', verb: 0.15 });
   },
   explode(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
@@ -529,64 +736,76 @@ const AudioSys = {
       try {
         if (!p && typeof BOMB !== 'undefined') p = (BOMB.pos || BOMB.droppedPos || null);
       } catch (e) {}
-      // initial crack (close = violent, far = soft thump)
-      this._noise({ dur: 0.22, type: 'highpass', freq: 600, peak: 0.9, decay: 0.16, rate: 1.0, pos: p, kind: 'explosion', echo: 0.1 });
-      // core boom sweeping down
-      this._noise({ dur: 1.3, type: 'lowpass', freq: 950, sweepTo: 55, peak: 1.0, decay: 1.15, rate: 0.9, pos: p, kind: 'explosion', verb: 0.5, echo: 0.35 });
-      // sub drop you feel
-      this._tone({ type: 'sine', f0: 105, f1: 26, dur: 1.1, peak: 0.95, decay: 1.0, pos: p, kind: 'explosion', verb: 0.35 });
-      // debris rattles
-      for (let i = 0; i < 5; i++) {
-        this._noise({ dur: 0.08, type: 'bandpass', freq: rand(700, 2600), Q: 1.5, peak: 0.22, decay: 0.07, rate: rand(0.8, 1.3), pos: p, kind: 'explosion', at: rand(0.15, 0.8) });
+      // C4: real recorded blast + felt sub + debris. No clip-stacking.
+      const ok = this._sample({ name: 'explosion', peak: 0.85, dur: 1.6, rate: 0.95, pos: p, kind: 'explosion', verb: 0.28, echo: 0.3 });
+      this._tone({ type: 'sine', f0: 100, f1: 26, dur: 1.0, peak: 0.55, decay: 0.95, pos: p, kind: 'explosion', verb: 0.2 });
+      for (let i = 0; i < 3; i++) {
+        this._noise({ dur: 0.07, type: 'bandpass', freq: rand(700, 2600), Q: 1.5, peak: 0.12, decay: 0.06, rate: rand(0.8, 1.3), pos: p, kind: 'explosion', at: rand(0.15, 0.8) });
       }
-      // long smoky tail
-      this._noise({ dur: 1.6, type: 'lowpass', freq: 320, sweepTo: 90, peak: 0.4, decay: 1.5, rate: 0.6, pos: p, kind: 'explosion', verb: 0.6, echo: 0.5, at: 0.25 });
+      if (ok) return;
+      // fallback synth
+      this._noise({ dur: 0.2, type: 'highpass', freq: 600, peak: 0.65, decay: 0.15, rate: 1.0, pos: p, kind: 'explosion', echo: 0.08 });
+      this._noise({ dur: 1.1, type: 'lowpass', freq: 850, sweepTo: 55, peak: 0.72, decay: 1.0, rate: 0.9, pos: p, kind: 'explosion', verb: 0.32, echo: 0.3, brown: true });
+      this._tone({ type: 'sine', f0: 100, f1: 26, dur: 1.0, peak: 0.7, decay: 0.95, pos: p, kind: 'explosion', verb: 0.22 });
+      this._noise({ dur: 1.1, type: 'lowpass', freq: 300, sweepTo: 90, peak: 0.28, decay: 1.0, rate: 0.6, pos: p, kind: 'explosion', verb: 0.38, echo: 0.4, at: 0.25, brown: true });
     } catch (e) {}
   },
   // ---- Tactical grenade sounds (all positional) ----
   pin(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._tone({ type: 'square', f0: 2400, dur: 0.03, peak: 0.16, decay: 0.03, pos, kind: 'sfx', verb: 0.05 });
-    this._noise({ dur: 0.04, type: 'highpass', freq: 4000, peak: 0.14, decay: 0.035, rate: 1.6, pos, kind: 'sfx' });
+    // real pin-pull snap from the metal recording
+    if (this._sample({ name: 'clang', peak: 0.2, rate: 1.6, dur: 0.14, pos, kind: 'sfx', verb: 0.03 })) return;
+    this._noise({ dur: 0.03, type: 'bandpass', freq: 2900, Q: 2, peak: 0.14, decay: 0.028, rate: 1.6, pos, kind: 'sfx' });
+    this._noise({ dur: 0.025, type: 'highpass', freq: 4800, peak: 0.09, decay: 0.02, rate: 1.7, pos, kind: 'sfx', at: 0.03 });
   },
   throwWhoosh(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._noise({ dur: 0.18, type: 'bandpass', freq: 900, Q: 1.2, peak: 0.22, decay: 0.16, rate: 1.0, pos, kind: 'sfx' });
+    this._noise({ dur: 0.16, type: 'bandpass', freq: 850, Q: 1.2, peak: 0.17, decay: 0.14, rate: 1.0, pos, kind: 'sfx' });
   },
   nadeBounce(pos, hard = false) {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     const s = this._spatial(pos, 'impact');
     if (s.vol < 0.02) return;
-    this._tone({ type: 'triangle', f0: hard ? 420 : 640, f1: 220, dur: 0.06, peak: hard ? 0.3 : 0.2, decay: 0.06, pos, kind: 'impact', verb: 0.2 });
-    this._noise({ dur: 0.04, type: 'highpass', freq: 2800, peak: 0.16, decay: 0.035, rate: 1.3, pos, kind: 'impact' });
+    // real steel knock, short + quiet
+    if (this._sample({ name: 'clang', peak: hard ? 0.3 : 0.2, rate: hard ? 0.9 : 1.1, dur: 0.25, pos, kind: 'impact', verb: 0.08 })) return;
+    this._noise({ dur: 0.045, type: 'bandpass', freq: hard ? 700 : 950, Q: 1.8, peak: hard ? 0.2 : 0.13, decay: 0.04, rate: 1.1, pos, kind: 'impact', verb: 0.1 });
   },
   heBoom(pos = null) {
-    // smaller than C4: sharp frag crack + short boom (reuses explosion spatial model)
+    // HE frag: real short-burst recording + sub. Smaller than C4.
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._noise({ dur: 0.16, type: 'highpass', freq: 700, peak: 0.85, decay: 0.12, rate: 1.05, pos, kind: 'explosion', echo: 0.08 });
-    this._noise({ dur: 0.8, type: 'lowpass', freq: 800, sweepTo: 60, peak: 0.95, decay: 0.7, rate: 0.9, pos, kind: 'explosion', verb: 0.45, echo: 0.3 });
-    this._tone({ type: 'sine', f0: 120, f1: 32, dur: 0.6, peak: 0.8, decay: 0.55, pos, kind: 'explosion', verb: 0.3 });
+    const ok = this._sample({ name: 'he', peak: 0.8, dur: 1.0, pos, kind: 'explosion', verb: 0.26, echo: 0.22 });
+    this._tone({ type: 'sine', f0: 115, f1: 32, dur: 0.5, peak: 0.45, decay: 0.45, pos, kind: 'explosion', verb: 0.18 });
+    if (ok) return;
+    this._noise({ dur: 0.14, type: 'highpass', freq: 700, peak: 0.6, decay: 0.11, rate: 1.05, pos, kind: 'explosion', echo: 0.06 });
+    this._noise({ dur: 0.7, type: 'lowpass', freq: 750, sweepTo: 60, peak: 0.68, decay: 0.62, rate: 0.9, pos, kind: 'explosion', verb: 0.3, echo: 0.25, brown: true });
+    this._tone({ type: 'sine', f0: 115, f1: 32, dur: 0.55, peak: 0.6, decay: 0.5, pos, kind: 'explosion', verb: 0.2 });
     for (let i = 0; i < 3; i++) {
-      this._noise({ dur: 0.06, type: 'bandpass', freq: rand(900, 2600), Q: 1.5, peak: 0.2, decay: 0.06, rate: rand(0.9, 1.3), pos, kind: 'explosion', at: rand(0.1, 0.5) });
+      this._noise({ dur: 0.055, type: 'bandpass', freq: rand(900, 2600), Q: 1.5, peak: 0.14, decay: 0.05, rate: rand(0.9, 1.3), pos, kind: 'explosion', at: rand(0.1, 0.5) });
     }
   },
   flashPop(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    // ear-splitting crack + long tinnitus ring
-    this._noise({ dur: 0.1, type: 'highpass', freq: 1800, peak: 1.0, decay: 0.08, rate: 1.3, pos, kind: 'explosion', echo: 0.05 });
-    this._tone({ type: 'sine', f0: 3400, dur: 1.4, peak: 0.16, decay: 1.3, pos, kind: 'beep', verb: 0.1 });
-    this._tone({ type: 'sine', f0: 5100, dur: 1.0, peak: 0.08, decay: 0.9, pos, kind: 'beep' });
+    // flashbang: real sharp burst pitched up + restrained tinnitus ring
+    if (this._sample({ name: 'he', peak: 0.7, rate: 1.3, dur: 0.5, pos, kind: 'explosion', echo: 0.04 })) {
+      this._tone({ type: 'sine', f0: 3400, dur: 1.1, peak: 0.11, decay: 1.0, pos, kind: 'beep', verb: 0.08 });
+      this._tone({ type: 'sine', f0: 5100, dur: 0.8, peak: 0.055, decay: 0.7, pos, kind: 'beep' });
+      return;
+    }
+    this._noise({ dur: 0.09, type: 'highpass', freq: 1800, peak: 0.7, decay: 0.07, rate: 1.3, pos, kind: 'explosion', echo: 0.04 });
+    this._tone({ type: 'sine', f0: 3400, dur: 1.1, peak: 0.11, decay: 1.0, pos, kind: 'beep', verb: 0.08 });
+    this._tone({ type: 'sine', f0: 5100, dur: 0.8, peak: 0.055, decay: 0.7, pos, kind: 'beep' });
   },
   smokePop(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._noise({ dur: 0.3, type: 'lowpass', freq: 1200, sweepTo: 300, peak: 0.5, decay: 0.28, rate: 1.0, pos, kind: 'explosion', verb: 0.3 });
-    this._noise({ dur: 0.6, type: 'lowpass', freq: 500, sweepTo: 150, peak: 0.3, decay: 0.55, rate: 0.7, pos, kind: 'explosion', verb: 0.4, at: 0.1 });
+    this._noise({ dur: 0.28, type: 'lowpass', freq: 1100, sweepTo: 300, peak: 0.4, decay: 0.26, rate: 1.0, pos, kind: 'explosion', verb: 0.22 });
+    this._noise({ dur: 0.55, type: 'lowpass', freq: 480, sweepTo: 150, peak: 0.24, decay: 0.5, rate: 0.7, pos, kind: 'explosion', verb: 0.28, at: 0.1, brown: true });
   },
   molotovIgnite(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this._noise({ dur: 0.25, type: 'highpass', freq: 1500, peak: 0.6, decay: 0.2, rate: 1.1, pos, kind: 'explosion' });
-    this._noise({ dur: 0.7, type: 'lowpass', freq: 900, sweepTo: 200, peak: 0.7, decay: 0.6, rate: 0.8, pos, kind: 'explosion', verb: 0.35 });
-    this._tone({ type: 'sawtooth', f0: 180, f1: 60, dur: 0.4, peak: 0.25, decay: 0.35, pos, kind: 'explosion' });
+    // glass shatter + whoomph: noise only, no pitched element
+    this._noise({ dur: 0.09, type: 'highpass', freq: 2800, peak: 0.4, decay: 0.07, rate: 1.4, pos, kind: 'explosion' });
+    this._noise({ dur: 0.22, type: 'highpass', freq: 1500, peak: 0.4, decay: 0.18, rate: 1.1, pos, kind: 'explosion', at: 0.03 });
+    this._noise({ dur: 0.6, type: 'lowpass', freq: 850, sweepTo: 200, peak: 0.55, decay: 0.55, rate: 0.8, pos, kind: 'explosion', verb: 0.25, at: 0.06, brown: true });
   },
   fireLoopTick(pos = null) {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;

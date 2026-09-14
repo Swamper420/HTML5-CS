@@ -1,0 +1,24 @@
+sounds/ — recorded effects for HTML5-CS Strike Zone (loaded by AudioSys in main.js,
+with procedural WebAudio fallback when a file can't be fetched/decoded).
+
+Pixabay Content License (free for commercial use, no attribution required):
+- rifle.mp3 — "AK-47 Firing" by Microsammy (trimmed to first shot)
+  https://pixabay.com/sound-effects/film-special-effects-ak-47-firing-8760/
+- pistol.mp3 — "Single Pistol Gunshot 3.3" by freesound_community (trimmed)
+  https://pixabay.com/sound-effects/film-special-effects-single-pistol-gunshot-33-37187/
+- sniper.mp3 — "Single Gunshot" (sniper) by freesound_community (trimmed)
+  https://pixabay.com/sound-effects/film-special-effects-single-gunshot-81062/
+
+Mixkit Sound Effects License (free for commercial use, no attribution required):
+- explosion.mp3 — "Dense bomb impact" (trimmed) https://mixkit.co/free-sound-effects/explosion/
+- he.mp3 — "Short explosion" (trimmed) https://mixkit.co/free-sound-effects/explosion/
+- reload_pump.mp3 — "Shotgun pump" (trimmed) https://mixkit.co/free-sound-effects/shotgun/
+- reload_move.mp3 — "Handgun movement" (trimmed) https://mixkit.co/free-sound-effects/gun/
+- click.mp3 — "Handgun click" (trimmed) https://mixkit.co/free-sound-effects/gun/
+- steps.mp3 — "Crunchy footsteps loop" (trimmed; sliced at runtime)
+  https://mixkit.co/free-sound-effects/footsteps/
+- crack.mp3 — "Arrow whoosh" (trimmed) https://mixkit.co/free-sound-effects/whoosh/
+- impact.mp3 — "Impact of a blow" (trimmed) https://mixkit.co/free-sound-effects/impact/
+- clang.mp3 — "Metal hammer hit" (trimmed) https://mixkit.co/free-sound-effects/metal/
+
+All files peak-normalized to -1 dBFS, mono, 44.1 kHz. Total ~220 KB.
