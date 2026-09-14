@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HTML5-CS — Strike Zone | Browser FPS</title>
+<link rel="stylesheet" href="style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="game-container"></div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="top-bar">
+    <canvas id="minimap" width="180" height="180"></canvas>
+    <div id="scoreboard-top">
+      <div class="team-score ct"><span id="ct-name">CT</span><span id="ct-score">0</span></div>
+      <div id="match-info">
+        <div id="timer">2:00</div>
+        <div id="round-label">ROUND 1 / 12</div>
+      </div>
+      <div class="team-score t"><span id="t-score">0</span><span id="t-name">T</span></div>
+    </div>
+    <div id="killfeed"></div>
+  </div>
+
+  <div id="crosshair">
+    <div class="ch-dot"></div>
+    <div class="ch-line ch-t"></div>
+    <div class="ch-line ch-b"></div>
+    <div class="ch-line ch-l"></div>
+    <div class="ch-line ch-r"></div>
+  </div>
+  <div id="hitmarker"><span></span><span></span><span></span><span></span></div>
+  <div id="scope-overlay" class="hidden"><div id="scope-circle"></div></div>
+  <div id="damage-vignette"></div>
+  <div id="heal-flash"></div>
+  <div id="direction-indicator"></div>
+
+  <div id="bottom-bar">
+    <div id="health-panel">
+      <div class="bar-row"><span class="ico">✚</span><div class="bar"><div id="hp-fill" style="width:100%"></div></div><span id="hp-num">100</span></div>
+      <div class="bar-row"><span class="ico">🛡</span><div class="bar armor"><div id="armor-fill" style="width:100%"></div></div><span id="armor-num">100</span></div>
+      <div id="money">$800</div>
+    </div>
+    <div id="weapon-panel">
+      <div id="weapon-slots">
+        <div class="wslot" data-slot="0"><b>1</b><span>AK-47</span></div>
+        <div class="wslot" data-slot="1"><b>2</b><span>Deagle</span></div>
+        <div class="wslot" data-slot="2"><b>3</b><span>AWP</span></div>
+      </div>
+      <div id="ammo"><span id="ammo-mag">30</span><span id="ammo-sep">/</span><span id="ammo-reserve">90</span></div>
+      <div id="weapon-name">AK-47</div>
+      <div id="reload-tip" class="hidden">RELOADING…</div>
+    </div>
+  </div>
+
+  <div id="respawn-overlay" class="hidden">
+    <div id="respawn-text">ELIMINATED by <span id="respawn-killer">Enemy</span></div>
+    <div id="respawn-timer">Respawning in 3…</div>
+  </div>
+
+  <div id="announce" class="hidden"></div>
+  <div id="fps-counter">60 FPS</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 weapons · RMB aim · B buy · M mute</div>
+</div>
+
+<!-- Buy menu -->
+<div id="buy-menu" class="hidden">
+  <h2>BUY MENU <span class="key">B</span></h2>
+  <div class="buy-money">Funds: <span id="buy-money">$800</span></div>
+  <div class="buy-grid">
+    <button class="buy-item" data-buy="ak"><b>[1] AK-47</b><span>$2500 · rifle</span></button>
+    <button class="buy-item" data-buy="awp"><b>[2] AWP</b><span>$4750 · sniper</span></button>
+    <button class="buy-item" data-buy="deagle"><b>[3] Desert Eagle</b><span>$700 · pistol</span></button>
+    <button class="buy-item" data-buy="ammo"><b>[4] Refill Ammo</b><span>$200</span></button>
+    <button class="buy-item" data-buy="armor"><b>[5] Armor + Helmet</b><span>$1000</span></button>
+    <button class="buy-item" data-buy="hp"><b>[6] Field Kit (+50 HP)</b><span>$500</span></button>
+  </div>
+  <p class="buy-note">Press B or ESC to close · Buy only during first 15s of a round</p>
+</div>
+
+<!-- Main menu -->
+<div id="main-menu">
+  <div class="menu-card">
+    <div class="menu-badge">HTML5 · THREE.JS · NO INSTALL</div>
+    <h1>HTML5-CS <span>STRIKE ZONE</span></h1>
+    <p class="tagline">A Counter-Strike-style 3D FPS that runs entirely in your browser.</p>
+    <div class="menu-columns">
+      <div>
+        <h3>▶ HOW TO PLAY</h3>
+        <ul>
+          <li><b>Click DEPLOY</b> to lock mouse &amp; spawn (CT side)</li>
+          <li><b>WASD</b> move · <b>Mouse</b> look · <b>LMB</b> fire</li>
+          <li><b>RMB</b> aim / AWP scope · <b>R</b> reload</li>
+          <li><b>1 / 2 / 3</b> weapons · <b>Q</b> quick-switch</li>
+          <li><b>B</b> buy menu (round start) · <b>ESC</b> pause</li>
+          <li>First team to <b>win 7 rounds</b> takes the match</li>
+        </ul>
+      </div>
+      <div>
+        <h3>◈ LOADOUT</h3>
+        <ul class="loadout">
+          <li><b>AK-47</b> — balanced rifle, $2500</li>
+          <li><b>Desert Eagle</b> — heavy pistol, $700</li>
+          <li><b>AWP</b> — 1-shot sniper, scope on RMB</li>
+        </ul>
+        <h3>◈ RULES</h3>
+        <ul>
+          <li>4v4 — You + 3 CT bots vs 4 T bots</li>
+          <li>Round = 2:00 or team wipe · respawns ON</li>
+          <li>Kills earn <b>+$300</b>, round win <b>+$1400</b></li>
+          <li>Headshots deal <b>×3.5</b> damage</li>
+        </ul>
+      </div>
+    </div>
+    <button id="play-btn">▶ &nbsp;CLICK TO DEPLOY</button>
+    <div class="menu-row">
+      <label><input type="checkbox" id="opt-quality" checked /> Shadows &amp; particles</label>
+      <label><input type="checkbox" id="opt-sound" checked /> Sound</label>
+      <select id="opt-diff">
+        <option value="0.7">Recruit bots</option>
+        <option value="1" selected>Regular bots</option>
+        <option value="1.4">Veteran bots</option>
+      </select>
+    </div>
+    <p id="loading-note">Loading 3D engine from CDN…</p>
+  </div>
+</div>
+
+<!-- Pause -->
+<div id="pause-menu" class="hidden">
+  <div class="menu-card small">
+    <h2>PAUSED</h2>
+    <p>Mouse released. Click resume to re-lock pointer.</p>
+    <button id="resume-btn">RESUME</button>
+    <button id="restart-btn" class="ghost">RESTART MATCH</button>
+  </div>
+</div>
+
+<!-- Match end -->
+<div id="end-screen" class="hidden">
+  <div class="menu-card small">
+    <h2 id="end-title">VICTORY</h2>
+    <p id="end-sub"></p>
+    <div id="end-stats"></div>
+    <button id="again-btn">PLAY AGAIN</button>
+  </div>
+</div>
+
+<div id="vignette"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
