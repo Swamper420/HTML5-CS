@@ -3833,10 +3833,17 @@ function bombResetRound() {
     updateBombHUD(0);
     return;
   }
-  const aliveT = bots.filter((b) => b.team === 't');
-  if (aliveT.length) {
-    BOMB.carrier = randPick(aliveT);
-    for (const b of aliveT) b.hasBomb = (b === BOMB.carrier);
+  // Solo: if player is T they carry the bomb; otherwise give it to a random T bot.
+  for (const b of bots) b.hasBomb = false;
+  if ((player.team || 'ct') === 't') {
+    player.hasBomb = true;
+    // No bot carrier when player is the T.
+  } else {
+    const aliveT = bots.filter((b) => b.team === 't');
+    if (aliveT.length) {
+      BOMB.carrier = randPick(aliveT);
+      for (const b of aliveT) b.hasBomb = (b === BOMB.carrier);
+    }
   }
   for (const b of bots) if (b.team === 'ct') { b.guardSite = b.idx % 2 === 0 ? 'A' : 'B'; b.wp.copy(objectiveWaypoint(b)); }
   for (const b of bots) if (b.team === 't') b.wp.copy(objectiveWaypoint(b));
@@ -4429,8 +4436,8 @@ function updateBomb(dt, t) {
     updateBombHUD(t);
     return;
   }
-  // --- PvP: T-side player pickup + plant (hold E inside a site) ---
-  if (isOnline() && !BOMB.planted && !G.roundEnding && player.alive && (player.team || 'ct') === 't') {
+  // --- T-side player pickup + plant (hold E inside a site) — works in solo and PvP ---
+  if (!BOMB.planted && !G.roundEnding && player.alive && (player.team || 'ct') === 't') {
     // Pickup dropped bomb by walking over it.
     if (BOMB.droppedPos && !player.hasBomb) {
       if (player.pos.distanceTo(BOMB.droppedPos) < 1.8) {
@@ -4438,24 +4445,34 @@ function updateBomb(dt, t) {
         bombClearMesh();
         announce('YOU PICKED UP THE BOMB — PLANT ON A OR B (HOLD E)', 1800);
         AudioSys.plantBeep();
-        try { Net.sendBomb({ action: 'pickup' }); } catch {}
+        try { if (isOnline()) Net.sendBomb({ action: 'pickup' }); } catch {}
         updateBombHUD(t);
       }
     }
-    // Plant inside either site while holding E and standing still-ish.
+    // Plant inside either site while holding E.
     if (player.hasBomb && !BOMB.planted) {
       let inSite = null;
       for (const s of SITES) { if (isInSite(player.pos, s)) { inSite = s; break; } }
       if (inSite) {
         // Enemies nearby interrupt (same rule as bots).
         let enemyClose = false;
+        // Check online remotes.
         try {
-          for (const r of Net.remoteList()) {
-            if (!r.alive || (r.team || 't') === 't') continue;
-            const dd = Math.hypot((r.x || 0) - player.pos.x, (r.z || 0) - player.pos.z);
-            if (dd < 12) { enemyClose = true; break; }
+          if (isOnline()) {
+            for (const r of Net.remoteList()) {
+              if (!r.alive || (r.team || 't') === 't') continue;
+              const dd = Math.hypot((r.x || 0) - player.pos.x, (r.z || 0) - player.pos.z);
+              if (dd < 12) { enemyClose = true; break; }
+            }
           }
         } catch {}
+        // Check CT bots in solo.
+        if (!enemyClose && !isOnline()) {
+          for (const b of bots) {
+            if (!b.alive || b.team !== 'ct') continue;
+            if (b.pos.distanceTo(player.pos) < 10) { enemyClose = true; break; }
+          }
+        }
         if (!enemyClose) {
           if (keys['KeyE']) {
             BOMB.plantProgress += dt;
@@ -6059,6 +6076,29 @@ function updateHUD() {
 
 // minimap
 const mm = { last: 0 };
+// LOS tracking: stores last time each entity was in LOS of the player (for enemy linger on minimap).
+const mmSpotTime = new WeakMap(); // entity -> performance timestamp (seconds)
+const MM_SPOT_LINGER = 2.0; // seconds enemies remain visible after last LOS
+function mmCanSeeEnemy(entityPos, tNow) {
+  if (!player.alive) return true; // dead = spectate, show all
+  const eye = new THREE.Vector3(player.pos.x, EYE, player.pos.z);
+  const targetEye = new THREE.Vector3(entityPos.x, EYE, entityPos.z);
+  return hasLOS(eye, targetEye);
+}
+function mmEnemyVisible(entity, entityTeam, entityPos, tNow) {
+  const myTeam = player.team || 'ct';
+  const isEnemy = entityTeam !== myTeam;
+  if (!isEnemy) return true; // always show friendlies
+  if (!player.alive) return true; // spectating — show all
+  // Check current LOS.
+  if (mmCanSeeEnemy(entityPos, tNow)) {
+    mmSpotTime.set(entity, tNow);
+    return true;
+  }
+  // Linger: keep visible briefly after LOS broken.
+  const lastSeen = mmSpotTime.get(entity);
+  return lastSeen !== undefined && (tNow - lastSeen) < MM_SPOT_LINGER;
+}
 function drawMinimap(t) {
   if (t - mm.last < 0.12) return; mm.last = t;
   const c = $('minimap'), g = c.getContext('2d');
@@ -6093,23 +6133,43 @@ function drawMinimap(t) {
     g.fillStyle = '#ff9a2a';
     g.beginPath(); g.arc(px(BOMB.droppedPos.x), pz(BOMB.droppedPos.z), 4.5, 0, 7); g.fill();
   }
-  // bots (bomb carrier gets a white ring, spectate target gets a green ring)
+  // bots — friendlies always visible, enemies only when in LOS (or recently spotted)
+  const tNowMm = performance.now() / 1000;
   for (const b of bots) {
     if (!b.alive) continue;
     if (!b.mesh.visible && isMultiplayer()) continue; // hidden PvP bots
+    // LOS filter for enemies (use 'b' as stable WeakMap key).
+    if (!mmEnemyVisible(b, b.team, b.pos, tNowMm)) continue;
+    const isEnemy = b.team !== (player.team || 'ct');
     g.fillStyle = b.team === 'ct' ? '#5eb2ff' : '#ff7043';
+    // Fade enemy dots slightly when lingering (not currently in LOS).
+    if (isEnemy && !mmCanSeeEnemy(b.pos, tNowMm)) {
+      const lastSeen = mmSpotTime.get(b);
+      const age = lastSeen !== undefined ? (tNowMm - lastSeen) : MM_SPOT_LINGER;
+      g.globalAlpha = Math.max(0.2, 1 - age / MM_SPOT_LINGER);
+    }
     g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 3, 0, 7); g.fill();
+    g.globalAlpha = 1;
     if (b.hasBomb) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 5, 0, 7); g.stroke(); }
     if (!player.alive && player.specTarget === b) { g.strokeStyle = '#3dff7a'; g.lineWidth = 2; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 6, 0, 7); g.stroke(); }
   }
-  // real remote players: white ring = enemy, green ring = spectate target
+  // real remote players — same LOS rules
   try {
     if (isOnline()) {
       for (const [rid, e] of remotes) {
         const rd = e.data; if (!rd || !rd.alive) continue;
-        g.fillStyle = (rd.team || 't') === 'ct' ? '#5eb2ff' : '#ff7043';
+        const remTeam = rd.team || 't';
+        if (!mmEnemyVisible(e, remTeam, e.pos, tNowMm)) continue;
+        const isEnemy = remTeam !== (player.team || 'ct');
+        g.fillStyle = remTeam === 'ct' ? '#5eb2ff' : '#ff7043';
+        if (isEnemy && !mmCanSeeEnemy(e.pos, tNowMm)) {
+          const lastSeen = mmSpotTime.get(e);
+          const age = lastSeen !== undefined ? (tNowMm - lastSeen) : MM_SPOT_LINGER;
+          g.globalAlpha = Math.max(0.2, 1 - age / MM_SPOT_LINGER);
+        }
         g.beginPath(); g.arc(px(e.pos.x), pz(e.pos.z), 3.4, 0, 7); g.fill();
-        g.strokeStyle = (rd.team !== (player.team || 'ct')) ? '#ffffff' : 'rgba(255,255,255,0.4)';
+        g.globalAlpha = 1;
+        g.strokeStyle = isEnemy ? '#ffffff' : 'rgba(255,255,255,0.4)';
         g.lineWidth = 1;
         g.beginPath(); g.arc(px(e.pos.x), pz(e.pos.z), 5, 0, 7); g.stroke();
         if (!player.alive && player.specTarget && player.specTarget.__remoteId === rid) {
@@ -6822,7 +6882,9 @@ function boot() {
   const onlineBtn = document.getElementById('online-btn');
   if (soloBtn) soloBtn.addEventListener('click', () => {
     try { Net.disconnect(); for (const id of [...remotes.keys()]) removeRemoteMesh(id); } catch {}
-    player.team = 'ct';
+    // Respect the team dropdown: 't' → player attacks as T (has bomb); anything else → CT.
+    const teamSel = $('mp-team') ? $('mp-team').value : 'ct';
+    player.team = (teamSel === 't') ? 't' : 'ct';
     AudioSys.init(); startMatch();
   });
   if (onlineBtn) onlineBtn.addEventListener('click', async () => {
