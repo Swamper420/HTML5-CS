@@ -84,116 +84,421 @@ const BOMB = {
 
 const opts = { quality: true, sound: true, difficulty: 1 };
 
-// ---------------- Audio (procedural WebAudio) ----------------
+// ---------------- Audio (procedural WebAudio, full 3D) ----------------
+// Realistic + dynamic: inverse-distance volume, stereo pan from listener yaw,
+// air-absorption lowpass, wall occlusion, speed-of-sound delay, shared
+// generated-impulse reverb + slap echo, per-weapon randomized layers.
 const AudioSys = {
-  ctx: null, master: null, muted: false,
+  ctx: null, master: null, comp: null, verb: null, verbGain: null,
+  echo: null, echoFb: null, echoOut: null, muted: false,
+  _white: null, _ambient: false, _stepAlt: false,
   init() {
     if (this.ctx) return;
     try {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC();
+      // master -> compressor -> destination (glue + anti-clip when many guns)
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.5;
-      this.master.connect(this.ctx.destination);
+      this.master.gain.value = 0.62;
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.comp.threshold.value = -16; this.comp.knee.value = 18;
+      this.comp.ratio.value = 7; this.comp.attack.value = 0.003; this.comp.release.value = 0.16;
+      this.master.connect(this.comp); this.comp.connect(this.ctx.destination);
+      // generated stereo impulse reverb (outdoor slap / courtyard feel)
+      const sr = this.ctx.sampleRate, len = Math.floor(sr * 1.7);
+      const ir = this.ctx.createBuffer(2, len, sr);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < len; i++) {
+          const k = i / len;
+          d[i] = (Math.random() * 2 - 1) * Math.pow(1 - k, 2.6) * 0.55;
+        }
+      }
+      this.verb = this.ctx.createConvolver(); this.verb.buffer = ir;
+      this.verbGain = this.ctx.createGain(); this.verbGain.gain.value = 0.42;
+      this.verb.connect(this.verbGain); this.verbGain.connect(this.master);
+      // shared slap echo for distant gun tails / bomb beeps
+      this.echo = this.ctx.createDelay(1.0); this.echo.delayTime.value = 0.21;
+      this.echoFb = this.ctx.createGain(); this.echoFb.gain.value = 0.32;
+      this.echoOut = this.ctx.createGain(); this.echoOut.gain.value = 0.22;
+      this.echo.connect(this.echoFb); this.echoFb.connect(this.echo);
+      this.echo.connect(this.echoOut); this.echoOut.connect(this.master);
+      // cached 1s white noise (reused with playbackRate jitter for variety)
+      const wb = this.ctx.createBuffer(1, sr, sr);
+      const wd = wb.getChannelData(0);
+      for (let i = 0; i < wd.length; i++) wd[i] = Math.random() * 2 - 1;
+      this._white = wb;
+      this._startAmbient();
     } catch (e) { /* no audio */ }
   },
-  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+    if (this.ctx && !this._ambient) this._startAmbient();
+  },
   now() { return this.ctx ? this.ctx.currentTime : 0; },
   env(gainNode, t, peak, decay) {
-    gainNode.gain.setValueAtTime(peak, t);
+    gainNode.gain.setValueAtTime(Math.max(0.0002, peak), t);
     gainNode.gain.exponentialRampToValueAtTime(0.0001, t + decay);
   },
   noiseBuffer(dur) {
-    const sr = this.ctx.sampleRate, buf = this.ctx.createBuffer(1, sr * dur, sr);
+    const sr = this.ctx.sampleRate, buf = this.ctx.createBuffer(1, Math.max(1, Math.floor(sr * dur)), sr);
     const d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     return buf;
   },
-  shoot(kind, dist = 0) {
-    if (!this.ctx || !opts.sound || this.muted) return;
-    const t = this.now();
-    const vol = clamp(1 - dist / 70, 0.08, 1);
-    // Layer 1: supersonic crack (short bright noise)
-    const crack = this.ctx.createBufferSource();
-    crack.buffer = this.noiseBuffer(0.12);
-    const hf = this.ctx.createBiquadFilter(); hf.type = 'highpass';
-    hf.frequency.value = kind === 'sniper' ? 900 : 1800;
-    const hg = this.ctx.createGain();
-    this.env(hg, t, (kind === 'sniper' ? 0.7 : 0.55) * vol, 0.06);
-    crack.connect(hf); hf.connect(hg); hg.connect(this.master);
-    crack.start(t); crack.stop(t + 0.12);
-    // Layer 2: body boom
+  _startAmbient() {
+    try {
+      if (!this.ctx || this._ambient) return;
+      this._ambient = true;
+      // subtle wind: looped noise -> wandering lowpass -> quiet gain
+      const src = this.ctx.createBufferSource();
+      src.buffer = this._white; src.loop = true;
+      src.playbackRate.value = 0.32;
+      const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320; f.Q.value = 0.4;
+      const g = this.ctx.createGain(); g.gain.value = 0.035;
+      const lfo = this.ctx.createOscillator(); lfo.frequency.value = 0.09;
+      const lfoG = this.ctx.createGain(); lfoG.gain.value = 0.016;
+      lfo.connect(lfoG); lfoG.connect(g.gain);
+      const lfo2 = this.ctx.createOscillator(); lfo2.frequency.value = 0.05;
+      const lfo2G = this.ctx.createGain(); lfo2G.gain.value = 130;
+      lfo2.connect(lfo2G); lfo2G.connect(f.frequency);
+      src.connect(f); f.connect(g); g.connect(this.master);
+      src.start(); lfo.start(); lfo2.start();
+    } catch (e) {}
+  },
+  _listenerPos() {
+    try {
+      if (typeof camera !== 'undefined' && camera && camera.position) {
+        return { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+      }
+    } catch (e) {}
+    try {
+      if (typeof player !== 'undefined' && player && player.pos) {
+        return { x: player.pos.x, y: player.pos.y + 1.6, z: player.pos.z };
+      }
+    } catch (e) {}
+    return { x: 0, y: 1.6, z: 0 };
+  },
+  // Core 3D model: returns {vol, pan, lp, delay, verb, dist, occluded}
+  _spatial(pos, kind = 'sfx') {
+    const fallback = { vol: 1, pan: 0, lp: 19000, delay: 0, verb: 0.08, dist: 0, occluded: false };
+    if (!pos || typeof pos.x !== 'number') return fallback;
+    const lp0 = this._listenerPos();
+    const dx = pos.x - lp0.x, dy = (pos.y ?? 1.4) - lp0.y, dz = pos.z - lp0.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    let vol;
+    if (kind === 'gun') vol = 1 / (1 + dist * 0.135);
+    else if (kind === 'explosion') vol = 1 / (1 + dist * 0.042);
+    else if (kind === 'step') {
+      vol = 1 / (1 + dist * 0.5);
+      if (dist > 24) vol *= Math.max(0, 1 - (dist - 24) / 9); // footsteps fade fast
+    }
+    else if (kind === 'beep') vol = 1 / (1 + dist * 0.11);
+    else if (kind === 'impact') vol = 1 / (1 + dist * 0.22);
+    else vol = 1 / (1 + dist * 0.16);
+    vol = clamp(vol, 0, 1);
+    // stereo pan from listener yaw (right-vector projection)
+    let pan = 0;
+    try {
+      const yaw = (typeof player !== 'undefined' && player) ? player.yaw : 0;
+      const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+      const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+      const inv = 1 / (dist || 1);
+      const nx = dx * inv, nz = dz * inv;
+      pan = clamp((nx * rx + nz * rz) * 0.9, -1, 1);
+      if (dist < 1.2) pan *= dist / 1.2; // avoid hard pan when on top of listener
+      const front = nx * fx + nz * fz;
+      if (front < 0) vol *= (0.88 + 0.12 * (1 + front)); // slightly quieter behind
+    } catch (e) {}
+    // air absorption: highs die with distance
+    let lpF = 19000 * Math.exp(-dist * 0.035) + 420;
+    lpF = clamp(lpF, 320, 19000);
+    // occlusion: walls muffle + push to reverb
+    let occluded = false;
+    try {
+      if (dist > 3 && typeof hasLOS !== 'undefined' && typeof THREE !== 'undefined') {
+        const a = new THREE.Vector3(lp0.x, lp0.y, lp0.z);
+        const b = new THREE.Vector3(pos.x, (pos.y ?? 1.4), pos.z);
+        if (!hasLOS(a, b)) occluded = true;
+      }
+    } catch (e) {}
+    if (occluded) { vol *= 0.30; lpF *= 0.36; }
+    const verb = clamp(0.06 + dist / 52 + (occluded ? 0.22 : 0), 0.05, 0.62);
+    const delay = Math.min(dist / 343, 0.24); // speed of sound
+    return { vol, pan, lp: lpF, delay, verb, dist, occluded };
+  },
+  _pan(pan) {
+    try {
+      if (this.ctx.createStereoPanner) {
+        const p = this.ctx.createStereoPanner();
+        p.pan.value = clamp(pan, -1, 1);
+        p.connect(this.master);
+        return p;
+      }
+    } catch (e) {}
+    return this.master; // fallback: mono
+  },
+  // generic filtered-noise hit routed through pan + reverb send
+  _noise({ dur = 0.2, type = 'lowpass', freq = 1500, Q = 0.8, peak = 0.5, decay = 0.15, rate = 1, pos = null, kind = 'sfx', verb = null, echo = 0, at = 0, sweepTo = 0 }) {
+    if (!this.ctx) return;
+    const s = this._spatial(pos, kind);
+    const t0 = this.now() + s.delay + at;
     const src = this.ctx.createBufferSource();
-    src.buffer = this.noiseBuffer(kind === 'sniper' ? 0.6 : 0.3);
+    src.buffer = this._white; src.loop = true;
+    src.playbackRate.value = rate * rand(0.94, 1.06);
     const f = this.ctx.createBiquadFilter();
+    f.type = type; f.frequency.setValueAtTime(Math.min(freq * rand(0.92, 1.08), s.lp), t0);
+    if (sweepTo > 0) f.frequency.exponentialRampToValueAtTime(Math.max(40, sweepTo), t0 + decay);
+    f.Q.value = Q;
     const g = this.ctx.createGain();
-    if (kind === 'rifle') { f.type = 'lowpass'; f.frequency.value = 1700; this.env(g, t, 0.95 * vol, 0.16); }
-    else if (kind === 'pistol') { f.type = 'bandpass'; f.frequency.value = 1200; f.Q.value = 0.8; this.env(g, t, 0.9 * vol, 0.15); }
-    else { f.type = 'lowpass'; f.frequency.value = 750; this.env(g, t, 1.0 * vol, 0.5); }
-    src.connect(f); f.connect(g); g.connect(this.master);
-    src.start(t); src.stop(t + 0.6);
-    // Layer 3: low thump
-    const o = this.ctx.createOscillator(); const g2 = this.ctx.createGain();
-    o.type = 'sine'; o.frequency.setValueAtTime(kind === 'sniper' ? 120 : 175, t);
-    o.frequency.exponentialRampToValueAtTime(40, t + 0.14);
-    this.env(g2, t, 0.65 * vol, kind === 'sniper' ? 0.3 : 0.13);
-    o.connect(g2); g2.connect(this.master); o.start(t); o.stop(t + 0.35);
-    // Layer 4: mechanical clack (close only) + distant echo tail for sniper
-    if (dist < 12) this.click(kind === 'sniper' ? 3200 : 4200, 0.03, 0.16 * vol);
-    if (kind === 'sniper') {
-      const dly = this.ctx.createDelay(); dly.delayTime.value = 0.22;
-      const dg = this.ctx.createGain(); dg.gain.value = 0.22 * vol;
-      const f2 = this.ctx.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = 600;
-      g.connect(f2); f2.connect(dly); dly.connect(dg); dg.connect(this.master);
+    this.env(g, t0, Math.max(0.0002, peak * s.vol), decay);
+    const p = this._pan(s.pan);
+    src.connect(f); f.connect(g); g.connect(p);
+    const vAmt = verb !== null ? verb : s.verb;
+    if (vAmt > 0.01) {
+      const vs = this.ctx.createGain(); vs.gain.value = vAmt;
+      g.connect(vs); vs.connect(this.verb);
+    }
+    if (echo > 0.01 && this.echo) {
+      const es = this.ctx.createGain(); es.gain.value = echo * clamp(s.dist / 30, 0.15, 1);
+      // echo itself muffled with distance
+      const ef = this.ctx.createBiquadFilter(); ef.type = 'lowpass'; ef.frequency.value = clamp(s.lp * 0.4, 300, 4000);
+      g.connect(ef); ef.connect(es); es.connect(this.echo);
+    }
+    const stopJit = dur + 0.08;
+    try { src.start(t0, Math.random() * 0.5); src.stop(t0 + stopJit); } catch (e) {}
+  },
+  _tone({ type = 'sine', f0 = 440, f1 = 0, dur = 0.2, peak = 0.4, decay = 0.15, pos = null, kind = 'sfx', verb = null, at = 0 }) {
+    if (!this.ctx) return;
+    const s = this._spatial(pos, kind);
+    const t0 = this.now() + s.delay + at;
+    const o = this.ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(Math.max(20, f0 * rand(0.97, 1.03)), t0);
+    if (f1 > 0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + decay);
+    const g = this.ctx.createGain();
+    this.env(g, t0, Math.max(0.0002, peak * s.vol), decay);
+    const p = this._pan(s.pan);
+    o.connect(g); g.connect(p);
+    const vAmt = verb !== null ? verb : s.verb;
+    if (vAmt > 0.01) {
+      const vs = this.ctx.createGain(); vs.gain.value = vAmt;
+      g.connect(vs); vs.connect(this.verb);
+    }
+    try { o.start(t0); o.stop(t0 + dur + 0.05); } catch (e) {}
+  },
+  _asPos(distOrPos) {
+    // backward compat: old callers passed a distance number; new callers pass a Vector3
+    if (distOrPos && typeof distOrPos.x === 'number') return distOrPos;
+    return null; // number/undefined -> treat as non-positional (full vol, shaped by legacy dist)
+  },
+  // ---- GUNS: first-person (pos=null) is dry/punchy; world guns are fully spatial ----
+  shoot(kind, distOrPos = 0) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    const pos = this._asPos(distOrPos);
+    const legacyVol = (typeof distOrPos === 'number') ? clamp(1 - distOrPos / 70, 0.08, 1) : 1;
+    const firstPerson = !pos;
+    const P = firstPerson ? 1 : 0; // helper to scale first-person-only extras
+    if (kind === 'rifle') {
+      // supersonic crack
+      this._noise({ dur: 0.1, type: 'highpass', freq: 2100, peak: 0.55 * legacyVol, decay: 0.055, rate: 1.15, pos, kind: 'gun', echo: 0.05 });
+      // receiver punch (mid bark)
+      this._noise({ dur: 0.22, type: 'lowpass', freq: 2500, sweepTo: 500, peak: 0.95 * legacyVol, decay: 0.15, rate: 1.0, pos, kind: 'gun', echo: 0.10 });
+      // chest thump
+      this._tone({ type: 'sine', f0: 168, f1: 43, dur: 0.16, peak: 0.6 * legacyVol, decay: 0.13, pos, kind: 'gun' });
+      // grit + mech, close only
+      this._noise({ dur: 0.05, type: 'bandpass', freq: 3800, Q: 1.4, peak: 0.22 * legacyVol, decay: 0.035, rate: 1.3, pos, kind: 'gun' });
+      if (firstPerson || (pos && this._spatial(pos, 'gun').dist < 14)) {
+        const mp = firstPerson ? null : pos;
+        this._tone({ type: 'square', f0: 4300, dur: 0.03, peak: 0.10 * legacyVol, decay: 0.03, pos: mp, kind: 'sfx', verb: 0.03 });
+      }
+    } else if (kind === 'pistol') {
+      this._noise({ dur: 0.09, type: 'highpass', freq: 2900, peak: 0.6 * legacyVol, decay: 0.05, rate: 1.2, pos, kind: 'gun', echo: 0.04 });
+      this._noise({ dur: 0.2, type: 'bandpass', freq: 1150, Q: 0.9, peak: 1.0 * legacyVol, decay: 0.14, rate: 1.0, pos, kind: 'gun', echo: 0.08 });
+      this._tone({ type: 'sine', f0: 148, f1: 48, dur: 0.15, peak: 0.65 * legacyVol, decay: 0.12, pos, kind: 'gun' });
+      this._noise({ dur: 0.04, type: 'highpass', freq: 5200, peak: 0.18 * legacyVol, decay: 0.03, rate: 1.4, pos, kind: 'gun' });
+    } else { // sniper / awp: huge boom + long rolling echo
+      this._noise({ dur: 0.16, type: 'highpass', freq: 850, peak: 0.75 * legacyVol, decay: 0.11, rate: 1.0, pos, kind: 'gun', echo: 0.12 });
+      this._noise({ dur: 0.65, type: 'lowpass', freq: 950, sweepTo: 220, peak: 1.0 * legacyVol, decay: 0.5, rate: 0.85, pos, kind: 'gun', echo: 0.30 });
+      this._tone({ type: 'sine', f0: 118, f1: 27, dur: 0.6, peak: 0.9 * legacyVol, decay: 0.5, pos, kind: 'gun', verb: 0.3 });
+      // rolling thunder tail (two delayed low washes)
+      this._noise({ dur: 0.5, type: 'lowpass', freq: 520, sweepTo: 150, peak: 0.4 * legacyVol, decay: 0.55, rate: 0.7, pos, kind: 'gun', verb: 0.55, echo: 0.4, at: 0.16 });
+      this._noise({ dur: 0.6, type: 'lowpass', freq: 380, sweepTo: 120, peak: 0.26 * legacyVol, decay: 0.6, rate: 0.6, pos, kind: 'gun', verb: 0.6, echo: 0.45, at: 0.34 });
+      void P;
     }
   },
-  mech() { this.click(4300, 0.025, 0.14); setTimeout(() => this.click(2600, 0.03, 0.12), 55); },
-  click(freq = 2000, dur = 0.05, vol = 0.25) {
+  mech(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    const t = this.now();
-    const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
-    o.type = 'square'; o.frequency.value = freq; this.env(g, t, vol, dur);
-    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.02);
+    this._tone({ type: 'square', f0: 4300, dur: 0.025, peak: 0.12, decay: 0.025, pos, kind: 'sfx', verb: 0.04 });
+    this._noise({ dur: 0.04, type: 'bandpass', freq: 3200, Q: 2, peak: 0.16, decay: 0.035, rate: 1.5, pos, kind: 'sfx' });
+    setTimeout(() => {
+      this._tone({ type: 'square', f0: 2500, dur: 0.03, peak: 0.11, decay: 0.03, pos, kind: 'sfx', verb: 0.04 });
+      this._noise({ dur: 0.05, type: 'bandpass', freq: 2000, Q: 1.6, peak: 0.14, decay: 0.04, rate: 1.2, pos, kind: 'sfx' });
+    }, 55);
   },
-  reload() { this.click(900, 0.07); setTimeout(() => this.click(1400, 0.07), 180); setTimeout(() => this.click(700, 0.09), 700); },
-  hit(headshot) { this.click(headshot ? 2600 : 1900, 0.06, 0.35); },
-  kill() { this.click(520, 0.1, 0.4); setTimeout(() => this.click(780, 0.12, 0.4), 110); },
+  click(freq = 2000, dur = 0.05, vol = 0.25, pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // metallic UI blip: square body + breath of noise for texture
+    this._tone({ type: 'square', f0: freq, dur, peak: vol * 0.8, decay: dur, pos, kind: 'sfx', verb: 0.05 });
+    this._noise({ dur: 0.03, type: 'highpass', freq: freq * 1.5, peak: vol * 0.25, decay: 0.025, rate: 1.6, pos, kind: 'sfx' });
+  },
+  dryfire() { this.click(300, 0.06, 0.3); },
+  reload(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // staged: mag out (clack) -> mag in (chunk) -> charge (shick-clack)
+    this._noise({ dur: 0.06, type: 'bandpass', freq: 950, Q: 1.8, peak: 0.4, decay: 0.06, rate: 1.1, pos, kind: pos ? 'gun' : 'sfx' });
+    this._tone({ type: 'square', f0: 900, dur: 0.07, peak: 0.22, decay: 0.07, pos, kind: 'sfx', verb: 0.06 });
+    setTimeout(() => {
+      this._noise({ dur: 0.06, type: 'bandpass', freq: 1500, Q: 1.8, peak: 0.42, decay: 0.06, rate: 1.25, pos, kind: pos ? 'gun' : 'sfx' });
+      this._tone({ type: 'square', f0: 1400, dur: 0.07, peak: 0.22, decay: 0.07, pos, kind: 'sfx', verb: 0.06 });
+    }, 180);
+    setTimeout(() => {
+      this._noise({ dur: 0.05, type: 'bandpass', freq: 2600, Q: 2, peak: 0.34, decay: 0.05, rate: 1.4, pos, kind: pos ? 'gun' : 'sfx' });
+      this._tone({ type: 'square', f0: 700, dur: 0.09, peak: 0.26, decay: 0.09, pos, kind: 'sfx', verb: 0.07 });
+    }, 700);
+  },
+  hit(headshot) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    if (headshot) {
+      // bright skull-ping: metallic triangle + sizzle
+      this._tone({ type: 'triangle', f0: 2750, f1: 2100, dur: 0.08, peak: 0.42, decay: 0.07, verb: 0.12 });
+      this._noise({ dur: 0.05, type: 'highpass', freq: 4200, peak: 0.2, decay: 0.04, rate: 1.5 });
+    } else {
+      this._tone({ type: 'triangle', f0: 1950, f1: 1500, dur: 0.07, peak: 0.38, decay: 0.06, verb: 0.1 });
+      this._noise({ dur: 0.04, type: 'highpass', freq: 3200, peak: 0.14, decay: 0.035, rate: 1.4 });
+    }
+  },
+  kill() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // punchy two-tone confirm with harmonic sheen
+    this._tone({ type: 'triangle', f0: 620, dur: 0.1, peak: 0.42, decay: 0.1, verb: 0.16 });
+    this._tone({ type: 'sine', f0: 1240, dur: 0.08, peak: 0.14, decay: 0.08, verb: 0.14 });
+    setTimeout(() => {
+      this._tone({ type: 'triangle', f0: 930, dur: 0.13, peak: 0.44, decay: 0.12, verb: 0.18 });
+      this._tone({ type: 'sine', f0: 1860, dur: 0.1, peak: 0.13, decay: 0.1, verb: 0.16 });
+    }, 105);
+  },
   hurt() {
     if (!this.ctx || !opts.sound || this.muted) return;
-    const t = this.now(); const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
-    o.type = 'sawtooth'; o.frequency.setValueAtTime(220, t);
-    o.frequency.exponentialRampToValueAtTime(90, t + 0.2);
-    this.env(g, t, 0.4, 0.22); o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.25);
+    // body thud + grunt-ish saw drop + breath noise
+    this._tone({ type: 'sawtooth', f0: 210, f1: 82, dur: 0.24, peak: 0.4, decay: 0.22, verb: 0.08 });
+    this._tone({ type: 'sine', f0: 95, f1: 45, dur: 0.2, peak: 0.5, decay: 0.18 });
+    this._noise({ dur: 0.14, type: 'lowpass', freq: 700, sweepTo: 200, peak: 0.3, decay: 0.13, rate: 0.8 });
   },
-  step() {
+  step(pos = null, sprint = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    const t = this.now();
-    const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(0.08);
-    const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
-    const g = this.ctx.createGain(); this.env(g, t, 0.12, 0.08);
-    src.connect(f); f.connect(g); g.connect(this.master); src.start(t); src.stop(t + 0.1);
+    const isSelf = !pos || typeof pos.x !== 'number';
+    this._stepAlt = !this._stepAlt;
+    if (isSelf) {
+      // own boots: alternating L/R micro-pan, gravel crunch + soft thud
+      const pan = (this._stepAlt ? -1 : 1) * 0.12;
+      const t0 = this.now();
+      const mk = (freq, peak, rate) => {
+        const src = this.ctx.createBufferSource(); src.buffer = this._white; src.loop = true;
+        src.playbackRate.value = rate * rand(0.88, 1.12);
+        const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = freq * rand(0.9, 1.1);
+        const g = this.ctx.createGain(); this.env(g, t0, peak * rand(0.85, 1.15), 0.075);
+        const p = this._pan(pan);
+        src.connect(f); f.connect(g); g.connect(p);
+        try { src.start(t0, Math.random() * 0.6); src.stop(t0 + 0.14); } catch (e) {}
+      };
+      mk(sprint ? 750 : 580, sprint ? 0.17 : 0.12, 0.9);
+      mk(1400, 0.05, 1.5); // grit
+      this._tone({ type: 'sine', f0: 85, f1: 50, dur: 0.07, peak: 0.10, decay: 0.07 });
+    } else {
+      // world boots: fully spatial, quiet, fade fast with distance
+      const s = this._spatial(pos, 'step');
+      if (s.vol < 0.015) return;
+      this._noise({ dur: 0.09, type: 'lowpass', freq: rand(380, 640), peak: (sprint ? 0.5 : 0.36), decay: 0.075, rate: 0.85, pos, kind: 'step' });
+    }
   },
-  roundWin() { [523, 659, 784, 1046].forEach((fr, i) => setTimeout(() => this.click(fr, 0.18, 0.35), i * 130)); },
-  roundLose() { [400, 340, 280, 200].forEach((fr, i) => setTimeout(() => this.click(fr, 0.2, 0.35), i * 150)); },
-  beep(urgent = false) {
+  land(hard = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    this.click(urgent ? 1560 : 1180, urgent ? 0.09 : 0.07, urgent ? 0.5 : 0.35);
+    this._tone({ type: 'sine', f0: hard ? 110 : 90, f1: 42, dur: 0.12, peak: hard ? 0.4 : 0.22, decay: 0.11 });
+    this._noise({ dur: 0.1, type: 'lowpass', freq: hard ? 650 : 450, peak: hard ? 0.35 : 0.18, decay: 0.09, rate: 0.8 });
   },
-  plantBeep() { [880, 880, 1174].forEach((fr, i) => setTimeout(() => this.click(fr, 0.09, 0.4), i * 120)); },
-  plantedConfirm() { [660, 880, 660, 880].forEach((fr, i) => setTimeout(() => this.click(fr, 0.12, 0.45), i * 140)); },
-  defuseTick() { this.click(1500, 0.04, 0.22); },
-  explode() {
+  impact(pos, big = false) {
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    const s = this._spatial(pos, 'impact');
+    if (s.vol < 0.012) return;
+    // concrete snap + dust wash + faint metallic ring
+    this._noise({ dur: 0.07, type: 'highpass', freq: 2400, peak: big ? 0.5 : 0.34, decay: 0.05, rate: 1.3, pos, kind: 'impact' });
+    this._noise({ dur: 0.16, type: 'lowpass', freq: 900, sweepTo: 250, peak: 0.3, decay: 0.12, rate: 0.9, pos, kind: 'impact' });
+    if (Math.random() < 0.4) this._tone({ type: 'triangle', f0: rand(2600, 3400), f1: 1700, dur: 0.09, peak: 0.10, decay: 0.09, pos, kind: 'impact', verb: 0.25 });
+  },
+  crack() {
+    // supersonic whizz-by when a round snaps past the camera
+    if (!this.ctx || !opts.sound || this.muted) return;
+    const t0 = this.now();
+    const src = this.ctx.createBufferSource(); src.buffer = this._white; src.loop = true;
+    src.playbackRate.value = rand(1.4, 1.8);
+    const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.1;
+    f.frequency.setValueAtTime(rand(2800, 3800), t0);
+    f.frequency.exponentialRampToValueAtTime(rand(900, 1300), t0 + 0.09);
+    const g = this.ctx.createGain(); this.env(g, t0, rand(0.22, 0.34), 0.09);
+    const p = this._pan(rand(-0.7, 0.7));
+    src.connect(f); f.connect(g); g.connect(p);
+    try { src.start(t0, Math.random() * 0.5); src.stop(t0 + 0.16); } catch (e) {}
+  },
+  shellTick(pos) {
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    const s = this._spatial(pos, 'impact');
+    if (s.vol < 0.03 || s.dist > 14) return;
+    this._tone({ type: 'triangle', f0: rand(3800, 5200), f1: 2600, dur: 0.03, peak: 0.07, decay: 0.03, pos, kind: 'impact', verb: 0.1 });
+  },
+  roundWin() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    [523.25, 659.25, 783.99, 1046.5].forEach((fr, i) => setTimeout(() => {
+      this._tone({ type: 'triangle', f0: fr, dur: 0.22, peak: 0.34, decay: 0.2, verb: 0.3 });
+      this._tone({ type: 'sine', f0: fr * 2, dur: 0.16, peak: 0.08, decay: 0.15, verb: 0.28 });
+    }, i * 128));
+  },
+  roundLose() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    [392, 329.6, 261.6, 196].forEach((fr, i) => setTimeout(() => {
+      this._tone({ type: 'sawtooth', f0: fr, dur: 0.22, peak: 0.16, decay: 0.2, verb: 0.25 });
+      this._tone({ type: 'triangle', f0: fr / 2, dur: 0.22, peak: 0.3, decay: 0.2, verb: 0.25 });
+    }, i * 148));
+  },
+  beep(urgent = false, pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // bomb beep: piercing sine + harmonic, positional so you can hunt it
+    let p = pos;
+    try {
+      if (!p && typeof BOMB !== 'undefined' && BOMB.pos) p = BOMB.pos;
+      else if (!p && typeof BOMB !== 'undefined' && BOMB.droppedPos) p = BOMB.droppedPos;
+    } catch (e) {}
+    const f = urgent ? 1560 : 1180;
+    this._tone({ type: 'sine', f0: f, dur: 0.09, peak: urgent ? 0.5 : 0.36, decay: urgent ? 0.09 : 0.07, pos: p, kind: 'beep', verb: 0.3 });
+    this._tone({ type: 'sine', f0: f * 2, dur: 0.05, peak: 0.08, decay: 0.05, pos: p, kind: 'beep' });
+  },
+  plantBeep() { [880, 880, 1174.7].forEach((fr, i) => setTimeout(() => this.click(fr, 0.09, 0.38), i * 118)); },
+  plantedConfirm() { [659.25, 880, 659.25, 880].forEach((fr, i) => setTimeout(() => this.click(fr, 0.12, 0.42), i * 138)); },
+  defuseTick(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    let p = pos;
+    try { if (!p && typeof BOMB !== 'undefined' && BOMB.pos) p = BOMB.pos; } catch (e) {}
+    this._tone({ type: 'sine', f0: 1500, dur: 0.04, peak: 0.2, decay: 0.04, pos: p, kind: 'beep', verb: 0.2 });
+  },
+  explode(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
     try {
-      const t = this.now();
-      const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(1.4);
-      const f = this.ctx.createBiquadFilter(); f.type = 'lowpass';
-      f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(60, t + 1.1);
-      const g = this.ctx.createGain(); this.env(g, t, 1.0, 1.2);
-      src.connect(f); f.connect(g); g.connect(this.master); src.start(t); src.stop(t + 1.4);
-      const o = this.ctx.createOscillator(); const g2 = this.ctx.createGain();
-      o.type = 'sine'; o.frequency.setValueAtTime(110, t);
-      o.frequency.exponentialRampToValueAtTime(28, t + 0.9);
-      this.env(g2, t, 0.9, 1.0); o.connect(g2); g2.connect(this.master); o.start(t); o.stop(t + 1.1);
+      let p = pos;
+      try {
+        if (!p && typeof BOMB !== 'undefined') p = (BOMB.pos || BOMB.droppedPos || null);
+      } catch (e) {}
+      // initial crack (close = violent, far = soft thump)
+      this._noise({ dur: 0.22, type: 'highpass', freq: 600, peak: 0.9, decay: 0.16, rate: 1.0, pos: p, kind: 'explosion', echo: 0.1 });
+      // core boom sweeping down
+      this._noise({ dur: 1.3, type: 'lowpass', freq: 950, sweepTo: 55, peak: 1.0, decay: 1.15, rate: 0.9, pos: p, kind: 'explosion', verb: 0.5, echo: 0.35 });
+      // sub drop you feel
+      this._tone({ type: 'sine', f0: 105, f1: 26, dur: 1.1, peak: 0.95, decay: 1.0, pos: p, kind: 'explosion', verb: 0.35 });
+      // debris rattles
+      for (let i = 0; i < 5; i++) {
+        this._noise({ dur: 0.08, type: 'bandpass', freq: rand(700, 2600), Q: 1.5, peak: 0.22, decay: 0.07, rate: rand(0.8, 1.3), pos: p, kind: 'explosion', at: rand(0.15, 0.8) });
+      }
+      // long smoky tail
+      this._noise({ dur: 1.6, type: 'lowpass', freq: 320, sweepTo: 90, peak: 0.4, decay: 1.5, rate: 0.6, pos: p, kind: 'explosion', verb: 0.6, echo: 0.5, at: 0.25 });
     } catch (e) {}
   },
 };
@@ -847,7 +1152,11 @@ function updateEffects(dt, t = 0) {
     s.vel.y -= 9.5 * dt;
     s.mesh.position.addScaledVector(s.vel, dt);
     s.mesh.rotation.x += s.angVel.x * dt; s.mesh.rotation.y += s.angVel.y * dt; s.mesh.rotation.z += s.angVel.z * dt;
-    if (s.mesh.position.y < 0.02) { s.mesh.position.y = 0.02; s.vel.y *= -0.4; s.vel.x *= 0.6; s.vel.z *= 0.6; s.angVel.multiplyScalar(0.5); }
+    if (s.mesh.position.y < 0.02) {
+      s.mesh.position.y = 0.02;
+      if (s.vel.y < -1.4 && !s._tinked) { s._tinked = true; try { AudioSys.shellTick(s.mesh.position); } catch (e) {} }
+      s.vel.y *= -0.4; s.vel.x *= 0.6; s.vel.z *= 0.6; s.angVel.multiplyScalar(0.5);
+    }
     if (s.life <= 0) { scene.remove(s.mesh); shells.splice(i, 1); }
   }
   for (let i = smokes.length - 1; i >= 0; i--) {
@@ -1117,9 +1426,9 @@ function bombDroppedHit(origin, dir, maxT) {
 function explodeBomb(t, reason) {
   if (BOMB.exploded || G.roundEnding) return;
   BOMB.exploded = true;
-  AudioSys.explode();
   const groundZero = BOMB.planted && BOMB.pos ? BOMB.pos : BOMB.droppedPos;
   const p = groundZero ? groundZero.clone().add(new THREE.Vector3(0, 1, 0)) : new THREE.Vector3(24, 1, 0);
+  AudioSys.explode(p);
   spawnBurst(p, 0xffd27a, 40, 12, 0.9, 0.22);
   spawnBurst(p, 0xff6a2a, 30, 9, 1.1, 0.3);
   spawnBurst(p, 0x555555, 24, 6, 1.6, 0.35);
@@ -1231,8 +1540,12 @@ function updateBot(bot, dt, t) {
         // Face site center while planting.
         bot.yaw = Math.atan2(tgt.x - bot.pos.x, tgt.z - bot.pos.z);
         BOMB.plantProgress += dt;
-        // Audio tick each ~0.8s while planting.
-        if (!bot._plantTick || t - bot._plantTick > 0.8) { bot._plantTick = t; AudioSys.click(980, 0.06, 0.3); }
+        // Audio tick each ~0.8s while planting (positional so CTs can hear it).
+        if (!bot._plantTick || t - bot._plantTick > 0.8) {
+          bot._plantTick = t;
+          try { AudioSys.click(980, 0.06, 0.3, new THREE.Vector3(bot.pos.x, 1.2, bot.pos.z)); }
+          catch (e) { AudioSys.click(980, 0.06, 0.3); }
+        }
         if (BOMB.plantProgress >= BOMB_PLANT_TIME) {
           plantBomb(bot, tgt, t);
           bot.planting = false;
@@ -1274,7 +1587,7 @@ function updateBot(bot, dt, t) {
           BOMB.defuser = bot;
           bot.yaw = Math.atan2(BOMB.pos.x - bot.pos.x, BOMB.pos.z - bot.pos.z);
           BOMB.defuseProgress += dt;
-          if (!bot._defTick || t - bot._defTick > 0.5) { bot._defTick = t; AudioSys.defuseTick(); }
+          if (!bot._defTick || t - bot._defTick > 0.5) { bot._defTick = t; AudioSys.defuseTick(BOMB.pos); }
           if (BOMB.defuseProgress >= BOMB_DEFUSE_TIME) {
             defuseBomb(false, t);
             return;
@@ -1359,6 +1672,12 @@ function updateBot(bot, dt, t) {
       if (Math.random() < 0.5 && waypoints.length) bot.wp.copy(randPick(waypoints));
     }
     bot.walkPhase += dt * 9;
+    // audible boots: interval scales with speed, fully 3D (distance + occlusion)
+    if (bot._stepAt === undefined) bot._stepAt = 0;
+    if (t > bot._stepAt) {
+      bot._stepAt = t + clamp(2.1 / (speed || 4), 0.32, 0.55) * rand(0.9, 1.1);
+      try { AudioSys.step(new THREE.Vector3(bot.pos.x, 0.9, bot.pos.z), false); } catch (e) {}
+    }
   }
   m.position.copy(bot.pos);
   // smooth yaw
@@ -1382,7 +1701,7 @@ function updateBomb(dt, t) {
     const interval = left > 20 ? 1.0 : left > 10 ? 0.55 : 0.28;
     if (t - BOMB.beepAt > interval) {
       BOMB.beepAt = t;
-      AudioSys.beep(left < 10);
+      AudioSys.beep(left < 10, BOMB.pos);
       if (BOMB.mesh && BOMB.mesh.userData.led) {
         BOMB.mesh.userData.led.material.emissiveIntensity = 4;
         setTimeout(() => { if (BOMB.mesh && BOMB.mesh.userData.led) BOMB.mesh.userData.led.material.emissiveIntensity = 1.2; }, 120);
@@ -1400,7 +1719,7 @@ function updateBomb(dt, t) {
           BOMB.defuser = 'player';
           BOMB.defuseProgress += dt;
           showDefuse = true;
-          if (Math.floor(t * 2) !== Math.floor((t - dt) * 2)) AudioSys.defuseTick();
+          if (Math.floor(t * 2) !== Math.floor((t - dt) * 2)) AudioSys.defuseTick(BOMB.pos);
           updateInteractHUD('DEFUSING…', BOMB.defuseProgress / BOMB_DEFUSE_TIME, true);
           if (BOMB.defuseProgress >= BOMB_DEFUSE_TIME) {
             updateInteractHUD(null);
@@ -1518,8 +1837,8 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
       muzzleLight.intensity = wdef.sound === 'sniper' ? 5 : 3.2;
       muzzleLight.distance = wdef.sound === 'sniper' ? 20 : 14;
     }
-    const distSndBomb = shooter.isPlayer ? 0 : origin.distanceTo(new THREE.Vector3(player.pos.x, player.pos.y + EYE, player.pos.z));
-    AudioSys.shoot(wdef.sound, distSndBomb);
+    if (shooter.isPlayer) AudioSys.shoot(wdef.sound);
+    else AudioSys.shoot(wdef.sound, origin);
     spawnBurst(bombEnd, 0xffd27a, 10, 6, 0.4, 0.1);
     const shooterName = shooter.isPlayer ? 'YOU' : (shooter.bot ? shooter.bot.short : '???');
     const shooterTeam = shooter.isPlayer ? 'ct' : shooter.team;
@@ -1538,8 +1857,23 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
   } else if (bestT < 60) {
     muzzleLight.position.copy(origin); muzzleLight.intensity = Math.max(muzzleLight.intensity, 1.5);
   }
-  const distSnd = shooter.isPlayer ? 0 : origin.distanceTo(new THREE.Vector3(player.pos.x, player.pos.y + EYE, player.pos.z));
-  AudioSys.shoot(wdef.sound, distSnd);
+  if (shooter.isPlayer) AudioSys.shoot(wdef.sound);
+  else AudioSys.shoot(wdef.sound, origin);
+  // supersonic snap when an enemy round whizzes past the camera (near miss)
+  if (!shooter.isPlayer && !hitBot && !hitPlayer && player.alive && camera) {
+    try {
+      const lp = camera.position;
+      const ox = lp.x - origin.x, oy = lp.y - origin.y, oz = lp.z - origin.z;
+      const along = ox * dir.x + oy * dir.y + oz * dir.z;
+      if (along > 0 && along < 45) {
+        const px = origin.x + dir.x * along - lp.x;
+        const py = origin.y + dir.y * along - lp.y;
+        const pz = origin.z + dir.z * along - lp.z;
+        const miss = Math.sqrt(px * px + py * py + pz * pz);
+        if (miss < 2.6 && Math.random() < 0.85) setTimeout(() => AudioSys.crack(), along / 343 * 1000);
+      }
+    } catch (e) {}
+  }
 
   // damage falloff with distance (keeps AWP lethal far, rifles fade)
   const fall = wdef.falloff !== undefined ? wdef.falloff : 0.35;
@@ -1554,10 +1888,11 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
     spawnBurst(end, 0xaa0000, 6, 3, 0.4);
     return { hit: true, d: bestT };
   } else if (bestT < maxD - 0.01) {
-    // wall impact: spark + dust + chip + smoke wisp
+    // wall impact: spark + dust + chip + smoke wisp + positional thwack/ring
     spawnBurst(end, 0xffd27a, 8, 5, 0.3, 0.07);
     spawnBurst(end, 0x9a8f7a, 5, 2.2, 0.55, 0.08);
     spawnSmoke(end, 0.22, 0.6);
+    AudioSys.impact(end, wdef.sound === 'sniper');
     return { hit: false, d: bestT };
   }
   return { hit: false, d: bestT };
@@ -2167,14 +2502,19 @@ function updatePlayer(dt, t) {
   player.vel.z += (mz - player.vel.z) * Math.min(1, accel * dt);
   // gravity / jump (blocked while frozen — CS freeze time)
   if (player.onGround && keys['Space'] && player.alive && !isFreeze()) { player.vel.y = 5.2; player.onGround = false; }
+  const fallV = player.vel.y;
   player.vel.y -= 13.5 * dt;
   moveWithCollision(player.pos, player.vel.x * dt, player.vel.z * dt, player.radius);
   player.pos.y += player.vel.y * dt;
-  if (player.pos.y <= 0) { player.pos.y = 0; player.vel.y = 0; player.onGround = true; }
+  if (player.pos.y <= 0) {
+    // landing thud scales with fall speed
+    if (!player.onGround && fallV < -3.5 && player.alive) AudioSys.land(fallV < -7);
+    player.pos.y = 0; player.vel.y = 0; player.onGround = true;
+  }
 
-  // footsteps
+  // footsteps (own boots, L/R alternating + sprint weight)
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
-  if (player.onGround && hSpeed > 2 && t > stepAt) { stepAt = t + (sprint ? 0.3 : 0.42); AudioSys.step(); }
+  if (player.onGround && hSpeed > 2 && t > stepAt) { stepAt = t + (sprint ? 0.3 : 0.42); AudioSys.step(null, sprint); }
 
   const def = WEAPONS[player.cur];
   // --- bloom cool-down + punch / shake / sway recovery ---
