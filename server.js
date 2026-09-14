@@ -11,9 +11,23 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = parseInt(process.argv.includes('--port')
-  ? process.argv[process.argv.indexOf('--port') + 1]
-  : (process.env.PORT || '8080'), 10);
+function parsePort() {
+  const i = process.argv.indexOf('--port');
+  if (i !== -1 && process.argv[i + 1]) {
+    const p = parseInt(process.argv[i + 1], 10);
+    if (Number.isFinite(p)) return p;
+  }
+  // npm passes extra args after `--`, e.g. `npm start -- --port 8081`
+  const eq = process.argv.find((a) => a.startsWith('--port='));
+  if (eq) {
+    const p = parseInt(eq.split('=')[1], 10);
+    if (Number.isFinite(p)) return p;
+  }
+  const env = parseInt(process.env.PORT || '', 10);
+  if (Number.isFinite(env)) return env;
+  return 8080;
+}
+const PORT = parsePort();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -170,7 +184,34 @@ setInterval(() => {
   }
 }, 1000 / 15);
 
-server.listen(PORT, () => {
-  console.log(`HTML5-CS server on http://localhost:${PORT}  (ws://localhost:${PORT}/ws)`);
-  console.log('Rule: clients disable bots when 2+ real players are online.');
-});
+// Prevent unhandled 'error' crash from the ws wrapper (it re-emits listen errors).
+wss.on('error', () => {});
+function listenOn(port, attemptsLeft = 10) {
+  const onErr = (err) => {
+    if (err && err.code === 'EADDRINUSE' && attemptsLeft > 0) {
+      console.warn(`Port ${port} in use — trying ${port + 1}… (or run PORT=<free> npm start)`);
+      setTimeout(() => listenOn(port + 1, attemptsLeft - 1), 150);
+    } else {
+      console.error(`Failed to listen on port ${port}:`, err?.message || err);
+      console.error('Tip: run with a free port, e.g.  PORT=8081 npm start  or  npm start -- --port 8081');
+      process.exit(1);
+    }
+  };
+  const onListen = () => {
+    server.removeListener('error', wrappedErr);
+    // Keep a permanent handler so post-listen async errors log instead of crashing.
+    server.on('error', (e) => console.error('[server] error:', e?.message || e));
+    const addr = server.address();
+    const actual = (addr && typeof addr === 'object' && addr.port) || port;
+    console.log(`HTML5-CS server on http://localhost:${actual}  (ws://localhost:${actual}/ws)`);
+    console.log('Rule: clients disable bots when 2+ real players are online.');
+  };
+  const wrappedErr = (err) => {
+    server.removeListener('listening', onListen);
+    onErr(err);
+  };
+  server.once('error', wrappedErr);
+  server.once('listening', onListen);
+  server.listen(port);
+}
+listenOn(PORT);

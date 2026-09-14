@@ -1069,11 +1069,11 @@ const keys = {};
 let pointerLocked = false;
 
 // ---------------- Multiplayer (real players; no bots when humans are online) ----------------
-// Rule: Net.hasRealOpponents() === true  =>  pure PvP, bots hidden & skipped.
+// Rule: Net.hasRealOpponents === true  =>  pure PvP, bots hidden & skipped.
 // Solo / alone-on-server => bots stay exactly as before.
 const remotes = new Map(); // netId -> { data, mesh, nameTag, pos:Vector3, yaw, targetPos, walkPhase, flashAt }
 let mpStatusEl = null;
-function isMultiplayer() { try { return Net.active && Net.hasRealOpponents(); } catch { return false; } }
+function isMultiplayer() { try { return Net.active && Net.hasRealOpponents; } catch { return false; } }
 function isOnline() { try { return Net.active; } catch { return false; } }
 
 function makeNameTag(name, team) {
@@ -1339,7 +1339,7 @@ function updateMPStatus() {
   if (!mpStatusEl) mpStatusEl = document.getElementById('mp-status');
   if (!mpStatusEl) return;
   if (!Net.active) { mpStatusEl.textContent = 'OFFLINE — SOLO VS BOTS'; mpStatusEl.className = 'offline'; }
-  else if (Net.hasRealOpponents()) {
+  else if (Net.hasRealOpponents) {
     mpStatusEl.textContent = `ONLINE · ${Net.realPlayers} PLAYERS · NO BOTS (PURE PVP)`;
     mpStatusEl.className = 'online pvp';
   } else {
