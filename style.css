@@ -47,6 +47,9 @@ html,body { width:100%; height:100%; overflow:hidden; background:#0a0e14; font-f
 #scope-overlay::after { content:''; position:absolute; top:0; bottom:0; left:50%; width:1px; background:#000; }
 #damage-vignette { position:absolute; inset:0; opacity:0; background:radial-gradient(ellipse at center, transparent 40%, rgba(255,0,0,.55) 100%); transition:opacity .1s; }
 #heal-flash { position:absolute; inset:0; opacity:0; background:radial-gradient(ellipse at center, transparent 55%, rgba(0,255,140,.35) 100%); }
+/* tactical overlays: full-white flash blindness + burning edge glow */
+#flash-overlay { position:absolute; inset:0; opacity:0; background:#fff; pointer-events:none; }
+#burn-overlay { position:absolute; inset:0; opacity:0; background:radial-gradient(ellipse at center, transparent 35%, rgba(255,90,0,.65) 100%); pointer-events:none; }
 #direction-indicator { position:absolute; left:50%; top:50%; width:120px; height:120px; margin:-60px 0 0 -60px; opacity:0; }
 #direction-indicator .dmg-arrow { position:absolute; left:50%; top:-14px; margin-left:-12px; border:12px solid transparent; border-bottom:18px solid rgba(255,40,40,.9); }
 
@@ -63,6 +66,14 @@ html,body { width:100%; height:100%; overflow:hidden; background:#0a0e14; font-f
 .wslot b { background:#444; border-radius:3px; padding:0 5px; margin-right:6px; font-size:11px; }
 .wslot.active { opacity:1; border-color:#ffd76d; background:rgba(255,215,109,.12); }
 .wslot.locked { opacity:.3; text-decoration:line-through; }
+#nade-slots { display:flex; gap:6px; justify-content:flex-end; margin-bottom:6px; }
+.nslot { border:1px solid rgba(46,155,255,.35); border-radius:5px; padding:3px 8px; font-size:11px; opacity:.6; }
+.nslot b { background:#2e9bff; color:#06121f; border-radius:3px; padding:0 5px; margin-right:6px; font-size:11px; }
+.nslot span { letter-spacing:1px; font-weight:800; }
+.nslot i { font-style:normal; opacity:.8; margin-left:6px; font-weight:700; }
+.nslot.active { opacity:1; border-color:#7dff9a; background:rgba(125,255,154,.12); }
+.nslot.locked { opacity:.32; }
+.nslot.locked span { text-decoration:line-through; }
 #ammo { font-size:30px; font-weight:800; } #ammo-reserve { font-size:17px; opacity:.6; } #ammo-sep{opacity:.4; margin:0 4px;}
 #weapon-name { letter-spacing:3px; font-size:12px; opacity:.8; } #reload-tip { color:#ffd76d; font-weight:800; animation:blink .6s infinite; }
 #respawn-overlay { position:absolute; left:50%; top:38%; transform:translate(-50%,-50%); text-align:center; background:rgba(120,0,0,.72); padding:18px 34px; border-radius:10px; border:1px solid #ff5252; }

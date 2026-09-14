@@ -48,6 +48,8 @@
   <div id="scope-overlay" class="hidden"><div id="scope-circle"></div></div>
   <div id="damage-vignette"></div>
   <div id="heal-flash"></div>
+  <div id="flash-overlay"></div>
+  <div id="burn-overlay"></div>
   <div id="direction-indicator"></div>
 
   <div id="bottom-bar">
@@ -61,6 +63,12 @@
         <div class="wslot" data-slot="0"><b>1</b><span>AK-47</span></div>
         <div class="wslot" data-slot="1"><b>2</b><span>Deagle</span></div>
         <div class="wslot" data-slot="2"><b>3</b><span>AWP</span></div>
+      </div>
+      <div id="nade-slots">
+        <div class="nslot" data-nade="he"><b>4</b><span>HE</span><i>×0</i></div>
+        <div class="nslot" data-nade="flash"><b>5</b><span>FLASH</span><i>×0</i></div>
+        <div class="nslot" data-nade="smoke"><b>6</b><span>SMOKE</span><i>×0</i></div>
+        <div class="nslot" data-nade="molotov"><b>7</b><span>MOLY</span><i>×0</i></div>
       </div>
       <div id="ammo"><span id="ammo-mag">30</span><span id="ammo-sep">/</span><span id="ammo-reserve">90</span></div>
       <div id="weapon-name">AK-47</div>
@@ -78,7 +86,7 @@
   <div id="announce" class="hidden"></div>
   <div id="fps-counter">60 FPS</div>
   <div id="mp-status" class="offline">OFFLINE — SOLO VS BOTS</div>
-  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 weapons · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 guns · 4/5/6/7 nades (LMB throw, hold HE/Flash to cook, RMB underhand) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
 </div>
 
 <!-- Buy menu -->
@@ -92,6 +100,10 @@
     <button class="buy-item" data-buy="ammo"><b>[4] Refill Ammo</b><span>$200</span></button>
     <button class="buy-item" data-buy="armor"><b>[5] Armor + Helmet</b><span>$1000</span></button>
     <button class="buy-item" data-buy="hp"><b>[6] Field Kit (+50 HP)</b><span>$500</span></button>
+    <button class="buy-item" data-buy="he"><b>[7] HE Grenade</b><span>$300 · frag, hold LMB to cook</span></button>
+    <button class="buy-item" data-buy="flash"><b>[8] Flashbang</b><span>$200 · blinds on LOS</span></button>
+    <button class="buy-item" data-buy="smoke"><b>[9] Smoke</b><span>$300 · dynamic vision block</span></button>
+    <button class="buy-item" data-buy="molotov"><b>[0] Molotov</b><span>$400 · area fire, shatters on impact</span></button>
   </div>
   <p class="buy-note">Press B or ESC to close · Buy only during first 5s of a round (incl. 3s freeze) · Alive only</p>
 </div>
@@ -107,9 +119,10 @@
         <h3>▶ HOW TO PLAY</h3>
         <ul>
           <li><b>Click DEPLOY</b> to lock mouse &amp; spawn (CT side)</li>
-          <li><b>WASD</b> move · <b>Mouse</b> look · <b>LMB</b> fire</li>
+          <li><b>WASD</b> move · <b>Mouse</b> look · <b>LMB</b> fire / throw</li>
           <li><b>RMB</b> aim / AWP scope · <b>R</b> reload</li>
-          <li><b>1 / 2 / 3</b> weapons · <b>Q</b> quick-switch</li>
+          <li><b>1 / 2 / 3</b> guns · <b>4/5/6/7</b> HE / Flash / Smoke / Moly · <b>G</b> cycle</li>
+          <li>HE/Flash: hold <b>LMB</b> to cook, release to throw · <b>RMB</b> underhand</li>
           <li><b>B</b> buy menu (first 5s) · <b>ESC</b> pause</li>
           <li>3s freeze, then <b>GO</b> · first to <b>win 7 rounds</b> takes the match</li>
         </ul>
@@ -120,6 +133,7 @@
           <li><b>AK-47</b> — balanced rifle, $2500</li>
           <li><b>Desert Eagle</b> — heavy pistol, $700</li>
           <li><b>AWP</b> — 1-shot sniper, scope on RMB</li>
+          <li><b>HE $300</b> · <b>Flash $200</b> · <b>Smoke $300</b> · <b>Moly $400</b></li>
         </ul>
         <h3>◈ RULES (DEFUSAL)</h3>
         <ul>

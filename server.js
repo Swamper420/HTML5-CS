@@ -142,6 +142,7 @@ wss.on('connection', (ws) => {
       case 'killed':
       case 'bomb':
       case 'round':
+      case 'nade':
       case 'chat': {
         // Relay gameplay events to everyone else; stamp sender id.
         m.fromId = id;

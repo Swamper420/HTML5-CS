@@ -38,6 +38,17 @@ const SPRAY_AK = [
   [0.9, 0.9], [-1.0, 0.85], [0.7, 0.9], [-0.6, 0.9], [0.5, 0.9], [-0.5, 0.9],
 ];
 const SLOT_ORDER = ['ak', 'deagle', 'awp'];
+// ---------------- Tactical grenades (HE / Flash / Smoke / Molotov) ----------------
+// fuse  = seconds after pin release (HE/flash cook while held — explodes in hand at 0)
+// smokeFuse = pop time after throw; molotov ignites on first impact (fuse = failsafe)
+const NADE_DEFS = {
+  he:      { name: 'HE GRENADE', short: 'HE',    slot: 3, price: 300, max: 2, fuse: 1.9, radius: 7.5, damage: 98,  throwPower: 19, underPower: 9,  color: 0x4d7c3a, desc: 'Frag — radial damage' },
+  flash:   { name: 'FLASHBANG',  short: 'FLASH', slot: 4, price: 200, max: 2, fuse: 1.5, radius: 26,  blindMax: 3.2, throwPower: 19, underPower: 9,  color: 0xe8ecf2, desc: 'Blinds on LOS' },
+  smoke:   { name: 'SMOKE',      short: 'SMOKE', slot: 5, price: 300, max: 2, fuse: 1.7, radius: 3.8, duration: 18, throwPower: 18, underPower: 8.5, color: 0x9aa0ab, desc: 'Dynamic vision block' },
+  molotov: { name: 'MOLOTOV',    short: 'MOLY',  slot: 6, price: 400, max: 1, fuse: 5.0, radius: 2.8, duration: 7.0, dps: 52, throwPower: 17, underPower: 8, color: 0xc76a1e, desc: 'Area denial fire' },
+};
+const NADE_ORDER = ['he', 'flash', 'smoke', 'molotov'];
+const isNadeKey = (k) => !!NADE_DEFS[k];
 const MAP_HALF = 34;            // playable half-extent
 const EYE = 1.62;
 const ROUND_TIME = 120;         // 2:00 round (CS-like, timer starts after freeze)
@@ -501,6 +512,57 @@ const AudioSys = {
       // long smoky tail
       this._noise({ dur: 1.6, type: 'lowpass', freq: 320, sweepTo: 90, peak: 0.4, decay: 1.5, rate: 0.6, pos: p, kind: 'explosion', verb: 0.6, echo: 0.5, at: 0.25 });
     } catch (e) {}
+  },
+  // ---- Tactical grenade sounds (all positional) ----
+  pin(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._tone({ type: 'square', f0: 2400, dur: 0.03, peak: 0.16, decay: 0.03, pos, kind: 'sfx', verb: 0.05 });
+    this._noise({ dur: 0.04, type: 'highpass', freq: 4000, peak: 0.14, decay: 0.035, rate: 1.6, pos, kind: 'sfx' });
+  },
+  throwWhoosh(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.18, type: 'bandpass', freq: 900, Q: 1.2, peak: 0.22, decay: 0.16, rate: 1.0, pos, kind: 'sfx' });
+  },
+  nadeBounce(pos, hard = false) {
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    const s = this._spatial(pos, 'impact');
+    if (s.vol < 0.02) return;
+    this._tone({ type: 'triangle', f0: hard ? 420 : 640, f1: 220, dur: 0.06, peak: hard ? 0.3 : 0.2, decay: 0.06, pos, kind: 'impact', verb: 0.2 });
+    this._noise({ dur: 0.04, type: 'highpass', freq: 2800, peak: 0.16, decay: 0.035, rate: 1.3, pos, kind: 'impact' });
+  },
+  heBoom(pos = null) {
+    // smaller than C4: sharp frag crack + short boom (reuses explosion spatial model)
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.16, type: 'highpass', freq: 700, peak: 0.85, decay: 0.12, rate: 1.05, pos, kind: 'explosion', echo: 0.08 });
+    this._noise({ dur: 0.8, type: 'lowpass', freq: 800, sweepTo: 60, peak: 0.95, decay: 0.7, rate: 0.9, pos, kind: 'explosion', verb: 0.45, echo: 0.3 });
+    this._tone({ type: 'sine', f0: 120, f1: 32, dur: 0.6, peak: 0.8, decay: 0.55, pos, kind: 'explosion', verb: 0.3 });
+    for (let i = 0; i < 3; i++) {
+      this._noise({ dur: 0.06, type: 'bandpass', freq: rand(900, 2600), Q: 1.5, peak: 0.2, decay: 0.06, rate: rand(0.9, 1.3), pos, kind: 'explosion', at: rand(0.1, 0.5) });
+    }
+  },
+  flashPop(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // ear-splitting crack + long tinnitus ring
+    this._noise({ dur: 0.1, type: 'highpass', freq: 1800, peak: 1.0, decay: 0.08, rate: 1.3, pos, kind: 'explosion', echo: 0.05 });
+    this._tone({ type: 'sine', f0: 3400, dur: 1.4, peak: 0.16, decay: 1.3, pos, kind: 'beep', verb: 0.1 });
+    this._tone({ type: 'sine', f0: 5100, dur: 1.0, peak: 0.08, decay: 0.9, pos, kind: 'beep' });
+  },
+  smokePop(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.3, type: 'lowpass', freq: 1200, sweepTo: 300, peak: 0.5, decay: 0.28, rate: 1.0, pos, kind: 'explosion', verb: 0.3 });
+    this._noise({ dur: 0.6, type: 'lowpass', freq: 500, sweepTo: 150, peak: 0.3, decay: 0.55, rate: 0.7, pos, kind: 'explosion', verb: 0.4, at: 0.1 });
+  },
+  molotovIgnite(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.25, type: 'highpass', freq: 1500, peak: 0.6, decay: 0.2, rate: 1.1, pos, kind: 'explosion' });
+    this._noise({ dur: 0.7, type: 'lowpass', freq: 900, sweepTo: 200, peak: 0.7, decay: 0.6, rate: 0.8, pos, kind: 'explosion', verb: 0.35 });
+    this._tone({ type: 'sawtooth', f0: 180, f1: 60, dur: 0.4, peak: 0.25, decay: 0.35, pos, kind: 'explosion' });
+  },
+  fireLoopTick(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    const s = this._spatial(pos, 'sfx');
+    if (s.vol < 0.03) return;
+    this._noise({ dur: 0.3, type: 'bandpass', freq: rand(400, 900), Q: 0.8, peak: 0.16, decay: 0.28, rate: rand(0.7, 1.1), pos, kind: 'sfx', verb: 0.25 });
   },
 };
 
@@ -1573,6 +1635,10 @@ const VM_AIM = {
   ak: new THREE.Vector3(0.0, -0.082, -0.32),
   deagle: new THREE.Vector3(0.0, -0.084, -0.30),
   awp: new THREE.Vector3(0.0, -0.107, -0.34),
+  he: new THREE.Vector3(0.0, -0.10, -0.32),
+  flash: new THREE.Vector3(0.0, -0.10, -0.32),
+  smoke: new THREE.Vector3(0.0, -0.10, -0.32),
+  molotov: new THREE.Vector3(0.0, -0.10, -0.32),
 };
 function makeFlashTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -1726,7 +1792,7 @@ function buildViewmodel(key) {
     B(vmKickG, 0.070, 0.050, 0.080, M.gloveD, 0, -0.095, -0.06, 0.28); // left cup under
     B(vmKickG, 0.018, 0.030, 0.040, M.glove, 0.030, -0.048, -0.135); // trigger finger
     vmMuzzle = new THREE.Object3D(); vmMuzzle.position.set(0, 0.020, -0.48); vmKickG.add(vmMuzzle);
-  } else {
+  } else if (key === 'awp') {
     // ---- AWP ----
     // stock (olive) + buttpad + cheek + thumbhole inset
     B(vmKickG, 0.065, 0.090, 0.560, M.olive, 0, -0.020, -0.080);
@@ -1770,6 +1836,38 @@ function buildViewmodel(key) {
     B(vmKickG, 0.072, 0.085, 0.085, M.glove, 0, -0.085, 0.060, 0.3);
     B(vmKickG, 0.078, 0.060, 0.115, M.glove, 0, -0.060, -0.380);
     B(vmKickG, 0.070, 0.028, 0.100, M.gloveD, 0, -0.092, -0.380);
+    vmMuzzle = new THREE.Object3D(); vmMuzzle.position.set(0, 0.010, -1.02); vmKickG.add(vmMuzzle);
+  } else if (isNadeKey(key)) {
+    // ---- Tactical grenade in hand (first-person) ----
+    const def = NADE_DEFS[key];
+    const bodyCol = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.55, metalness: 0.25 });
+    const darkM = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.5, metalness: 0.6 });
+    if (key === 'molotov') {
+      // bottle + rag + fuel tint
+      add(vmKickG, new THREE.CylinderGeometry(0.032, 0.036, 0.13, 12),
+        new THREE.MeshStandardMaterial({ color: 0x3f6b2a, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.85 }), 0, -0.02, -0.30);
+      B(vmKickG, 0.020, 0.035, 0.020, darkM, 0, 0.06, -0.30); // neck
+      B(vmKickG, 0.030, 0.025, 0.030, new THREE.MeshStandardMaterial({ color: 0xd8cfc0, roughness: 1 }), 0.01, 0.085, -0.30, 0, 0, 0.4); // rag
+      B(vmKickG, 0.050, 0.020, 0.050, M.glove || darkM, 0, -0.10, -0.28); // gripping hand hint
+    } else {
+      // pin + lever + ribbed body
+      add(vmKickG, new THREE.SphereGeometry(0.045, 14, 12), bodyCol, 0, -0.02, -0.30);
+      C(vmKickG, 0.012, 0.012, 0.03, darkM, 0, 0.03, -0.30, 0, 10); // fuse housing
+      B(vmKickG, 0.055, 0.008, 0.014, M.steel, 0.01, 0.048, -0.30, 0, 0, 0.15); // lever
+      add(vmKickG, new THREE.TorusGeometry(0.014, 0.0035, 6, 12), M.steel, -0.035, 0.045, -0.30); // pin ring
+      if (key === 'flash') {
+        // slotted flash body bands
+        for (let i = 0; i < 3; i++) add(vmKickG, new THREE.TorusGeometry(0.045, 0.003, 6, 16), darkM, 0, -0.04 + i * 0.022, -0.30).rotation.x = Math.PI / 2;
+      } else if (key === 'smoke') {
+        C(vmKickG, 0.046, 0.046, 0.02, new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.6 }), 0, -0.02, -0.30, 0, 14);
+      }
+    }
+    // hand holding it
+    B(vmKickG, 0.075, 0.080, 0.085, M.glove, 0, -0.115, -0.24, 0.35);
+    B(vmKickG, 0.030, 0.055, 0.060, M.glove, 0.045, -0.08, -0.27, 0.35);
+    vmMuzzle = new THREE.Object3D(); vmMuzzle.position.set(0, -0.02, -0.34); vmKickG.add(vmMuzzle);
+  } else {
+    // fallback (unknown key -> AWP silhouette safety)
     vmMuzzle = new THREE.Object3D(); vmMuzzle.position.set(0, 0.010, -1.02); vmKickG.add(vmMuzzle);
   }
   // ---- muzzle flash rig (star sprite + crossed planes + smoke anchor) ----
@@ -1819,6 +1917,11 @@ const player = {
   bloom: 0, sprayIdx: 0, lastShotT: -9,
   // spectate-after-death state (bot ref + camera mode)
   specTarget: null, specMode: 'chase', // 'first' | 'chase'
+  // tactical grenades: counts per round (CS: rebuy each round, no carry-over for dead)
+  nades: { he: 0, flash: 0, smoke: 0, molotov: 0 },
+  cook: null, // {type, heldT, fuse} while holding LMB with a cookable nade
+  flashUntil: 0, flashMax: 0, // white-out blindness (performance-time seconds)
+  burnT: 0, // last molotov burn tick overlay
 };
 
 const bots = [];
@@ -2094,6 +2197,33 @@ function wireMultiplayer() {
   Net.on('round', (m) => {
     try { applyRemoteRound(m); } catch (e) { console.warn('round msg', e); }
   });
+  Net.on('nade', (m) => {
+    try { applyRemoteNade(m); } catch (e) { console.warn('nade msg', e); }
+  });
+}
+function applyRemoteNade(m) {
+  if (G.phase !== 'playing') return;
+  const t = performance.now() / 1000;
+  const owner = {
+    isPlayer: false, team: m.fromTeam || 't',
+    bot: null, remoteName: m.fromName || ('Player' + (m.fromId ?? '?')),
+    remoteId: m.fromId ?? null, weaponName: (NADE_DEFS[m.nade] || {}).name || 'GRENADE',
+  };
+  // Host-relayed bot utility (solo-with-guests spectating): attribute to a display name.
+  if (m.botShort) owner.remoteName = `${m.botShort} (BOT)`;
+  if (m.action === 'throw' && NADE_DEFS[m.nade]) {
+    const origin = new THREE.Vector3(+m.x || 0, +m.y || 1.4, +m.z || 0);
+    const vel = new THREE.Vector3(+m.vx || 0, +m.vy || 0, +m.vz || 0);
+    if (vel.lengthSq() < 0.01) vel.set(0, 2, 0);
+    throwNade(m.nade, origin, vel, owner, +m.fuse || NADE_DEFS[m.nade].fuse, true);
+  } else if (m.action === 'boom') {
+    // in-hand cook from a remote player — detonate at the broadcast position
+    const at = new THREE.Vector3(+m.x || 0, +m.y || 1.3, +m.z || 0);
+    if (m.nade === 'he') detonateHE(at, owner, t, true);
+    else if (m.nade === 'flash') detonateFlash(at, owner, t, true);
+    else if (m.nade === 'smoke') deploySmoke(at, owner, t);
+    else if (m.nade === 'molotov') igniteMolotov(at, owner, t);
+  }
 }
 
 function updateMPStatus() {
@@ -2693,6 +2823,9 @@ function makeBot(team, idx) {
     hasBomb: false, guardSite: team === 'ct' ? (idx < 2 ? 'A' : 'B') : null,
     siteOffset: new THREE.Vector3(rand(-2, 2), 0, rand(-2, 2)),
     planting: false, defusing: false,
+    blindUntil: 0,
+    nades: team === 't' ? { he: 1, flash: 1, smoke: 1, molotov: 0 } : { he: 1, flash: 1, smoke: 0, molotov: 1 },
+    _nadeAt: 0, _smokeAt: 0, _molyAt: 0,
     name: (team === 'ct' ? ['Blaze', 'Falcon', 'Havoc', 'Ghost'][idx] : ['Viper', 'Rattler', 'Jackal', 'Scorpion'][idx]) + (team === 'ct' ? ' [CT]' : ' [T]'),
     short: team === 'ct' ? ['Blaze', 'Falcon', 'Havoc', 'Ghost'][idx] : ['Viper', 'Rattler', 'Jackal', 'Scorpion'][idx],
   };
@@ -2711,6 +2844,8 @@ function resetBot(bot) {
   bot.wp = waypoints.length ? randPick(waypoints).clone() : bot.pos.clone();
   bot.target = null; bot.state = 'roam'; bot.mesh.visible = true;
   bot.hasBomb = false; bot.planting = false; bot.defusing = false;
+  bot.blindUntil = 0; bot._nadeAt = 0; bot._smokeAt = 0; bot._molyAt = 0;
+  bot.nades = bot.team === 't' ? { he: 1, flash: 1, smoke: 1, molotov: 0 } : { he: 1, flash: 1, smoke: 0, molotov: 1 };
   bot.siteOffset.set(rand(-2, 2), 0, rand(-2, 2));
   // CTs split to guard A/B; T objective assigned per-round in bombResetRound().
   if (bot.team === 'ct') bot.guardSite = bot.idx % 2 === 0 ? 'A' : 'B';
@@ -2727,13 +2862,17 @@ function botEye(b) { return new THREE.Vector3(b.pos.x, b.pos.y + 1.55, b.pos.z);
 function botChest(b) { return new THREE.Vector3(b.pos.x, b.pos.y + 1.1, b.pos.z); }
 
 function nearestEnemy(bot) {
+  // Flashed bots see nothing (they wander until vision returns).
+  try { if (bot.blindUntil && performance.now() / 1000 < bot.blindUntil) return null; } catch (e) {}
   let best = null, bestD = 1e9;
   const eye = botEye(bot);
+  // Dynamic smokes deny vision: walls + smoke volumes both block acquisition.
+  const vis = (p) => hasLOSClear(eye, p);
   // player? team-based (PvP-safe): bots only acquire opposite-team locals.
   if (player.alive && (player.team || 'ct') !== bot.team) {
     const p = new THREE.Vector3(player.pos.x, player.pos.y + 1.3, player.pos.z);
     const d = eye.distanceTo(p);
-    if (d < 55 && hasLOS(eye, p) && d < bestD) { bestD = d; best = { type: 'player', d }; }
+    if (d < 55 && vis(p) && d < bestD) { bestD = d; best = { type: 'player', d }; }
   }
   for (const o of bots) {
     if (!o.alive || o.team === bot.team) continue;
@@ -2741,7 +2880,7 @@ function nearestEnemy(bot) {
     const p = botChest(o);
     const d = eye.distanceTo(p);
     const visRange = bot.team === 't' ? 55 : 50;
-    if (d < visRange && d < bestD && hasLOS(eye, p)) { bestD = d; best = { type: 'bot', bot: o, d }; }
+    if (d < visRange && d < bestD && vis(p)) { bestD = d; best = { type: 'bot', bot: o, d }; }
   }
   // Team-based: drop player target if same team (covers solo T vs CT bots).
   if (best && best.type === 'player' && (player.team || 'ct') === bot.team) best = null;
@@ -3053,6 +3192,70 @@ function updateBot(bot, dt, t) {
   if (t >= bot.nextThink) botThink(bot, t);
   let moveDir = null, speed = bot.speed;
 
+  // --- Flash blindness: stagger in place, no shooting/thinking (CS full white) ---
+  if (bot.blindUntil && t < bot.blindUntil) {
+    // drift + cover eyes: slow stumble, yaw wanders
+    bot.yaw += Math.sin(t * 3.1 + bot.idx * 2) * dt * 1.6;
+    bot.target = null;
+    m.position.copy(bot.pos);
+    let dyB = bot.yaw - m.rotation.y;
+    while (dyB > Math.PI) dyB -= Math.PI * 2; while (dyB < -Math.PI) dyB += Math.PI * 2;
+    m.rotation.y += dyB * Math.min(1, dt * 4);
+    m.userData.legL.rotation.x *= 0.9; m.userData.legR.rotation.x *= 0.9;
+    try { updateBlob(bot, bot.pos.x, bot.pos.z, true, false); } catch (e) {}
+    return;
+  }
+
+  // --- Molotov avoidance: never path through fire; flee if standing in it ---
+  let fleeingFire = null;
+  try {
+    const myFire = inFire(bot.pos, 0.2);
+    if (myFire) {
+      const ax = bot.pos.x - myFire.pos.x, az = bot.pos.z - myFire.pos.z;
+      const ad = Math.hypot(ax, az) || 1;
+      moveDir = new THREE.Vector3(ax / ad, 0, az / ad);
+      fleeingFire = moveDir.clone();
+      speed = bot.speed * 1.25; // run out of the flames
+      bot.wp.copy(objectiveWaypoint(bot)); // repath after escaping
+    } else if (bot.wp && inFire(bot.wp, 0.6)) {
+      // waypoint inside flames — sidestep to a free neighbor instead of walking in
+      bot.wp.copy(objectiveWaypoint(bot));
+      if (Math.random() < 0.6 && waypoints.length) {
+        for (let tries = 0; tries < 6; tries++) {
+          const cand = randPick(waypoints);
+          if (!inFire(cand, 0.8)) { bot.wp.copy(cand); break; }
+        }
+      }
+    }
+    // CT molotov area-denial: toss at chokes when Ts push the guarded site
+    if (!myFire && bot.team === 'ct' && (bot.nades.molotov || 0) > 0 && !BOMB.planted && !G.roundEnding && t > (bot._molyAt || 0)) {
+      const guard = siteByName(bot.guardSite || 'A');
+      let tNear = null;
+      for (const o of bots) {
+        if (!o.alive || o.team !== 't') continue;
+        if (guard && Math.hypot(o.pos.x - guard.x, o.pos.z - guard.z) < 14) { tNear = o; break; }
+      }
+      if (tNear && bot.pos.distanceTo(tNear.pos) < 20 && bot.pos.distanceTo(tNear.pos) > 6) {
+        bot.nades.molotov--;
+        bot._molyAt = t + rand(18, 30);
+        const aim = tNear.pos.clone().add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)));
+        botThrowNadeAt(bot, 'molotov', aim);
+      }
+    }
+    // T smoke cover: pop site entries while pushing (once per push, mid-range)
+    if (!myFire && bot.team === 't' && (bot.nades.smoke || 0) > 0 && !BOMB.planted && !G.roundEnding && t > (bot._smokeAt || 0)) {
+      const tgt = siteByName(BOMB.targetSite || 'A');
+      if (tgt) {
+        const dSite = Math.hypot(bot.pos.x - tgt.x, bot.pos.z - tgt.z);
+        if (dSite < 18 && dSite > 6) {
+          bot.nades.smoke--;
+          bot._smokeAt = t + rand(20, 34);
+          botThrowNadeAt(bot, 'smoke', new THREE.Vector3(tgt.x + rand(-2, 2), 0, tgt.z + rand(-2, 2)));
+        }
+      }
+    }
+  } catch (e) {}
+
   // --- Bomb pickup (T walks over dropped bomb) ---
   if (bot.team === 't' && !BOMB.planted && BOMB.droppedPos && !BOMB.carrier) {
     if (bot.pos.distanceTo(BOMB.droppedPos) < 1.6) {
@@ -3148,6 +3351,12 @@ function updateBot(bot, dt, t) {
   }
 
   if (bot.state === 'combat' && bot.target) {
+    // burning bots don't strafe-shoot — they run
+    if (fleeingFire) {
+      moveDir = fleeingFire;
+      speed = bot.speed * 1.25;
+      bot.yaw = Math.atan2(moveDir.x, moveDir.z);
+    } else {
     let tp = null;
     if (bot.target.type === 'player') tp = new THREE.Vector3(player.pos.x, player.pos.y + 1.2, player.pos.z);
     else if (bot.target.bot.alive) tp = botChest(bot.target.bot);
@@ -3175,16 +3384,36 @@ function updateBot(bot, dt, t) {
         else if (dist < 7) { mx -= nx; mz -= nz; }
         moveDir = new THREE.Vector3(mx, 0, mz).normalize();
         speed *= 0.7;
-        // shoot if roughly LOS + aimed
+        // shoot if roughly LOS + aimed — smokes deny the shot (vision blocked)
+        // combat HE/flash: close-range bots sometimes trade bullets for utility
+        try {
+          if ((bot.nades.he || 0) > 0 && dist > 9 && dist < 24 && Math.random() < dt * 0.10 && t > (bot._nadeAt || 0)) {
+            bot.nades.he--;
+            botThrowNadeAt(bot, 'he', tp.clone());
+          } else if ((bot.nades.flash || 0) > 0 && dist > 8 && dist < 26 && Math.random() < dt * 0.08 && t > (bot._nadeAt || 0)) {
+            bot.nades.flash--;
+            // pop-flash above the enemy so it bursts in their face, then peek
+            const pop = tp.clone().add(new THREE.Vector3(rand(-1, 1), 1.6, rand(-1, 1)));
+            botThrowNadeAt(bot, 'flash', pop);
+          }
+        } catch (e) {}
         if (dist < 50) {
           const eye = botEye(bot);
-          if (hasLOS(eye, tp)) {
+          if (hasLOSClear(eye, tp)) {
             const aimAt = tp.clone();
             botShoot(bot, t, aimAt);
+          } else if (smokeBlocks(eye, tp) && Math.random() < dt * 0.5) {
+            // blind-fire suppression through smoke: rare, wild, scary (no wallbang damage here)
+            if (Math.random() < 0.3) botShoot(bot, t, tp.clone().add(new THREE.Vector3(rand(-2, 2), rand(-0.5, 1), rand(-2, 2))));
           }
         }
       }
     }
+    } // end non-burning combat
+  } else if (fleeingFire) {
+    moveDir = fleeingFire;
+    speed = bot.speed * 1.25;
+    bot.yaw = Math.atan2(moveDir.x, moveDir.z);
   } else {
     const dx = bot.wp.x - bot.pos.x, dz = bot.wp.z - bot.pos.z;
     const dist = Math.hypot(dx, dz);
@@ -3364,6 +3593,8 @@ function updateBomb(dt, t) {
     }
   }
   // Not planted: show carrier plant progress if actively planting.
+  // Cooking a nade owns the interact bar — don't let the bomb tick wipe it.
+  if (player.cook) { updateBombHUD(t); return; }
   if (BOMB.plantingBot && BOMB.plantingBot.alive && BOMB.plantProgress > 0.05) {
     updateInteractHUD(`BOMB PLANTING ON ${BOMB.targetSite} — STOP THEM!`, BOMB.plantProgress / BOMB_PLANT_TIME, false);
   } else {
@@ -3371,6 +3602,702 @@ function updateBomb(dt, t) {
     if (!(isOnline() && (player.team || 'ct') === 't' && player.hasBomb)) updateInteractHUD(null);
   }
   updateBombHUD(t);
+}
+
+// ---------------- Tactical grenades (HE / Flash / Smoke / Molotov) ----------------
+// Projectiles are simulated on every client from throw events (victim-applies damage,
+// thrower only predicts hitmarkers). This keeps solo + PvP consistent with no extra RTT.
+const nadeProjectiles = []; // {type, pos, vel, fuse, owner, mesh, spin, bounces, lastBounceSfx}
+const tacticalSmokes = [];  // {pos, radius, born, until, puffs:[{mesh, seed}], drift}
+const fireZones = [];       // {pos, radius, until, owner, light, flames:[], tickAt, burnSfxAt}
+const NADE_GRAV = 16.5;
+const _nadeTmp = { v: null };
+
+function nadeOwnerName(o) {
+  if (!o) return '???';
+  if (o.isPlayer) return (player.name || 'YOU');
+  if (o.bot) return o.bot.short || 'Bot';
+  if (o.remoteName) return o.remoteName;
+  return '???';
+}
+function nadeOwnerTeam(o) {
+  if (!o) return 't';
+  if (o.isPlayer) return (player.team || 'ct');
+  if (o.team) return o.team;
+  return 't';
+}
+function makeNadeMesh(type) {
+  const g = new THREE.Group();
+  try {
+    const def = NADE_DEFS[type];
+    if (type === 'molotov') {
+      const bottle = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.26, 10),
+        new THREE.MeshStandardMaterial({ color: 0x3f6b2a, roughness: 0.2, metalness: 0.1 }));
+      bottle.castShadow = true; g.add(bottle);
+      const rag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.07, 0.05),
+        new THREE.MeshStandardMaterial({ color: 0xd8cfc0, roughness: 1 }));
+      rag.position.y = 0.16; g.add(rag);
+      // lit rag glow
+      const T = decalTextures();
+      const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff9a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+      gl.scale.setScalar(0.22); gl.position.y = 0.17; g.add(gl);
+      g.userData.flame = gl;
+    } else {
+      const col = def ? def.color : 0x4d7c3a;
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10),
+        new THREE.MeshStandardMaterial({ color: col, roughness: 0.5, metalness: 0.3 }));
+      body.castShadow = true; g.add(body);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.078, 0.078, 0.025, 12),
+        new THREE.MeshStandardMaterial({ color: 0x22242a, roughness: 0.5, metalness: 0.6 }));
+      g.add(band);
+      if (type === 'flash' || type === 'he') {
+        // blink while cooking/flying so the threat reads at distance
+        const T = decalTextures();
+        const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: type === 'flash' ? 0xffffff : 0xff4444, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false }));
+        gl.scale.setScalar(0.3); g.add(gl);
+        g.userData.blink = gl;
+      }
+    }
+  } catch (e) {}
+  return g;
+}
+function nadeThrowOrigin(dir, forBot, botPos) {
+  if (forBot && botPos) return new THREE.Vector3(botPos.x, botPos.y + 1.5, botPos.z).addScaledVector(dir, 0.4);
+  try {
+    if (camera) return new THREE.Vector3(player.pos.x, player.pos.y + EYE, player.pos.z).addScaledVector(dir, 0.5);
+  } catch (e) {}
+  return new THREE.Vector3(player.pos.x, player.pos.y + 1.5, player.pos.z);
+}
+// Central spawn: used by player, bots, and remote replays (fromNet=true skips rebroadcast).
+function throwNade(type, origin, vel, owner, fuseOverride, fromNet = false) {
+  const def = NADE_DEFS[type];
+  if (!def) return null;
+  if (nadeProjectiles.length > 12) {
+    const old = nadeProjectiles.shift();
+    try { scene.remove(old.mesh); } catch (e) {}
+  }
+  const mesh = makeNadeMesh(type);
+  mesh.position.copy(origin);
+  scene.add(mesh);
+  const fuse = (fuseOverride !== undefined && fuseOverride !== null) ? fuseOverride : def.fuse;
+  const proj = {
+    type, pos: origin.clone(), vel: vel.clone(), fuse,
+    owner: { isPlayer: !!owner.isPlayer, team: nadeOwnerTeam(owner), bot: owner.bot || null, remoteName: owner.remoteName || null, remoteId: owner.remoteId ?? null, weaponName: def.name },
+    mesh, spin: new THREE.Vector3(rand(-9, 9), rand(-9, 9), rand(-9, 9)),
+    bounces: 0, born: performance.now() / 1000,
+  };
+  nadeProjectiles.push(proj);
+  try { AudioSys.throwWhoosh(origin); } catch (e) {}
+  if (!fromNet && isOnline() && owner.isPlayer) {
+    try {
+      Net.sendNade({
+        action: 'throw', nade: type,
+        x: origin.x, y: origin.y, z: origin.z,
+        vx: vel.x, vy: vel.y, vz: vel.z, fuse,
+      });
+    } catch (e) {}
+  } else if (!fromNet && isOnline() && owner.bot && isRoundHost()) {
+    // Solo-with-guests: host relays bot throws so spectators see the same arcs.
+    try {
+      Net.sendNade({ action: 'throw', nade: type, x: origin.x, y: origin.y, z: origin.z, vx: vel.x, vy: vel.y, vz: vel.z, fuse, botShort: owner.bot.short || 'Bot', botTeam: owner.bot.team || 't' });
+    } catch (e) {}
+  }
+  return proj;
+}
+// Ballistic solve for bots: pick an arc that lands near target (fixed 1.1s flight).
+function botThrowNadeAt(bot, type, targetPos) {
+  const def = NADE_DEFS[type];
+  if (!def || !bot.alive) return null;
+  if (bot._nadeAt && performance.now() / 1000 < bot._nadeAt) return null;
+  const from = new THREE.Vector3(bot.pos.x, bot.pos.y + 1.5, bot.pos.z);
+  const flight = clamp(from.distanceTo(targetPos) / 14, 0.6, 1.4);
+  const vel = new THREE.Vector3(
+    (targetPos.x - from.x) / flight,
+    (targetPos.y + 0.2 - from.y) / flight + 0.5 * NADE_GRAV * flight,
+    (targetPos.z - from.z) / flight
+  );
+  // clamp lob speed so close tosses don't rocket
+  const sp = vel.length(), maxSp = def.throwPower + 2;
+  if (sp > maxSp) vel.multiplyScalar(maxSp / sp);
+  bot._nadeAt = performance.now() / 1000 + rand(9, 16); // per-bot utility cooldown
+  try { AudioSys.pin(from); } catch (e) {}
+  return throwNade(type, from, vel, { isPlayer: false, team: bot.team, bot }, type === 'molotov' ? 5.0 : def.fuse, false);
+}
+// ---- Player prime / release (LMB cooks HE/flash, throws others instantly) ----
+function playerPrimeNade(type, t) {
+  if (!player.alive || isFreeze() || G.roundEnding || G.phase !== 'playing') return false;
+  if ((player.nades[type] || 0) <= 0) { announce(`${NADE_DEFS[type].name} EMPTY — PRESS B`, 1100); AudioSys.dryfire(); return false; }
+  if (keys['KeyE'] && (playerNearPlantedBomb() || playerInPlantSite())) return false; // hands busy
+  if (type === 'he' || type === 'flash') {
+    if (player.cook) return false;
+    player.cook = { type, heldT: 0, fuse: NADE_DEFS[type].fuse };
+    try { AudioSys.pin(); } catch (e) {}
+    return true; // throwing happens on release
+  }
+  // smoke / molotov: instant throw on press
+  playerThrowNade(type, false);
+  return true;
+}
+function playerThrowNade(type, underhand) {
+  if (!player.alive || isFreeze() || G.roundEnding) { player.cook = null; return; }
+  if ((player.nades[type] || 0) <= 0) { player.cook = null; return; }
+  const def = NADE_DEFS[type];
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const power = underhand ? def.underPower : def.throwPower;
+  const origin = nadeThrowOrigin(dir, false, null);
+  const vel = dir.clone().multiplyScalar(power);
+  vel.y += 1.2; // slight lob bias so level throws carry
+  vel.x += player.vel.x * 0.45; vel.z += player.vel.z * 0.45;
+  let fuse = def.fuse;
+  if (player.cook && player.cook.type === type) {
+    fuse = Math.max(0.05, player.cook.fuse - player.cook.heldT);
+    player.cook = null;
+  }
+  player.nades[type]--;
+  // throwing motion feel + swap back when empty (CS-like auto re-equip)
+  vmRig.kickV += 3.2; vmRig.kickRotV += 1.4; vmRig.shake += 0.004;
+  throwNade(type, origin, vel, { isPlayer: true, team: player.team || 'ct' }, fuse, false);
+  // hide hand briefly (throw anim) then re-show or fall back to last gun
+  if (player.nades[type] <= 0) {
+    const fb = (player.last && !isNadeKey(player.last) && player.weapons[player.last] && player.weapons[player.last].owned) ? player.last : (player.weapons.ak.owned ? 'ak' : 'deagle');
+    switchWeapon(fb);
+  } else {
+    buildViewmodel(type); // refresh (draw anim replays, reads as re-grab)
+  }
+  updateHUD();
+}
+function updateNadeCook(dt, t) {
+  if (!player.cook) return;
+  const c = player.cook;
+  c.heldT += dt;
+  const left = c.fuse - c.heldT;
+  // cook HUD: reuse interact bar so the risk reads clearly
+  updateInteractHUD(left < 0.6 ? `⚠ ${NADE_DEFS[c.type].name} — THROW!` : `COOKING ${NADE_DEFS[c.type].short}…`, clamp(c.heldT / c.fuse, 0, 1), false);
+  if (left <= 0) {
+    // exploded in hand — consume + detonate at the player (CS cook risk)
+    player.nades[c.type] = Math.max(0, (player.nades[c.type] || 0) - 1);
+    const at = new THREE.Vector3(player.pos.x, player.pos.y + 1.3, player.pos.z);
+    const owner = { isPlayer: true, team: player.team || 'ct', weaponName: NADE_DEFS[c.type].name };
+    player.cook = null;
+    updateInteractHUD(null);
+    if (c.type === 'he') detonateHE(at, owner, t, true);
+    else if (c.type === 'flash') detonateFlash(at, owner, t, true);
+    const fb = (player.last && !isNadeKey(player.last) && player.weapons[player.last].owned) ? player.last : 'deagle';
+    try { if ((player.nades[c.type] || 0) <= 0) switchWeapon(fb); else buildViewmodel(c.type); } catch (e) {}
+    updateHUD();
+  }
+}
+// ---- Physics: gravity + axis-separated bounce off Box3 colliders + floor ----
+const _nadeProbe = { v: null };
+function nadeCollides(p, r) {
+  // reuse collidesAt (Box3 list) with a small sphere footprint
+  try { return collidesAt(p, r, 0.24); } catch (e) { return null; }
+}
+function updateNades(dt, t) {
+  updateNadeCook(dt, t);
+  for (let i = nadeProjectiles.length - 1; i >= 0; i--) {
+    const p = nadeProjectiles[i];
+    p.fuse -= dt;
+    // blink faster as the fuse runs down (HE/flash readability)
+    try {
+      if (p.mesh.userData.blink) {
+        const urgency = clamp(1 - p.fuse / 1.9, 0, 1);
+        p.mesh.userData.blink.material.opacity = (Math.sin(t * (6 + urgency * 22)) > 0 ? 0.75 : 0.05) * (0.4 + urgency * 0.6);
+      }
+      if (p.mesh.userData.flame) {
+        p.mesh.userData.flame.material.opacity = 0.6 + Math.sin(t * 30 + i) * 0.3;
+      }
+    } catch (e) {}
+    // integrate
+    p.vel.y -= NADE_GRAV * dt;
+    // damp spinning visual
+    p.mesh.rotation.x += p.spin.x * dt; p.mesh.rotation.y += p.spin.y * dt;
+    const r = 0.12;
+    // X axis
+    let nx = p.pos.x + p.vel.x * dt;
+    if (nadeCollides(new THREE.Vector3(nx, p.pos.y, p.pos.z), r)) {
+      p.vel.x *= -0.42; p.vel.y *= 0.85; p.vel.z *= 0.85;
+      p.bounces++; nadeBounceSfx(p);
+      nx = p.pos.x;
+    }
+    // Z axis
+    let nz = p.pos.z + p.vel.z * dt;
+    if (nadeCollides(new THREE.Vector3(nx, p.pos.y, nz), r)) {
+      p.vel.z *= -0.42; p.vel.x *= 0.85; p.vel.y *= 0.85;
+      p.bounces++; nadeBounceSfx(p);
+      nz = p.pos.z;
+    }
+    // Y axis (walls/ceilings + floor)
+    let ny = p.pos.y + p.vel.y * dt;
+    let hitY = false;
+    if (ny < r) { ny = r; hitY = true; }
+    else if (nadeCollides(new THREE.Vector3(nx, ny, nz), r)) hitY = true;
+    if (hitY) {
+      const impact = Math.abs(p.vel.y);
+      if (p.type === 'molotov' && (impact > 2.2 || ny <= r + 0.01)) {
+        // shatters on first solid tap — no bouncing for fire bottles
+        const at = new THREE.Vector3(nx, Math.max(0.1, ny), nz);
+        removeNadeProj(i);
+        igniteMolotov(at, p.owner, t);
+        continue;
+      }
+      if (p.vel.y < 0) {
+        p.vel.y *= -0.42;
+        p.vel.x *= 0.72; p.vel.z *= 0.72;
+        p.spin.multiplyScalar(0.6);
+        p.bounces++;
+        if (impact > 2.4) nadeBounceSfx(p, impact > 7);
+        if (Math.abs(p.vel.y) < 0.9) p.vel.y = 0; // settle & roll
+      } else {
+        p.vel.y *= -0.4;
+      }
+      ny = Math.max(r, ny);
+    }
+    p.pos.set(nx, ny, nz);
+    p.mesh.position.copy(p.pos);
+    // rolling friction once settled on the deck
+    if (p.pos.y <= r + 0.02 && Math.abs(p.vel.y) < 0.01) {
+      p.vel.x *= (1 - Math.min(1, dt * 2.2)); p.vel.z *= (1 - Math.min(1, dt * 2.2));
+    }
+    // fuse out -> detonate (molotov failsafe shatters mid-air)
+    if (p.fuse <= 0) {
+      const at = p.pos.clone();
+      const owner = p.owner;
+      const type = p.type;
+      removeNadeProj(i);
+      if (type === 'he') detonateHE(at, owner, t, false);
+      else if (type === 'flash') detonateFlash(at, owner, t, false);
+      else if (type === 'smoke') deploySmoke(at, owner, t);
+      else if (type === 'molotov') igniteMolotov(at, owner, t);
+    }
+  }
+  updateTacticalSmokes(dt, t);
+  updateFires(dt, t);
+  updateFlashOverlay(t);
+}
+function nadeBounceSfx(p, hard = false) {
+  try { AudioSys.nadeBounce(p.pos, hard); } catch (e) {}
+  try { spawnBurst(p.pos, 0xcfc4ae, 3, 1.6, 0.25, 0.05); } catch (e) {}
+}
+function removeNadeProj(i) {
+  const p = nadeProjectiles[i];
+  try { scene.remove(p.mesh); } catch (e) {}
+  nadeProjectiles.splice(i, 1);
+}
+function clearNades() {
+  for (const p of nadeProjectiles) { try { scene.remove(p.mesh); } catch (e) {} }
+  nadeProjectiles.length = 0;
+  for (const s of tacticalSmokes) {
+    try { for (const pf of s.puffs) { scene.remove(pf.mesh); pf.mesh.material.dispose(); } } catch (e) {}
+  }
+  tacticalSmokes.length = 0;
+  for (const f of fireZones) {
+    try { for (const fl of f.flames) scene.remove(fl); if (f.light) scene.remove(f.light); if (f.smokeAt !== undefined) {} } catch (e) {}
+  }
+  fireZones.length = 0;
+  try { updateInteractHUD(null); } catch (e) {}
+}
+// ---- HE: radial frag with wall-occluded falloff ----
+function explodeDamage(pos, radius, baseDmg, owner, weaponLabel) {
+  const oTeam = nadeOwnerTeam(owner);
+  const oName = nadeOwnerName(owner);
+  // bots (solo): direct authoritative damage
+  for (const b of bots) {
+    if (!b.alive) continue;
+    if (b.team === oTeam) {
+      // No friendly fire — but the thrower still staggers? Skip teammates entirely.
+      if (!(owner.isPlayer && b === undefined)) continue;
+    }
+    // owner bot never hits itself at throw; still allow self-splash for plays
+    const target = botChest(b);
+    const d = pos.distanceTo(target);
+    if (d > radius + 0.6) continue;
+    let dmg = baseDmg * (1 - clamp(d / radius, 0, 1) * 0.92) * rand(0.9, 1.1);
+    if (!hasLOS(pos, target)) dmg *= 0.25; // walls soak most of the blast
+    if (dmg < 4) continue;
+    const shooter = owner.isPlayer
+      ? { team: oTeam, isPlayer: true, weaponName: weaponLabel }
+      : { team: oTeam, isPlayer: false, bot: owner.bot || null, weaponName: weaponLabel };
+    damageBot(b, dmg, shooter, false, target);
+  }
+  // local player (victim-authoritative: applies for ANY owner's blast we simulate)
+  if (player.alive && G.phase === 'playing') {
+    const eye = new THREE.Vector3(player.pos.x, player.pos.y + 1.2, player.pos.z);
+    const d = pos.distanceTo(eye);
+    if (d <= radius + 0.6) {
+      const sameTeam = (player.team || 'ct') === oTeam && !owner.isPlayer;
+      // Friendly bots' HEs don't hurt us (no friendly fire); our own HE does (cook risk).
+      const isOwn = !!owner.isPlayer;
+      if (!sameTeam || isOwn) {
+        let dmg = baseDmg * (1 - clamp(d / radius, 0, 1) * 0.92) * rand(0.9, 1.1);
+        if (!hasLOS(pos, eye)) dmg *= 0.25;
+        if (dmg >= 4) {
+          const shooter = owner.isPlayer
+            ? { team: oTeam, isPlayer: true, weaponName: weaponLabel }
+            : { team: oTeam, isPlayer: false, bot: owner.bot || null, remoteName: owner.remoteName || null, remote: null, weaponName: weaponLabel };
+          // resolve remote ref for direction arrow when killed by a real player
+          try {
+            if (owner.remoteId != null && remotes.has(owner.remoteId)) shooter.remote = remotes.get(owner.remoteId);
+          } catch (e) {}
+          damagePlayer(dmg, shooter, false);
+          if (!player.alive) {
+            try {
+              if (isOnline() && owner.remoteId != null) {
+                Net.sendKilled({ killerId: owner.remoteId, killerName: oName, killerTeam: oTeam, victimId: Net.id, victimName: player.name || 'YOU', victimTeam: player.team || 'ct', weapon: weaponLabel, head: false });
+              }
+            } catch (e) {}
+          }
+        }
+      }
+    }
+    // attacker-side hitmarker prediction for real enemies in the blast (visual only;
+    // victims apply their own damage, kills come back via 'killed')
+    if (owner.isPlayer) {
+      try {
+        let any = false;
+        for (const [, e] of remotes) {
+          if (!e.data || !e.data.alive) continue;
+          if ((e.data.team || 't') === (player.team || 'ct')) continue;
+          const rp = new THREE.Vector3(e.pos.x, e.pos.y + 1.1, e.pos.z);
+          if (pos.distanceTo(rp) < radius && (hasLOS(pos, rp) || pos.distanceTo(rp) < radius * 0.4)) { any = true; break; }
+        }
+        if (any) { playerHitmark(false, false); AudioSys.hit(false); }
+      } catch (e) {}
+    }
+  }
+}
+function detonateHE(at, owner, t, inHand = false) {
+  const label = 'HE GRENADE';
+  try { AudioSys.heBoom(at); } catch (e) {}
+  try {
+    spawnFireball(at.clone().add(new THREE.Vector3(0, 0.3, 0)), 3.2, 0.35);
+    spawnShockwave(at, 7.5, 0.45);
+    spawnBurst(at, 0xffd27a, 26, 10, 0.7, 0.16);
+    spawnBurst(at, 0xff6a2a, 18, 7, 0.9, 0.2);
+    spawnBurst(at, 0x555555, 14, 5, 1.3, 0.25);
+    spawnSmoke(at.clone().add(new THREE.Vector3(0, 0.6, 0)), 1.0, 1.6, 0x4a4a4a);
+    spawnDebris(at, opts.quality ? 10 : 5, 8, 8);
+    spawnDecal('scorch', new THREE.Vector3(at.x, 0.06, at.z), new THREE.Vector3(0, 1, 0), 3.2, 0.9);
+  } catch (e) {}
+  try {
+    muzzleLight.position.copy(at).add(new THREE.Vector3(0, 1, 0));
+    muzzleLight.intensity = 10; muzzleLight.distance = 30;
+  } catch (e) {}
+  try {
+    if (camera) {
+      const d = camera.position.distanceTo(at);
+      const k = clamp(1 - d / 38, 0, 1);
+      vmRig.shake += 0.05 * k + (inHand ? 0.06 : 0);
+      vmRig.fovKick += 4 * k;
+    }
+  } catch (e) {}
+  // dynamic smoke interaction: blasts shred nearby cover
+  try { disperseSmokes(at, 6.5, 6.0); } catch (e) {}
+  explodeDamage(at, NADE_DEFS.he.radius, NADE_DEFS.he.damage, owner, label);
+  try { if (isOnline() && owner.isPlayer && inHand) Net.sendNade({ action: 'boom', nade: 'he', x: at.x, y: at.y, z: at.z }); } catch (e) {}
+}
+// ---- Flash: LOS + facing + distance blindness for player, bots, remotes(feedback) ----
+function flashPowerAt(viewPos, viewFwd, at) {
+  const toFlash = at.clone().sub(viewPos);
+  const d = toFlash.length();
+  if (d > NADE_DEFS.flash.radius) return 0;
+  if (!hasLOS(viewPos, at)) return 0; // walls fully protect (smoke does NOT — flashes burn through smoke)
+  toFlash.normalize();
+  const facing = viewFwd ? clamp(toFlash.dot(viewFwd), -1, 1) : 0;
+  // looking straight at it = full; turned fully away = ~25% (peripheral + bounce)
+  const angK = 0.25 + 0.75 * clamp((facing + 0.4) / 1.4, 0, 1);
+  const distK = 1 - clamp(d / NADE_DEFS.flash.radius, 0, 1);
+  return clamp(distK * angK * 1.25, 0, 1);
+}
+function detonateFlash(at, owner, t, inHand = false) {
+  try { AudioSys.flashPop(at); } catch (e) {}
+  try {
+    spawnWorldFlash(at.clone().add(new THREE.Vector3(0, 0.3, 0)), 0xffffff, 3.2);
+    spawnFireball(at.clone().add(new THREE.Vector3(0, 0.3, 0)), 1.6, 0.12);
+    muzzleLight.position.copy(at); muzzleLight.intensity = 8; muzzleLight.distance = 26;
+  } catch (e) {}
+  // local player blindness
+  try {
+    if (player.alive && G.phase === 'playing') {
+      const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE, player.pos.z);
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      let p = flashPowerAt(eye, fwd, at);
+      if (inHand && owner.isPlayer) p = 1; // cooking it in your face = full white
+      if (p > 0.03) {
+        const dur = p * NADE_DEFS.flash.blindMax;
+        player.flashUntil = t + dur;
+        player.flashMax = Math.max(player.flashMax || 0, dur);
+        if (p > 0.5) { try { AudioSys.click(5200, 0.4, 0.10); } catch (e2) {} }
+      }
+    }
+  } catch (e) {}
+  // bots: blinded = can't acquire/shoot, wander (handled in updateBot/nearestEnemy)
+  try {
+    for (const b of bots) {
+      if (!b.alive) continue;
+      const eye = botEye(b);
+      const dyaw = b.yaw;
+      const fwd = new THREE.Vector3(Math.sin(dyaw), 0.05, Math.cos(dyaw)).normalize();
+      const p = flashPowerAt(eye, fwd, at);
+      if (p > 0.08) {
+        b.blindUntil = t + p * NADE_DEFS.flash.blindMax * rand(0.85, 1.15);
+        b.target = null; b.state = 'objective';
+      }
+    }
+  } catch (e) {}
+  // attacker feedback: any remote enemy caught gets a hitmarker tick
+  try {
+    if (owner.isPlayer) {
+      let any = false;
+      for (const [, e] of remotes) {
+        if (!e.data || !e.data.alive) continue;
+        if ((e.data.team || 't') === (player.team || 'ct')) continue;
+        const eye = new THREE.Vector3(e.pos.x, e.pos.y + 1.55, e.pos.z);
+        if (hasLOS(eye, at) && eye.distanceTo(at) < 20) { any = true; break; }
+      }
+      if (any) { playerHitmark(false, false); AudioSys.hit(false); announce('FLASHED ✨', 700); }
+    }
+  } catch (e) {}
+  try { if (isOnline() && owner.isPlayer && inHand) Net.sendNade({ action: 'boom', nade: 'flash', x: at.x, y: at.y, z: at.z }); } catch (e) {}
+}
+function updateFlashOverlay(t) {
+  try {
+    const el = $('flash-overlay');
+    if (!el) return;
+    if (G.phase !== 'playing' || !player.alive) { el.style.opacity = 0; return; }
+    const left = (player.flashUntil || 0) - t;
+    if (left <= 0) { el.style.opacity = 0; player.flashMax = 0; return; }
+    const total = Math.max(0.001, player.flashMax || left);
+    const k = clamp(left / total, 0, 1);
+    // fast attack, slow decay with a soft knee so full blinds linger white
+    el.style.opacity = clamp(0.25 + k * 0.75, 0, 1).toFixed(3);
+  } catch (e) {}
+}
+// ---- Dynamic smoke: grows, drifts on wind, fades; blocks AI vision ----
+function deploySmoke(at, owner, t) {
+  try { AudioSys.smokePop(at); } catch (e) {}
+  const def = NADE_DEFS.smoke;
+  const center = at.clone(); center.y = clamp(center.y, 0.9, 1.6);
+  // clamp inside map so wall-embedded pops still cover the choke
+  center.x = clamp(center.x, -MAP_HALF + 1, MAP_HALF - 1);
+  center.z = clamp(center.z, -MAP_HALF + 1, MAP_HALF - 1);
+  if (tacticalSmokes.length >= 8) {
+    const old = tacticalSmokes.shift();
+    try { for (const pf of old.puffs) { scene.remove(pf.mesh); pf.mesh.material.dispose(); } } catch (e) {}
+  }
+  const vol = { pos: center, radius: def.radius, born: t, until: t + def.duration, ownerTeam: nadeOwnerTeam(owner), puffs: [], drift: new THREE.Vector3(0.32, 0.02, 0.13) };
+  try {
+    const tex = smokeTexture();
+    const n = opts.quality ? 14 : 8;
+    for (let i = 0; i < n; i++) {
+      const off = new THREE.Vector3(rand(-1.6, 1.6), rand(-0.4, 1.2), rand(-1.6, 1.6));
+      const mat = new THREE.SpriteMaterial({ map: tex, color: 0xd6d2c8, transparent: true, opacity: 0, depthWrite: false });
+      const s = new THREE.Sprite(mat);
+      s.position.copy(center).add(off);
+      const sc = rand(1.4, 2.4);
+      s.scale.setScalar(sc);
+      s.material.rotation = rand(0, Math.PI * 2);
+      scene.add(s);
+      vol.puffs.push({ mesh: s, seed: Math.random() * 10, off, base: sc, spin: rand(-0.5, 0.5) });
+    }
+    // initial pop burst so the bloom reads instantly
+    spawnBurst(center, 0xd6d2c8, 10, 3, 0.6, 0.3);
+  } catch (e) {}
+  tacticalSmokes.push(vol);
+  try { if (isOnline() && owner && owner.isPlayer) { /* throw already relayed; pop is deterministic */ } } catch (e) {}
+}
+function disperseSmokes(at, radius, lifeCut) {
+  for (const s of tacticalSmokes) {
+    if (s.pos.distanceTo(at) < radius + s.radius) {
+      s.until = Math.min(s.until, performance.now() / 1000 + Math.max(2, (s.until - performance.now() / 1000) - lifeCut));
+      s.dispersed = true;
+    }
+  }
+}
+function smokeVolumeRadius(s, t) {
+  const age = t - s.born;
+  const grow = clamp(age / 1.6, 0, 1); // blooms to full cover quickly
+  const left = s.until - t;
+  const fade = clamp(left / 3.0, 0, 1); // last 3s thins out
+  return s.radius * (0.35 + 0.65 * grow) * (0.6 + 0.4 * fade);
+}
+function updateTacticalSmokes(dt, t) {
+  for (let i = tacticalSmokes.length - 1; i >= 0; i--) {
+    const s = tacticalSmokes[i];
+    const left = s.until - t;
+    if (left <= 0) {
+      try { for (const pf of s.puffs) { scene.remove(pf.mesh); pf.mesh.material.dispose(); } } catch (e) {}
+      tacticalSmokes.splice(i, 1);
+      continue;
+    }
+    // wind advection + gentle turbulence (dynamic cover that creeps across chokes)
+    const gust = 1 + Math.sin(t * 0.6 + s.born) * 0.35;
+    s.pos.x += s.drift.x * gust * dt; s.pos.z += s.drift.z * gust * dt;
+    s.pos.x = clamp(s.pos.x, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+    s.pos.z = clamp(s.pos.z, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+    const R = smokeVolumeRadius(s, t);
+    const fadeIn = clamp((t - s.born) / 0.5, 0, 1);
+    const fadeOut = clamp(left / 3.0, 0, 1);
+    for (const pf of s.puffs) {
+      try {
+        pf.mesh.position.copy(s.pos).add(pf.off);
+        pf.mesh.position.y += Math.sin(t * 0.8 + pf.seed) * 0.25 + (t - s.born) * 0.12;
+        pf.mesh.position.x += Math.sin(t * 0.5 + pf.seed * 2) * dt * 0.4;
+        pf.mesh.material.rotation += pf.spin * dt;
+        const growS = pf.base + (t - s.born) * 0.35;
+        pf.mesh.scale.setScalar(Math.min(growS, R * 1.15));
+        pf.mesh.material.opacity = 0.82 * fadeIn * (0.35 + 0.65 * fadeOut);
+      } catch (e) {}
+    }
+  }
+}
+// true if the segment a->b punches through any live smoke volume (AI vision only)
+function smokeBlocks(a, b) {
+  if (!tacticalSmokes.length) return false;
+  const t = performance.now() / 1000;
+  for (const s of tacticalSmokes) {
+    const R = smokeVolumeRadius(s, t) * 0.92;
+    if (R < 0.8) continue;
+    // segment-sphere: closest approach of center to ab
+    const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+    const len2 = abx * abx + aby * aby + abz * abz;
+    if (len2 < 1e-6) continue;
+    let u = ((s.pos.x - a.x) * abx + ((s.pos.y + 0.2) - a.y) * aby + (s.pos.z - a.z) * abz) / len2;
+    u = clamp(u, 0, 1);
+    const cx = a.x + abx * u - s.pos.x, cy = a.y + aby * u - (s.pos.y + 0.2), cz = a.z + abz * u - s.pos.z;
+    if (cx * cx + cy * cy + cz * cz < R * R) {
+      // require both ends outside the cloud (inside = blind anyway, still blocked)
+      return true;
+    }
+  }
+  return false;
+}
+function hasLOSClear(a, b) {
+  // walls first (cheap), then dynamic smoke
+  if (!hasLOS(a, b)) return false;
+  return !smokeBlocks(a, b);
+}
+// ---- Molotov: shatter -> persistent fire zone with DPS + visuals ----
+function igniteMolotov(at, owner, t) {
+  const def = NADE_DEFS.molotov;
+  try { AudioSys.molotovIgnite(at); } catch (e) {}
+  const center = at.clone(); center.y = 0;
+  center.x = clamp(center.x, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+  center.z = clamp(center.z, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+  if (fireZones.length >= 6) {
+    const old = fireZones.shift();
+    try { for (const fl of old.flames) scene.remove(fl); if (old.light) scene.remove(old.light); } catch (e) {}
+  }
+  const zone = {
+    pos: center, radius: def.radius, until: t + def.duration,
+    owner: { isPlayer: !!owner.isPlayer, team: nadeOwnerTeam(owner), bot: owner.bot || null, remoteName: owner.remoteName || null, remoteId: owner.remoteId ?? null, weaponName: 'MOLOTOV' },
+    flames: [], light: null, tickAt: 0, burnSfxAt: 0, born: t,
+  };
+  try {
+    const T = decalTextures();
+    const n = opts.quality ? 9 : 5;
+    for (let i = 0; i < n; i++) {
+      const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: i % 3 ? 0xff7a1e : 0xffd76d, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+      const a = (i / n) * Math.PI * 2 + rand(-0.3, 0.3);
+      const rr = rand(0.2, def.radius * 0.75);
+      m.position.set(center.x + Math.cos(a) * rr, rand(0.3, 0.7), center.z + Math.sin(a) * rr);
+      m.scale.set(rand(0.9, 1.5), rand(1.1, 1.9), 1);
+      m.material.rotation = rand(0, 3);
+      scene.add(m);
+      zone.flames.push(m);
+    }
+    zone.light = new THREE.PointLight(0xff7a1e, 5, 12, 1.8);
+    zone.light.position.set(center.x, 1.0, center.z);
+    scene.add(zone.light);
+    spawnDecal('scorch', new THREE.Vector3(center.x, 0.055, center.z), new THREE.Vector3(0, 1, 0), 4.6, 0.85);
+    spawnSmoke(center.clone().add(new THREE.Vector3(0, 0.8, 0)), 0.9, 1.4, 0x333333);
+  } catch (e) {}
+  fireZones.push(zone);
+}
+function inFire(pos, pad = 0.4) {
+  for (const z of fireZones) {
+    const dx = pos.x - z.pos.x, dz = pos.z - z.pos.z;
+    if (Math.hypot(dx, dz) < z.radius + pad && pos.y < 1.6) return z;
+  }
+  return null;
+}
+function updateFires(dt, t) {
+  for (let i = fireZones.length - 1; i >= 0; i--) {
+    const z = fireZones[i];
+    const left = z.until - t;
+    if (left <= 0) {
+      try { for (const fl of z.flames) scene.remove(fl); if (z.light) scene.remove(z.light); } catch (e) {}
+      fireZones.splice(i, 1);
+      continue;
+    }
+    // animate flames + smoke column + flickering light
+    try {
+      const fade = clamp(left / 1.5, 0.25, 1);
+      for (let k = 0; k < z.flames.length; k++) {
+        const fl = z.flames[k];
+        fl.material.opacity = (0.55 + Math.sin(t * 17 + k * 2.1) * 0.3) * fade;
+        const s = 1 + Math.sin(t * 13 + k * 1.7) * 0.18;
+        fl.scale.set(fl.scale.x, fl.scale.y, 1);
+        fl.scale.x *= (1 + Math.sin(t * 21 + k) * 0.02);
+        void s;
+        fl.material.rotation += dt * (1 + (k % 3));
+      }
+      if (z.light) z.light.intensity = (4 + Math.sin(t * 23) * 1.6 + Math.random() * 0.8) * fade;
+      if (Math.random() < dt * 6) spawnSmoke(new THREE.Vector3(z.pos.x + rand(-1, 1), 1.2, z.pos.z + rand(-1, 1)), rand(0.5, 0.9), rand(0.9, 1.6), 0x2e2e2e);
+      if (t - z.burnSfxAt > 0.4) { z.burnSfxAt = t; AudioSys.fireLoopTick(new THREE.Vector3(z.pos.x, 0.8, z.pos.z)); }
+    } catch (e) {}
+    // damage tick (4Hz): victim-authoritative for player + bots we own
+    if (t >= z.tickAt) {
+      z.tickAt = t + 0.25;
+      const tickDmg = (NADE_DEFS.molotov.dps || 52) * 0.25;
+      for (const b of bots) {
+        if (!b.alive) continue;
+        if (b.team === z.owner.team && !(z.owner.bot === b)) continue; // no friendly fire (owner still burns)
+        const inside = inFire(b.pos, 0.1) === z || Math.hypot(b.pos.x - z.pos.x, b.pos.z - z.pos.z) < z.radius;
+        if (!inside) continue;
+        const shooter = z.owner.isPlayer
+          ? { team: z.owner.team, isPlayer: true, weaponName: 'MOLOTOV' }
+          : { team: z.owner.team, isPlayer: false, bot: z.owner.bot, weaponName: 'MOLOTOV' };
+        damageBot(b, tickDmg * rand(0.9, 1.1), shooter, false, botChest(b));
+      }
+      if (player.alive && G.phase === 'playing') {
+        const insideP = Math.hypot(player.pos.x - z.pos.x, player.pos.z - z.pos.z) < z.radius + 0.15 && player.pos.y < 1.6;
+        if (insideP) {
+          const sameTeam = (player.team || 'ct') === z.owner.team && !z.owner.isPlayer;
+          if (!sameTeam) {
+            const shooter = z.owner.isPlayer
+              ? { team: z.owner.team, isPlayer: true, weaponName: 'MOLOTOV' }
+              : { team: z.owner.team, isPlayer: false, bot: z.owner.bot, remoteName: z.owner.remoteName, remote: null, weaponName: 'MOLOTOV' };
+            try { if (z.owner.remoteId != null && remotes.has(z.owner.remoteId)) shooter.remote = remotes.get(z.owner.remoteId); } catch (e) {}
+            player.burnT = t;
+            damagePlayer(tickDmg * rand(0.9, 1.1), shooter, false);
+            try {
+              const el = $('burn-overlay');
+              if (el) el.style.opacity = 0.85;
+            } catch (e) {}
+          }
+        }
+      }
+      // attacker hitmarker prediction for remotes standing in our fire (visual only)
+      try {
+        if (z.owner.isPlayer) {
+          for (const [, e] of remotes) {
+            if (!e.data || !e.data.alive) continue;
+            if ((e.data.team || 't') === (player.team || 'ct')) continue;
+            if (Math.hypot(e.pos.x - z.pos.x, e.pos.z - z.pos.z) < z.radius) { playerHitmark(false, false); break; }
+          }
+        }
+      } catch (e) {}
+    }
+  }
+  // burn overlay decay for the local player
+  try {
+    const el = $('burn-overlay');
+    if (el) {
+      const sinceBurn = t - (player.burnT || -9);
+      el.style.opacity = sinceBurn < 0.4 ? 0.85 : Math.max(0, 0.85 - (sinceBurn - 0.4) * 2.2).toFixed(3);
+    }
+  } catch (e) {}
 }
 
 // ---------------- Hitscan firing ----------------
@@ -3632,7 +4559,8 @@ function damagePlayer(dmg, shooter, head) {
   updateHUD();
   if (player.hp <= 0) {
     player.hp = 0; player.alive = false; player.deaths++;
-    player.aiming = false;
+    player.aiming = false; player.cook = null;
+    try { updateInteractHUD(null); } catch (e) {}
     if (BOMB.defuser === 'player') BOMB.defuser = null;
     // PvP T death drops the bomb where we died so teammates can recover it.
     try {
@@ -3641,8 +4569,9 @@ function damagePlayer(dmg, shooter, head) {
         bombDropAt(player.pos, false);
       }
     } catch {}
-    const kn = shooter.bot ? shooter.bot.short : (shooter.remoteName || shooter.remote?.data?.name || 'Enemy');
-    $('respawn-killer').textContent = kn + (head ? ' (HEADSHOT)' : '');
+    const kn = shooter.isPlayer ? (player.name || 'YOU') : (shooter.bot ? shooter.bot.short : (shooter.remoteName || shooter.remote?.data?.name || 'Enemy'));
+    const suicide = !!shooter.isPlayer;
+    $('respawn-killer').textContent = kn + (suicide ? ' (OWN GRENADE)' : (head ? ' (HEADSHOT)' : ''));
     $('respawn-timer').textContent = BOMB.planted
       ? 'BOMB IS PLANTED — your team must still defuse it…'
       : 'Waiting for next round… (no respawns — CS elimination)';
@@ -3672,8 +4601,11 @@ function damagePlayer(dmg, shooter, head) {
   }
 }
 function currentWeaponName(shooter) {
-  if (shooter.isPlayer) return WEAPONS[player.cur].name;
   if (shooter && shooter.weaponName) return shooter.weaponName;
+  if (shooter.isPlayer) {
+    if (isNadeKey(player.cur)) return NADE_DEFS[player.cur].name;
+    return (WEAPONS[player.cur] || WEAPONS.deagle).name;
+  }
   if (shooter && shooter.remote && shooter.remote.data && shooter.remote.data.weapon && WEAPONS[shooter.remote.data.weapon]) return WEAPONS[shooter.remote.data.weapon].name;
   return G.round <= 1 ? 'Desert Eagle' : 'AK-47'; // pistol round flavor
 }
@@ -3690,7 +4622,10 @@ function playerInPlantSite() {
 
 // ---------------- Player shooting (CS-style recoil + bloom) ----------------
 function playerTryFire(t) {
+  // nades never reach the hitscan path — they prime/throw instead
+  if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
+  if (!w || !def) return;
   if (!player.alive || player.reloading > 0 || t < player.nextShot) return;
   if (isFreeze() || G.roundEnding) return; // CS freeze: no shooting
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
@@ -3780,7 +4715,9 @@ function playerTryFire(t) {
   updateHUD();
 }
 function startReload() {
+  if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
+  if (!w || !def) return;
   if (player.reloading > 0 || w.mag >= def.magSize || w.reserve <= 0 || !player.alive) return;
   player.reloading = def.reloadTime; player.reloadDur = def.reloadTime;
   player.sprayIdx = 0;
@@ -3788,7 +4725,9 @@ function startReload() {
   $('reload-tip').classList.remove('hidden');
 }
 function finishReload() {
+  if (isNadeKey(player.cur)) { player.reloading = 0; return; }
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
+  if (!w || !def) { player.reloading = 0; return; }
   const need = def.magSize - w.mag, take = Math.min(need, w.reserve);
   w.mag += take; w.reserve -= take;
   player.reloading = 0;
@@ -3798,8 +4737,22 @@ function finishReload() {
 }
 function switchWeapon(key) {
   if (!player.alive) return;
-  if (!player.weapons[key].owned || player.cur === key) return;
+  if (isNadeKey(key)) {
+    if ((player.nades[key] || 0) <= 0) { announce(`${NADE_DEFS[key].name} EMPTY — PRESS B`, 1100); AudioSys.dryfire(); return; }
+    if (player.cur === key) return;
+    player.last = player.cur; player.cur = key;
+    player.cook = null;
+    player.reloading = 0; $('reload-tip').classList.add('hidden');
+    player.bloom = 0; player.sprayIdx = 0; player.aiming = false;
+    buildViewmodel(key);
+    AudioSys.pin();
+    updateHUD();
+    return;
+  }
+  if (!player.weapons[key] || !player.weapons[key].owned || player.cur === key) return;
   player.last = player.cur; player.cur = key;
+  player.cook = null;
+  try { updateInteractHUD(null); } catch (e) {}
   player.reloading = 0; $('reload-tip').classList.add('hidden');
   player.bloom = 0; player.sprayIdx = 0;
   buildViewmodel(key);
@@ -3827,8 +4780,24 @@ function initInput() {
     if (e.code === 'Digit1') switchWeapon('ak');
     if (e.code === 'Digit2') switchWeapon('deagle');
     if (e.code === 'Digit3') { if (player.weapons.awp.owned) switchWeapon('awp'); else announce('AWP NOT OWNED — PRESS B', 1200); }
+    if (e.code === 'Digit4') switchWeapon('he');
+    if (e.code === 'Digit5') switchWeapon('flash');
+    if (e.code === 'Digit6') switchWeapon('smoke');
+    if (e.code === 'Digit7') switchWeapon('molotov');
     if (e.repeat) return;
-    if (e.code === 'KeyQ') switchWeapon(player.last && player.weapons[player.last].owned ? player.last : player.cur);
+    if (e.code === 'KeyQ') {
+      const fb = player.last;
+      if (fb && (isNadeKey(fb) ? (player.nades[fb] || 0) > 0 : (player.weapons[fb] && player.weapons[fb].owned))) switchWeapon(fb);
+    }
+    if (e.code === 'KeyG') {
+      // quick-throw selected utility without fully switching: cycles to next owned nade
+      const owned = NADE_ORDER.filter((k) => (player.nades[k] || 0) > 0);
+      if (owned.length) {
+        const cur = owned.includes(player.cur) ? player.cur : owned[0];
+        const nxt = owned[(owned.indexOf(cur) + 1) % owned.length];
+        switchWeapon(nxt);
+      } else announce('NO GRENADES — PRESS B TO BUY', 1100);
+    }
     if (e.code === 'KeyR') startReload();
     if (e.code === 'KeyB') toggleBuy();
     if (e.code === 'Escape' && G.buyOpen) toggleBuy(false);
@@ -3842,12 +4811,41 @@ function initInput() {
       if (e.button === 2) spectateToggleMode();
       return;
     }
+    // Nades: LMB primes (cookable HE/flash) / throws, RMB underhands.
+    if (isNadeKey(player.cur)) {
+      if (G.buyOpen || isFreeze() || G.roundEnding) return;
+      const t = performance.now() / 1000;
+      if (e.button === 0) {
+        mouseDown = true; mouseJustDown = true;
+        playerPrimeNade(player.cur, t);
+      } else if (e.button === 2) {
+        // underhand lob — no cooking, half power
+        if ((player.nades[player.cur] || 0) > 0) {
+          if (player.cook) { player.cook = null; try { updateInteractHUD(null); } catch (err) {} }
+          playerThrowNade(player.cur, true);
+        } else { announce(`${NADE_DEFS[player.cur].name} EMPTY — PRESS B`, 1100); AudioSys.dryfire(); }
+      }
+      return;
+    }
     if (e.button === 0) { mouseDown = true; mouseJustDown = true; }
     if (e.button === 2) player.aiming = true;
   });
   document.addEventListener('mouseup', (e) => {
-    if (e.button === 0) mouseDown = false;
-    if (e.button === 2) player.aiming = false;
+    if (e.button === 0) {
+      // release a cooked HE/flash to throw (fuse kept ticking while held)
+      if (isNadeKey(player.cur) && player.cook && (player.cur === 'he' || player.cur === 'flash')) {
+        if (player.alive && G.phase === 'playing' && !isFreeze() && !G.roundEnding && !G.buyOpen) {
+          playerThrowNade(player.cur, false);
+          try { updateInteractHUD(null); } catch (err) {}
+        } else {
+          player.cook = null;
+          try { updateInteractHUD(null); } catch (err) {}
+        }
+      }
+      mouseDown = false;
+    }
+    if (e.button === 2 && !isNadeKey(player.cur)) player.aiming = false;
+    if (e.button === 2 && isNadeKey(player.cur)) { /* nades never ADS */ }
   });
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('mousemove', (e) => {
@@ -3940,6 +4938,15 @@ function buyItem(kind) {
     $('heal-flash').style.opacity = 1; setTimeout(() => $('heal-flash').style.opacity = 0, 400);
     return ok('+50 HP');
   }
+  if (isNadeKey(kind)) {
+    const def = NADE_DEFS[kind];
+    if ((player.nades[kind] || 0) >= def.max) return no(`${def.name} FULL (MAX ${def.max})`);
+    if (player.money < def.price) return no('NOT ENOUGH $');
+    player.money -= def.price;
+    player.nades[kind] = (player.nades[kind] || 0) + 1;
+    switchWeapon(kind);
+    return ok(`${def.name} PURCHASED [${player.nades[kind]}/${def.max}]`);
+  }
 }
 
 // ---------------- HUD / UI ----------------
@@ -4024,13 +5031,30 @@ function updateHUD() {
   $('armor-num').textContent = Math.ceil(player.armor);
   $('armor-fill').style.width = clamp(player.armor, 0, 100) + '%';
   $('money').textContent = '$' + player.money;
-  const w = player.weapons[player.cur];
-  $('ammo-mag').textContent = w.mag; $('ammo-reserve').textContent = w.reserve;
-  $('weapon-name').textContent = WEAPONS[player.cur].name.toUpperCase();
+  if (isNadeKey(player.cur)) {
+    const def = NADE_DEFS[player.cur];
+    const n = player.nades[player.cur] || 0;
+    $('ammo-mag').textContent = '×' + n; $('ammo-reserve').textContent = def.max;
+    $('weapon-name').textContent = def.name + (player.cook ? ' — COOKING!' : '');
+  } else {
+    const w = player.weapons[player.cur] || player.weapons.deagle;
+    const def = WEAPONS[player.cur] || WEAPONS.deagle;
+    $('ammo-mag').textContent = w.mag; $('ammo-reserve').textContent = w.reserve;
+    $('weapon-name').textContent = def.name.toUpperCase();
+  }
   document.querySelectorAll('.wslot').forEach((el) => {
     const k = SLOT_ORDER[+el.dataset.slot];
     el.classList.toggle('active', k === player.cur);
     el.classList.toggle('locked', !player.weapons[k].owned);
+  });
+  // nade slots (4-7) with counts
+  document.querySelectorAll('.nslot').forEach((el) => {
+    const k = el.dataset.nade;
+    const n = player.nades[k] || 0;
+    el.classList.toggle('active', k === player.cur);
+    el.classList.toggle('locked', n <= 0);
+    const cnt = el.querySelector('i');
+    if (cnt) cnt.textContent = '×' + n;
   });
   $('ct-score').textContent = G.score.ct; $('t-score').textContent = G.score.t;
   if (BOMB.planted && BOMB.pos && !G.roundEnding) {
@@ -4121,6 +5145,28 @@ function drawMinimap(t) {
       }
     }
   } catch {}
+  // tactical: molotov fires (orange) under smokes (grey) under projectiles (white ticks)
+  try {
+    for (const z of fireZones) {
+      const rr = (z.radius / world) * S;
+      g.fillStyle = 'rgba(255,110,20,0.35)';
+      g.beginPath(); g.arc(px(z.pos.x), pz(z.pos.z), rr, 0, 7); g.fill();
+      g.fillStyle = '#ff7a1e';
+      g.beginPath(); g.arc(px(z.pos.x), pz(z.pos.z), 3, 0, 7); g.fill();
+    }
+    const tt = performance.now() / 1000;
+    for (const s of tacticalSmokes) {
+      const rr = (smokeVolumeRadius(s, tt) / world) * S;
+      g.fillStyle = 'rgba(200,200,200,0.45)';
+      g.beginPath(); g.arc(px(s.pos.x), pz(s.pos.z), Math.max(3, rr), 0, 7); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.7)'; g.lineWidth = 1;
+      g.beginPath(); g.arc(px(s.pos.x), pz(s.pos.z), Math.max(3, rr), 0, 7); g.stroke();
+    }
+    g.fillStyle = '#ffffff';
+    for (const p of nadeProjectiles) {
+      g.fillRect(px(p.pos.x) - 1.5, pz(p.pos.z) - 1.5, 3, 3);
+    }
+  } catch (e) {}
   // player arrow (greyed out while spectating)
   const x = px(player.pos.x), y = pz(player.pos.z);
   g.save(); g.translate(x, y); g.rotate(-player.yaw + Math.PI);
@@ -4318,11 +5364,18 @@ function startRound(first = false, fromNet = false) {
   // fresh battlefield: fade out tracers/smoke/debris, wipe decals (blood, holes, scorch)
   try {
     clearDecals();
+    clearNades();
     for (const arr of [tracers, particles, smokes, shockwaves, worldFlashes, debrisChunks]) {
       for (const e of arr) { try { scene.remove(e.mesh); } catch (err) {} }
       arr.length = 0;
     }
+    try { const fl = $('flash-overlay'); if (fl) fl.style.opacity = 0; } catch (e2) {}
+    try { const bo = $('burn-overlay'); if (bo) bo.style.opacity = 0; } catch (e2) {}
   } catch (e) {}
+  // CS loadout rules: survivors keep guns/ammo/armor, dead reset to pistol + no armor
+  // Nades never carry over — rebuy every round (CS economy).
+  player.nades = { he: 0, flash: 0, smoke: 0, molotov: 0 };
+  player.cook = null; player.flashUntil = 0; player.flashMax = 0; player.burnT = 0;
   // CS loadout rules: survivors keep guns/ammo/armor, dead reset to pistol + no armor
   if (first || diedLastRound) {
     if (!first) {
@@ -4343,7 +5396,8 @@ function startRound(first = false, fromNet = false) {
     player.pos.copy(mySpawns[0]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-1, 1)));
   }
   player.vel.set(0, 0, 0); player.yaw = faceCenterYawPlayer(player.pos); player.pitch = 0;
-  if (!player.weapons[player.cur].owned) player.cur = player.weapons.deagle.owned ? 'deagle' : SLOT_ORDER.find((k) => player.weapons[k].owned) || 'deagle';
+  if (!isNadeKey(player.cur) && (!player.weapons[player.cur] || !player.weapons[player.cur].owned)) player.cur = player.weapons.deagle.owned ? 'deagle' : SLOT_ORDER.find((k) => player.weapons[k].owned) || 'deagle';
+  if (isNadeKey(player.cur) && (player.nades[player.cur] || 0) <= 0) player.cur = 'deagle';
   buildViewmodel(player.cur);
   if (viewmodel) viewmodel.visible = true;
   if (!isMultiplayer()) { for (const b of bots) { resetBot(b); b.mesh.visible = true; } }
@@ -4403,6 +5457,7 @@ function endRound(winner, reason, fromNet = false) { // 'ct' | 't' | 'draw'
   if (G.phase !== 'playing' || G.roundEnding) return;
   G.roundEnding = true;
   if (G.buyOpen) toggleBuy(false);
+  player.cook = null;
   updateInteractHUD(null);
   for (const b of bots) { b.planting = false; b.defusing = false; }
   try { if (isOnline() && !fromNet) Net.sendRound({ action: 'end', winner, reason: reason || '', round: G.round }); } catch {}
@@ -4515,10 +5570,11 @@ function updatePlayer(dt, t) {
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
   if (player.onGround && hSpeed > 2 && t > stepAt) { stepAt = t + (sprint ? 0.3 : 0.42); AudioSys.step(null, sprint); }
 
-  const def = WEAPONS[player.cur];
+  const def = WEAPONS[player.cur] || { bloomDecay: 0.05, auto: false, zoomFov: 75 };
+  const isNade = isNadeKey(player.cur);
   // --- bloom cool-down + punch / shake / sway recovery ---
   const coolMul = player.aiming ? 1.6 : 1;
-  player.bloom = Math.max(0, player.bloom - def.bloomDecay * coolMul * dt);
+  if (!isNade) player.bloom = Math.max(0, player.bloom - def.bloomDecay * coolMul * dt);
   if (t - player.lastShotT > 0.5) player.sprayIdx = Math.max(0, player.sprayIdx - dt * 6);
   const rec = Math.min(1, dt * 9);
   vmRig.punchP += (0 - vmRig.punchP) * Math.min(1, dt * 11);
@@ -4545,11 +5601,13 @@ function updatePlayer(dt, t) {
     if (player.reloading <= 0) finishReload();
   }
   // firing (also catch fast semi-auto clicks that release within one frame; blocked in freeze)
-  if ((mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze() && !G.roundEnding) {
+  // nades throw via mousedown/mouseup prime-release — never via the hitscan path
+  if (!isNade && (mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze() && !G.roundEnding) {
     if (def.auto) playerTryFire(t);
     else if (mouseJustDown) { playerTryFire(t); }
   }
-  mouseJustDown = false;
+  if (isNade) mouseJustDown = false;
+  else mouseJustDown = false;
 
   // --- ADS blend + viewmodel motion (bob / sway / draw / reload) ---
   const wantAim = (player.aiming && player.alive && player.reloading <= 0) ? 1 : 0;
@@ -4586,15 +5644,16 @@ function updatePlayer(dt, t) {
   }
 
   // aim / FOV (with punch kick that springs back)
-  const targetFov = (player.aiming ? def.zoomFov : 75) + vmRig.fovKick;
+  const targetFov = (!isNade && player.aiming ? def.zoomFov : 75) + vmRig.fovKick;
   camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 14);
   camera.updateProjectionMatrix();
-  const scoped = player.aiming && player.cur === 'awp';
+  const scoped = player.aiming && player.cur === 'awp' && !isNade;
   $('scope-overlay').classList.toggle('hidden', !scoped);
-  $('crosshair').style.opacity = scoped || !player.alive ? 0 : 1;
-  if (viewmodel) viewmodel.visible = !scoped;
-  // crosshair reflects heat + motion (bloom-driven)
-  const wantGap = 6 + player.bloom * 620 + hSpeed * 1.3 + (player.onGround ? 0 : 9) + (player.aiming ? -2 : 0);
+  // nades show a dot crosshair (no spread) + flash whites it out via overlay
+  $('crosshair').style.opacity = (scoped || !player.alive) ? 0 : 1;
+  if (viewmodel) viewmodel.visible = !scoped && player.alive;
+  // crosshair reflects heat + motion (bloom-driven); nades stay tight
+  const wantGap = isNade ? 8 : 6 + player.bloom * 620 + hSpeed * 1.3 + (player.onGround ? 0 : 9) + (player.aiming ? -2 : 0);
   crossGap += (clamp(wantGap, 5, 46) - crossGap) * Math.min(1, dt * 10);
   // hide spread UI glitch: hide crosshair lines while reloading draw? keep visible
   // --- multiplayer snapshot out (~20Hz) ---
@@ -4661,6 +5720,7 @@ function loop() {
     if (!isMultiplayer()) { for (const b of bots) updateBot(b, dt, t); }
     try { if (isOnline()) updateRemoteMeshes(dt, t); } catch {}
     updateBomb(dt, t);
+    try { updateNades(dt, t); } catch (e) { console.warn('nades', e); }
     updateEffects(dt, t);
     try { updateScreenFeel(dt, t); } catch (e) {}
     // HUD: ~4Hz normally, every frame during freeze/buy/bomb countdown for smooth display

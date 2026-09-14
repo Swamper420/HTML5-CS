@@ -1,8 +1,8 @@
 // HTML5-CS client net layer — WebSocket relay protocol.
 // No three.js here: main.js owns all meshes and passes snapshots through.
 // Protocol (JSON, see server.js):
-//   c->s: hello{name,wantTeam} | state{...20Hz} | shot | hit | killed | bomb | round | chat | ping
-//   s->c: welcome | roster | player_joined | player_left | snapshot@15Hz | shot|hit|killed|bomb|round|chat
+//   c->s: hello{name,wantTeam} | state{...20Hz} | shot | hit | killed | bomb | round | nade | chat | ping
+//   s->c: welcome | roster | player_joined | player_left | snapshot@15Hz | shot|hit|killed|bomb|round|nade|chat
 
 export const Net = {
   ws: null,
@@ -132,6 +132,7 @@ export const Net = {
       case 'killed': this.emit('killed', m); break;
       case 'bomb': this.emit('bomb', m); break;
       case 'round': this.emit('round', m); break;
+      case 'nade': this.emit('nade', m); break;
       case 'chat': this.emit('chat', m); break;
       case 'pong': this.emit('pong', m); break;
       default: break;
@@ -182,6 +183,7 @@ export const Net = {
   sendKilled(k) { this._send({ type: 'killed', ...k }); },
   sendBomb(b) { this._send({ type: 'bomb', ...b }); },
   sendRound(r) { this._send({ type: 'round', ...r }); },
+  sendNade(n) { this._send({ type: 'nade', ...n }); },
   sendChat(text) { this._send({ type: 'chat', text: String(text).slice(0, 200) }); },
 
   disconnect() {
