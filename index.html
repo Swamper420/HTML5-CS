@@ -77,7 +77,8 @@
 
   <div id="announce" class="hidden"></div>
   <div id="fps-counter">60 FPS</div>
-  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 weapons · RMB aim · <b>E</b> defuse bomb · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
+  <div id="mp-status" class="offline">OFFLINE — SOLO VS BOTS</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 weapons · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
 </div>
 
 <!-- Buy menu -->
@@ -122,16 +123,36 @@
         </ul>
         <h3>◈ RULES (DEFUSAL)</h3>
         <ul>
-          <li>4v4 defusal — You + 3 CT bots vs 4 T bots · <b>no respawns</b></li>
+          <li><b>Solo:</b> 4v4 defusal — You + 3 CT bots vs 4 T bots · <b>no respawns</b></li>
+          <li><b>Online:</b> real players — <b>no bots when players share the server</b> (pure PvP)</li>
           <li>T pushes from <b>WEST</b> to plant on <b>A (north)</b> or <b>B (south)</b> · CT holds from east</li>
           <li>Round = 2:00 · CT wins on time <b>unless bomb is planted</b> (35s to explode)</li>
-          <li>Plant takes 3.2s · defuse takes 5s — hold <b>E</b> next to the bomb</li>
-          <li>Pistol round start (Deagle) · guns kept if you survive, lost on death</li>
+          <li>Plant 3.2s · defuse 5s — hold <b>E</b> (T plants, CT defuses)</li>
           <li>Kill <b>+$300</b> · win <b>+$3250</b> · loss <b>+$1900</b> (cap $16k)</li>
         </ul>
       </div>
     </div>
-    <button id="play-btn">▶ &nbsp;CLICK TO DEPLOY</button>
+    <div id="mp-panel">
+      <div class="mp-row">
+        <label>CALLSIGN <input id="mp-name" maxlength="16" placeholder="Player" autocomplete="off" /></label>
+        <label>TEAM
+          <select id="mp-team">
+            <option value="auto" selected>Auto-balance</option>
+            <option value="ct">CT (defend)</option>
+            <option value="t">T (attack)</option>
+          </select>
+        </label>
+      </div>
+      <div class="mp-row">
+        <label class="mp-url-label">SERVER <input id="mp-url" placeholder="ws://localhost:8080/ws" autocomplete="off" spellcheck="false" /></label>
+      </div>
+      <div class="mp-row mp-btns">
+        <button id="solo-btn" class="mp-btn solo">▶ SOLO VS BOTS</button>
+        <button id="online-btn" class="mp-btn online">🌐 PLAY ONLINE (NO BOTS)</button>
+      </div>
+      <div class="mp-row"><span id="mp-note">Solo = bots. Online alone = bots until a 2nd player joins, then pure PvP.</span></div>
+      <button id="play-btn" class="hidden">▶ &nbsp;CLICK TO DEPLOY</button>
+    </div>
     <div class="menu-row">
       <label><input type="checkbox" id="opt-quality" checked /> Shadows &amp; particles</label>
       <label><input type="checkbox" id="opt-sound" checked /> Sound</label>

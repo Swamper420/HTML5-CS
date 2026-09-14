@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Net } from './net.js';
 
 /* ============================================================
    HTML5-CS : STRIKE ZONE — a Counter-Strike-style browser FPS
@@ -1049,6 +1050,7 @@ const isFreeze = () => G.freezeLeft > 0;
 const isBuyTime = () => G.buyLeft > 0 && !G.roundEnding;
 
 const player = {
+  team: 'ct', name: 'YOU',
   pos: new THREE.Vector3(-29, 0, 0), vel: new THREE.Vector3(),
   yaw: -Math.PI / 2, pitch: 0, onGround: true,
   hp: 100, armor: 0, money: MONEY_START, alive: true,
@@ -1065,6 +1067,300 @@ const player = {
 const bots = [];
 const keys = {};
 let pointerLocked = false;
+
+// ---------------- Multiplayer (real players; no bots when humans are online) ----------------
+// Rule: Net.hasRealOpponents() === true  =>  pure PvP, bots hidden & skipped.
+// Solo / alone-on-server => bots stay exactly as before.
+const remotes = new Map(); // netId -> { data, mesh, nameTag, pos:Vector3, yaw, targetPos, walkPhase, flashAt }
+let mpStatusEl = null;
+function isMultiplayer() { try { return Net.active && Net.hasRealOpponents(); } catch { return false; } }
+function isOnline() { try { return Net.active; } catch { return false; } }
+
+function makeNameTag(name, team) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.font = 'bold 30px Arial';
+  g.fillStyle = 'rgba(0,0,0,0.55)';
+  const tw = Math.min(240, g.measureText(name).width + 28);
+  g.beginPath();
+  if (g.roundRect) g.roundRect(128 - tw / 2, 6, tw, 44, 10); else g.rect(128 - tw / 2, 6, tw, 44);
+  g.fill();
+  g.fillStyle = team === 'ct' ? '#6db3ff' : '#ffb020';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(name.slice(0, 14), 128, 30);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sp.scale.set(2.2, 0.55, 1);
+  return sp;
+}
+
+function addRemoteMesh(r) {
+  if (remotes.has(r.id) || typeof scene === 'undefined' || !scene) return;
+  const mesh = makeSoldier(r.team === 'ct' ? 'ct' : 't');
+  const tag = makeNameTag(r.name || ('Player' + r.id), r.team);
+  tag.position.y = 2.25;
+  mesh.add(tag);
+  mesh.position.set(r.x || 0, r.y || 0, r.z || 0);
+  scene.add(mesh);
+  remotes.set(r.id, {
+    data: { ...r }, mesh, nameTag: tag,
+    pos: new THREE.Vector3(r.x || 0, r.y || 0, r.z || 0),
+    targetPos: new THREE.Vector3(r.x || 0, r.y || 0, r.z || 0),
+    yaw: r.yaw || 0, targetYaw: r.yaw || 0,
+    walkPhase: Math.random() * 6, flashAt: 0, lastShotAt: 0,
+  });
+}
+
+function removeRemoteMesh(id) {
+  const e = remotes.get(id);
+  if (!e) return;
+  try { scene.remove(e.mesh); } catch {}
+  remotes.delete(id);
+  if (player.specTarget && player.specTarget.__remoteId === id) {
+    player.specTarget = null;
+    try { spectateCurrent(); updateSpectateOverlay(); } catch {}
+  }
+}
+
+function syncRemoteMeshes() {
+  // Create meshes for newcomers, drop leavers.
+  try {
+    for (const r of Net.remoteList()) {
+      if (!remotes.has(r.id)) addRemoteMesh(r);
+    }
+    for (const id of [...remotes.keys()]) {
+      if (!Net.remotes.has(id)) removeRemoteMesh(id);
+    }
+  } catch {}
+}
+
+function clearBotsForMP() {
+  // Hide + deactivate bots while real players share the server.
+  for (const b of bots) {
+    b.alive = false; b.hp = 0;
+    try { b.mesh.visible = false; } catch {}
+    b.planting = false; b.defusing = false;
+  }
+  if (BOMB.carrier && BOMB.carrier.hasBomb !== undefined) { /* carrier was a bot — bomb goes neutral */ }
+  if (BOMB.carrier && typeof BOMB.carrier === 'object' && BOMB.carrier.short) {
+    BOMB.carrier = null;
+    if (!BOMB.planted && !BOMB.droppedPos) {
+      // Drop neutral bomb mid-map so T players can still play the objective.
+      BOMB.droppedPos = new THREE.Vector3(0, 0, 0);
+      try { spawnBombMesh(BOMB.droppedPos, false); } catch {}
+    }
+  }
+  try { updateBombHUD(performance.now() / 1000); } catch {}
+}
+
+function restoreBotsForSolo() {
+  // Re-enable bots when the last remote leaves / we disconnect.
+  if (G.phase !== 'playing') return;
+  let anyAlive = false;
+  for (const b of bots) if (b.alive) { anyAlive = true; break; }
+  if (anyAlive) return;
+  for (const b of bots) {
+    try { resetBot(b); } catch {}
+  }
+  try { bombResetRound(); } catch {}
+}
+
+function refreshBotsForMP() {
+  if (isMultiplayer()) clearBotsForMP();
+  else if (isOnline() && remotes.size === 0 && Net.remotes.size === 0) {
+    // Alone on server: keep bots (do nothing — they were never cleared).
+  }
+  try { updateHUD(); } catch {}
+}
+
+function remoteEye(e) { return new THREE.Vector3(e.pos.x, e.pos.y + 1.55, e.pos.z); }
+function remoteChest(e) { return new THREE.Vector3(e.pos.x, e.pos.y + 1.1, e.pos.z); }
+
+function updateRemoteMeshes(dt, t) {
+  syncRemoteMeshes();
+  for (const [id, e] of remotes) {
+    const r = Net.remotes.get(id);
+    if (!r) continue;
+    e.data = r;
+    // Lerp position toward snapshot (15Hz -> smooth).
+    e.targetPos.set(r.x || 0, r.y || 0, r.z || 0);
+    const k = Math.min(1, dt * 12);
+    e.pos.lerp(e.targetPos, k);
+    let dy = (r.yaw || 0) - e.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+    e.yaw += dy * Math.min(1, dt * 10);
+    e.targetYaw = r.yaw || 0;
+    const m = e.mesh;
+    m.position.copy(e.pos);
+    // Face movement model uses same yaw convention as bots (atan2(dx,dz)).
+    m.rotation.y = e.yaw + Math.PI;
+    // Walk anim when moving.
+    const moving = !!r.moving || e.targetPos.distanceToSquared(e.pos) > 0.0004;
+    if (moving) e.walkPhase += dt * 9;
+    const sw = moving ? Math.sin(e.walkPhase) * 0.5 : 0;
+    try {
+      m.userData.legL.rotation.x = sw; m.userData.legR.rotation.x = -sw;
+      m.position.y = e.pos.y + (moving ? Math.abs(Math.sin(e.walkPhase)) * 0.05 : 0);
+      // Aim-ish gun pitch from remote pitch.
+      if (m.userData.gun) m.userData.gun.rotation.x = clamp(-(r.pitch || 0) * 0.5, -0.6, 0.6);
+      // Muzzle flash blink.
+      const fl = t < e.flashAt ? 1 : 0;
+      m.scale.set(1, 1, 1);
+      void fl;
+      // Dead => fall over like bots.
+      if (!r.alive) {
+        if (m.rotation.x > -Math.PI / 2 + 0.05) m.rotation.x -= dt * 6;
+        m.position.y = Math.max(0.2, m.position.y);
+      } else {
+        if (Math.abs(m.rotation.x) > 0.01) m.rotation.x *= Math.max(0, 1 - dt * 6);
+        m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
+      }
+    } catch {}
+  }
+}
+
+// Outgoing state @ ~20Hz + incoming event wiring (called once from boot).
+let _mpWired = false;
+function wireMultiplayer() {
+  if (_mpWired) return; _mpWired = true;
+  mpStatusEl = document.getElementById('mp-status');
+
+  Net.on('welcome', (m) => {
+    player.team = (m.team === 't') ? 't' : 'ct';
+    player.name = Net.name || 'YOU';
+    announce(`ONLINE AS ${player.team.toUpperCase()} — ${player.name}`, 1800);
+    refreshBotsForMP();
+    updateMPStatus();
+    // Re-spawn on our team's side with the new team.
+    if (G.phase === 'playing') {
+      try {
+        const sp = (player.team === 'ct' ? spawns.ct[0] : spawns.t[0]).clone();
+        player.pos.copy(sp); player.yaw = faceCenterYawPlayer(player.pos);
+      } catch {}
+    }
+  });
+  Net.on('player_joined', () => { refreshBotsForMP(); updateMPStatus(); try { updateHUD(); } catch {} });
+  Net.on('player_left', (m) => {
+    try { removeRemoteMesh(m.id); } catch {}
+    // If nobody real is left, bring bots back so solo-on-server still plays.
+    if (Net.remotes.size === 0) { try { restoreBotsForSolo(); } catch {} }
+    refreshBotsForMP(); updateMPStatus();
+    try { updateHUD(); } catch {}
+  });
+  Net.on('disconnect', () => {
+    for (const id of [...remotes.keys()]) try { removeRemoteMesh(id); } catch {}
+    try { restoreBotsForSolo(); } catch {}
+    updateMPStatus();
+  });
+
+  Net.on('shot', (m) => {
+    // Remote tracer + positional gun sound.
+    try {
+      const e = remotes.get(m.fromId);
+      const from = new THREE.Vector3(m.ox, m.oy, m.oz);
+      const dir = new THREE.Vector3(m.dx, m.dy, m.dz).normalize();
+      const end = from.clone().addScaledVector(dir, 30);
+      const reduce = isMultiplayer();
+      void reduce;
+      spawnTracer(from, end, m.tracer || 0xff9a5c);
+      AudioSys.shoot(m.sound || 'rifle', from);
+      if (e) e.flashAt = performance.now() / 1000 + 0.05;
+      // Near-miss crack for remote shots.
+      if (player.alive && camera) {
+        const lp = camera.position;
+        const ox = lp.x - from.x, oy = lp.y - from.y, oz = lp.z - from.z;
+        const along = ox * dir.x + oy * dir.y + oz * dir.z;
+        if (along > 0 && along < 45) {
+          const px = from.x + dir.x * along - lp.x;
+          const py = from.y + dir.y * along - lp.y;
+          const pz = from.z + dir.z * along - lp.z;
+          if (Math.sqrt(px * px + py * py + pz * pz) < 2.6 && Math.random() < 0.85)
+            setTimeout(() => AudioSys.crack(), along / 343 * 1000);
+        }
+      }
+    } catch {}
+  });
+
+  Net.on('hit', (m) => {
+    // Someone shot *us* (authoritative damage applied by victim).
+    try {
+      if (m.targetId !== Net.id) return;
+      if (!player.alive || G.phase !== 'playing') return;
+      const e = remotes.get(m.fromId);
+      const shooter = {
+        isPlayer: false, team: m.fromTeam || (e ? e.data.team : 't'),
+        bot: null, remote: e || null,
+        remoteName: m.fromName || (e ? e.data.name : 'Enemy'),
+        remotePos: e ? e.pos.clone() : null,
+        weaponName: m.weapon || 'AK-47',
+      };
+      damagePlayer(m.dmg, shooter, !!m.head);
+      if (player.alive === false) {
+        // Tell everyone who killed us (victim-authoritative killfeed).
+        Net.sendKilled({
+          killerId: m.fromId, killerName: shooter.remoteName, killerTeam: shooter.team,
+          victimId: Net.id, victimName: player.name, victimTeam: player.team,
+          weapon: m.weapon || 'AK-47', head: !!m.head,
+        });
+      } else {
+        playerHitmark?.(false, false);
+      }
+      // Hit direction arrow from remote position.
+      if (e && typeof flashDamageRemote === 'function') flashDamageRemote(e.pos);
+    } catch {}
+  });
+
+  Net.on('killed', (m) => {
+    try {
+      // Remote-vs-remote or remote-vs-us killfeed + round check.
+      if (m.victimId === Net.id) return; // already handled locally in damagePlayer
+      const e = remotes.get(m.victimId);
+      if (e) { e.data.alive = false; e.data.hp = 0; }
+      addKillfeed(m.killerName || '???', m.killerTeam || 't', m.victimName || '???', m.victimTeam || 'ct', m.weapon || 'AK-47', !!m.head);
+      if (m.killerId === Net.id) {
+        G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(m.head, true);
+        AudioSys.kill();
+        if (m.head) announce('HEADSHOT +$' + MONEY_KILL, 700);
+        try { updateHUD(); } catch {}
+      }
+      checkRoundEnd();
+    } catch {}
+  });
+
+  Net.on('bomb', (m) => {
+    try { applyRemoteBomb(m); } catch (e) { console.warn('bomb msg', e); }
+  });
+  Net.on('round', (m) => {
+    try { applyRemoteRound(m); } catch (e) { console.warn('round msg', e); }
+  });
+}
+
+function updateMPStatus() {
+  if (!mpStatusEl) mpStatusEl = document.getElementById('mp-status');
+  if (!mpStatusEl) return;
+  if (!Net.active) { mpStatusEl.textContent = 'OFFLINE — SOLO VS BOTS'; mpStatusEl.className = 'offline'; }
+  else if (Net.hasRealOpponents()) {
+    mpStatusEl.textContent = `ONLINE · ${Net.realPlayers} PLAYERS · NO BOTS (PURE PVP)`;
+    mpStatusEl.className = 'online pvp';
+  } else {
+    mpStatusEl.textContent = `ONLINE · ALONE — BOTS ACTIVE UNTIL PLAYERS JOIN`;
+    mpStatusEl.className = 'online solo';
+  }
+}
+function flashDamageRemote(remotePos) {
+  try {
+    const dx = remotePos.x - player.pos.x, dz = remotePos.z - player.pos.z;
+    const worldAng = Math.atan2(dx, dz);
+    const facing = player.yaw + Math.PI;
+    const rel = worldAng - facing;
+    const el = document.createElement('div');
+    el.className = 'dmg-arrow';
+    el.style.transform = `rotate(${-rel}rad)`;
+    const di = $('direction-indicator');
+    di.innerHTML = ''; di.appendChild(el); di.style.opacity = 1;
+    setTimeout(() => di.style.opacity = 0, 600);
+  } catch {}
+}
 
 // effects pools
 const tracers = [], particles = [], corpses = [], shells = [], smokes = [];
@@ -1288,8 +1584,8 @@ function botChest(b) { return new THREE.Vector3(b.pos.x, b.pos.y + 1.1, b.pos.z)
 function nearestEnemy(bot) {
   let best = null, bestD = 1e9;
   const eye = botEye(bot);
-  // player?
-  if (player.alive && bot.team === 't') {
+  // player? team-based (PvP-safe): bots only acquire opposite-team locals.
+  if (player.alive && (player.team || 'ct') !== bot.team) {
     const p = new THREE.Vector3(player.pos.x, player.pos.y + 1.3, player.pos.z);
     const d = eye.distanceTo(p);
     if (d < 55 && hasLOS(eye, p) && d < bestD) { bestD = d; best = { type: 'player', d }; }
@@ -1302,8 +1598,8 @@ function nearestEnemy(bot) {
     const visRange = bot.team === 't' ? 55 : 50;
     if (d < visRange && d < bestD && hasLOS(eye, p)) { bestD = d; best = { type: 'bot', bot: o, d }; }
   }
-  // CT bots hunt T bots only
-  if (bot.team === 'ct' && best && best.type === 'player') best = null;
+  // Team-based: drop player target if same team (covers solo T vs CT bots).
+  if (best && best.type === 'player' && (player.team || 'ct') === bot.team) best = null;
   return best;
 }
 
@@ -1362,6 +1658,12 @@ function bombResetRound() {
   BOMB.plantProgress = 0; BOMB.plantingBot = null;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
   BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0;
+  if (isMultiplayer()) {
+    // Pure PvP: no bot carrier — T players carry (player.hasBomb set in startRound).
+    for (const b of bots) b.hasBomb = false;
+    updateBombHUD(0);
+    return;
+  }
   const aliveT = bots.filter((b) => b.team === 't');
   if (aliveT.length) {
     BOMB.carrier = randPick(aliveT);
@@ -1371,12 +1673,13 @@ function bombResetRound() {
   for (const b of bots) if (b.team === 't') b.wp.copy(objectiveWaypoint(b));
   updateBombHUD(0);
 }
-function bombDropAt(pos) {
+function bombDropAt(pos, fromNet = false) {
   BOMB.droppedPos = pos.clone(); BOMB.droppedPos.y = 0;
   BOMB.carrier = null; BOMB.plantProgress = 0; BOMB.plantingBot = null;
   spawnBombMesh(BOMB.droppedPos, false);
   announce('BOMB DROPPED', 1400);
   updateBombHUD(performance.now() / 1000);
+  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'drop', x: BOMB.droppedPos.x, z: BOMB.droppedPos.z }); } catch {}
 }
 function spawnBombMesh(pos, planted) {
   bombClearMesh();
@@ -1397,18 +1700,27 @@ function spawnBombMesh(pos, planted) {
     scene.add(BOMB.light);
   }
 }
-function plantBomb(bot, site, t) {
+function plantBomb(bot, site, t, fromNet = false) {
+  const isPlayerPlanter = bot && bot.isPlayerPlanter;
   BOMB.planted = true; BOMB.site = site.name;
-  BOMB.pos = bot.pos.clone(); BOMB.pos.y = 0;
-  BOMB.carrier = null; bot.hasBomb = false;
+  BOMB.pos = (bot.pos || bot).clone ? (bot.pos ? bot.pos.clone() : bot.clone()) : new THREE.Vector3(bot.x, 0, bot.z);
+  BOMB.pos.y = 0;
+  BOMB.carrier = null;
+  try { if (bot) bot.hasBomb = false; } catch {}
+  if (isPlayerPlanter) player.hasBomb = false;
   BOMB.droppedPos = null; BOMB.plantProgress = 0; BOMB.plantingBot = null;
   BOMB.explodeAt = t + BOMB_TIMER; BOMB.beepAt = t;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
   spawnBombMesh(BOMB.pos, true);
   AudioSys.plantedConfirm();
   announce(`BOMB PLANTED ON ${site.name} — DEFUSE IT!`, 2600);
-  addKillfeed(bot.short, 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
+  const planterName = isPlayerPlanter ? (player.name || 'YOU') : (bot.short || 'T');
+  addKillfeed(planterName, 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
   updateBombHUD(t);
+  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'plant', site: site.name, x: BOMB.pos.x, z: BOMB.pos.z }); } catch {}
+}
+function plantBombByPlayer(site, t) {
+  plantBomb({ isPlayerPlanter: true, pos: player.pos, hasBomb: player.hasBomb }, site, t, false);
 }
 function bombDroppedHit(origin, dir, maxT) {
   // Ray vs dropped C4 only — planted C4 is bulletproof by design.
@@ -1425,8 +1737,9 @@ function bombDroppedHit(origin, dir, maxT) {
   if (tt > 0.3 && tt < maxT) return tt;
   return null;
 }
-function explodeBomb(t, reason) {
+function explodeBomb(t, reason, fromNet = false) {
   if (BOMB.exploded || G.roundEnding) return;
+  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'explode', reason: reason || '' }); } catch {}
   BOMB.exploded = true;
   const groundZero = BOMB.planted && BOMB.pos ? BOMB.pos : BOMB.droppedPos;
   const p = groundZero ? groundZero.clone().add(new THREE.Vector3(0, 1, 0)) : new THREE.Vector3(24, 1, 0);
@@ -1447,14 +1760,70 @@ function explodeBomb(t, reason) {
   BOMB.defuser = null;
   endRound('t', reason || '💥 BOMB DETONATED');
 }
-function defuseBomb(byPlayer, t) {
+function defuseBomb(byPlayer, t, fromNet = false) {
   if (G.roundEnding) return;
+  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'defuse', by: player.name || 'CT' }); } catch {}
   AudioSys.roundWin();
   announce(byPlayer ? 'BOMB DEFUSED — YOU SAVED THE SITE!' : 'BOMB DEFUSED — CT WINS', 2400);
   bombClearMesh();
   BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
   endRound('ct', 'BOMB DEFUSED');
+}
+// ---- Remote bomb/round application (PvP sync, last-write-wins for bomb) ----
+function applyRemoteBomb(m) {
+  const t = performance.now() / 1000;
+  const act = m.action;
+  if (act === 'plant') {
+    if (BOMB.planted) return;
+    const site = siteByName(m.site || 'A') || SITES[0];
+    BOMB.planted = true; BOMB.site = site.name;
+    BOMB.pos = new THREE.Vector3(m.x || site.x, 0, m.z || site.z);
+    BOMB.carrier = null; BOMB.droppedPos = null;
+    BOMB.plantProgress = 0; BOMB.plantingBot = null;
+    BOMB.explodeAt = t + BOMB_TIMER; BOMB.beepAt = t;
+    BOMB.defuseProgress = 0; BOMB.defuser = null;
+    player.hasBomb = false;
+    spawnBombMesh(BOMB.pos, true);
+    AudioSys.plantedConfirm();
+    announce(`BOMB PLANTED ON ${site.name} — DEFUSE IT!`, 2600);
+    addKillfeed(m.fromName || 'T', m.fromTeam || 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
+    updateBombHUD(t);
+  } else if (act === 'defuse') {
+    if (G.roundEnding) return;
+    bombClearMesh();
+    BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
+    BOMB.defuseProgress = 0; BOMB.defuser = null;
+    AudioSys.roundWin();
+    announce(`BOMB DEFUSED BY ${m.by || m.fromName || 'CT'} — CT WINS`, 2400);
+    endRound('ct', 'BOMB DEFUSED', true);
+  } else if (act === 'drop') {
+    if (BOMB.planted) return;
+    BOMB.droppedPos = new THREE.Vector3(m.x || 0, 0, m.z || 0);
+    BOMB.carrier = null; BOMB.plantProgress = 0; BOMB.plantingBot = null;
+    spawnBombMesh(BOMB.droppedPos, false);
+    announce('BOMB DROPPED', 1400);
+    updateBombHUD(t);
+  } else if (act === 'pickup') {
+    if (BOMB.planted) return;
+    BOMB.droppedPos = null; bombClearMesh();
+    announce(`${m.fromName || 'T'} PICKED UP THE BOMB`, 1200);
+    updateBombHUD(t);
+  } else if (act === 'explode') {
+    if (BOMB.exploded || G.roundEnding) return;
+    explodeBomb(t, m.reason || '💥 BOMB DETONATED', true);
+  }
+}
+function applyRemoteRound(m) {
+  if (m.action === 'start') {
+    // Guest follows host round numbering.
+    if (typeof m.round === 'number' && m.round !== G.round) G.round = m.round;
+    if (!G.roundEnding) return; // already live — ignore duplicate starts
+    startRound(!!m.first, true);
+  } else if (m.action === 'end') {
+    if (G.phase !== 'playing' || G.roundEnding) return;
+    endRound(m.winner || 't', m.reason || '', true);
+  }
 }
 function updateBombHUD(t) {
   const bar = $('bomb-status'), txt = $('bomb-text'), tmr = $('bomb-timer');
@@ -1474,6 +1843,10 @@ function updateBombHUD(t) {
     bar.classList.add('ct');
     txt.innerHTML = `<span class="t">💣 ${BOMB.carrier.short}</span> heading <span class="t">${BOMB.targetSite}</span>`;
     tmr.textContent = 'STOP THE PLANT';
+  } else if (player.hasBomb && !BOMB.planted && (player.team || 'ct') === 't') {
+    bar.classList.add('ct');
+    txt.innerHTML = `<span class="t">💣 YOU</span> — PLANT ON <span class="t">A / B</span>`;
+    tmr.textContent = 'HOLD E IN SITE';
   } else {
     txt.textContent = 'BOMB IN PLAY';
     tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
@@ -1508,6 +1881,7 @@ function botShoot(bot, t, targetPos) {
 // bot per-frame update (defusal-aware: plant / defend / defuse / recover)
 function updateBot(bot, dt, t) {
   const m = bot.mesh;
+  if (isMultiplayer()) return; // pure PvP — bots stay hidden/dead
   if (!bot.alive) return; // CS: no mid-round respawns — wait for next round
   if (isFreeze()) { // frozen: hold position, no thinking/shooting
     m.position.copy(bot.pos);
@@ -1710,9 +2084,9 @@ function updateBomb(dt, t) {
       }
       if (BOMB.light) BOMB.light.intensity = left < 10 ? 3.2 : 1.8;
     }
-    // --- Player defuse (hold E near bomb) ---
+    // --- Player defuse (CT only, hold E near bomb) ---
     let showDefuse = false;
-    if (player.alive && !G.roundEnding) {
+    if (player.alive && !G.roundEnding && (player.team || 'ct') === 'ct') {
       const d = Math.hypot(player.pos.x - BOMB.pos.x, player.pos.z - BOMB.pos.z);
       if (d < 2.8) {
         if (keys['KeyE']) {
@@ -1763,12 +2137,61 @@ function updateBomb(dt, t) {
     updateBombHUD(t);
     return;
   }
+  // --- PvP: T-side player pickup + plant (hold E inside a site) ---
+  if (isOnline() && !BOMB.planted && !G.roundEnding && player.alive && (player.team || 'ct') === 't') {
+    // Pickup dropped bomb by walking over it.
+    if (BOMB.droppedPos && !player.hasBomb) {
+      if (player.pos.distanceTo(BOMB.droppedPos) < 1.8) {
+        player.hasBomb = true; BOMB.droppedPos = null;
+        bombClearMesh();
+        announce('YOU PICKED UP THE BOMB — PLANT ON A OR B (HOLD E)', 1800);
+        AudioSys.plantBeep();
+        try { Net.sendBomb({ action: 'pickup' }); } catch {}
+        updateBombHUD(t);
+      }
+    }
+    // Plant inside either site while holding E and standing still-ish.
+    if (player.hasBomb && !BOMB.planted) {
+      let inSite = null;
+      for (const s of SITES) { if (isInSite(player.pos, s)) { inSite = s; break; } }
+      if (inSite) {
+        // Enemies nearby interrupt (same rule as bots).
+        let enemyClose = false;
+        try {
+          for (const r of Net.remoteList()) {
+            if (!r.alive || (r.team || 't') === 't') continue;
+            const dd = Math.hypot((r.x || 0) - player.pos.x, (r.z || 0) - player.pos.z);
+            if (dd < 12) { enemyClose = true; break; }
+          }
+        } catch {}
+        if (!enemyClose) {
+          if (keys['KeyE']) {
+            BOMB.plantProgress += dt;
+            updateInteractHUD(`PLANTING ON ${inSite.name}…`, BOMB.plantProgress / BOMB_PLANT_TIME, false);
+            if (Math.floor(t * 4) !== Math.floor((t - dt) * 4)) AudioSys.defuseTick(inSite.pos);
+            if (BOMB.plantProgress >= BOMB_PLANT_TIME) {
+              updateInteractHUD(null);
+              plantBombByPlayer(inSite, t);
+              return;
+            }
+            updateBombHUD(t);
+            return;
+          } else {
+            updateInteractHUD(`HOLD E TO PLANT ON ${inSite.name}`, BOMB.plantProgress / BOMB_PLANT_TIME, false);
+            BOMB.plantProgress = Math.max(0, BOMB.plantProgress - dt * 1.5);
+            updateBombHUD(t);
+            return;
+          }
+        }
+      }
+    }
+  }
   // Not planted: show carrier plant progress if actively planting.
   if (BOMB.plantingBot && BOMB.plantingBot.alive && BOMB.plantProgress > 0.05) {
     updateInteractHUD(`BOMB PLANTING ON ${BOMB.targetSite} — STOP THEM!`, BOMB.plantProgress / BOMB_PLANT_TIME, false);
   } else {
     // Player near dropped bomb? Just informational (CT can't pick up).
-    updateInteractHUD(null);
+    if (!(isOnline() && (player.team || 'ct') === 't' && player.hasBomb)) updateInteractHUD(null);
   }
   updateBombHUD(t);
 }
@@ -1813,18 +2236,38 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
   };
 
   // Hit enemy bots (no friendly fire: skip same team and self).
+  // In multiplayer (pure PvP) bots are cleared, so this loop is a no-op — kept for solo.
   for (const b of bots) {
     if (!b.alive) continue;
     if (b.team === shooter.team) continue;
     if (shooter.bot === b) continue;
-    if (shooter.isPlayer && b.team !== 't') continue; // player only fights T
+    if (shooter.isPlayer) {
+      // Solo: player (CT) only fights T. Online: team-based friendly fire off.
+      const myTeam = player.team || 'ct';
+      if (b.team === myTeam) continue;
+    }
     const r = checkPerson(b.pos.x, b.pos.z, b.pos.y);
     if (r && r.d < bestT) { bestT = r.d; hitBot = b; head = r.head; hitPlayer = false; }
   }
+  // Remote real players as hit targets (PvP, team-based, no friendly fire).
+  let hitRemote = null;
+  if (shooter.isPlayer) {
+    try {
+      const myTeam = player.team || 'ct';
+      for (const [rid, e] of remotes) {
+        const rd = e.data; if (!rd || !rd.alive) continue;
+        if ((rd.team || 't') === myTeam) continue; // no friendly fire
+        const r = checkPerson(e.pos.x, e.pos.z, e.pos.y);
+        if (r && r.d < bestT) { bestT = r.d; hitRemote = { id: rid, entry: e }; hitBot = null; head = r.head; hitPlayer = false; }
+      }
+    } catch {}
+  }
   // can bots hit player? + can player hit self? no. Can teammates hit player? no friendly fire.
-  if (!shooter.isPlayer && shooter.team === 't' && player.alive) {
+  if (!shooter.isPlayer && shooter.team !== (player.team || 'ct') && player.alive) {
+    // Bots only damage the local player when on opposite teams (solo CT vs T).
+    // Remote shooters never reach here — they send 'hit' msgs applied victim-side.
     const r = checkPerson(player.pos.x, player.pos.z, player.pos.y);
-    if (r && r.d < bestT) { bestT = r.d; hitPlayer = true; hitBot = null; head = r.head; }
+    if (r && r.d < bestT) { bestT = r.d; hitPlayer = true; hitBot = null; hitRemote = null; head = r.head; }
   }
   // teammates (CT bots) can be hit by... nobody (no friendly fire) — skip.
 
@@ -1842,8 +2285,8 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
     if (shooter.isPlayer) AudioSys.shoot(wdef.sound);
     else AudioSys.shoot(wdef.sound, origin);
     spawnBurst(bombEnd, 0xffd27a, 10, 6, 0.4, 0.1);
-    const shooterName = shooter.isPlayer ? 'YOU' : (shooter.bot ? shooter.bot.short : '???');
-    const shooterTeam = shooter.isPlayer ? 'ct' : shooter.team;
+    const shooterName = shooter.isPlayer ? (player.name || 'YOU') : (shooter.bot ? shooter.bot.short : (shooter.remoteName || '???'));
+    const shooterTeam = shooter.isPlayer ? (player.team || 'ct') : shooter.team;
     addKillfeed(shooterName, shooterTeam, 'DROPPED BOMB', 't', '💥 C4', false);
     explodeBomb(t, '💥 C4 SHOT — DETONATED');
     return { hit: true, d: bombT, bombDetonated: true };
@@ -1880,7 +2323,21 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
   // damage falloff with distance (keeps AWP lethal far, rifles fade)
   const fall = wdef.falloff !== undefined ? wdef.falloff : 0.35;
   const fallK = 1 - fall * clamp(bestT / wdef.range, 0, 1);
-  if (hitBot) {
+  if (hitRemote) {
+    // PvP: shooter predicts the hit locally for feedback, victim applies it.
+    let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.9, 1.1);
+    dmg = Math.round(dmg * 10) / 10;
+    G.hits++; playerHitmark(head, false); AudioSys.hit(head);
+    spawnBurst(end, 0xb00000, head ? 12 : 8, 4, 0.5);
+    try {
+      Net.sendHit({
+        targetId: hitRemote.id, dmg, head,
+        weapon: WEAPONS[player.cur] ? WEAPONS[player.cur].name : 'AK-47',
+      });
+    } catch {}
+    // Optimistic local feedback; authoritative death arrives via 'killed' or snapshot.
+    return { hit: true, d: bestT };
+  } else if (hitBot) {
     let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.9, 1.1);
     damageBot(hitBot, dmg, shooter, head, end);
     return { hit: true, d: bestT };
@@ -1933,9 +2390,9 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
     bot.mesh.position.y = 0.2;
     setTimeout(() => { if (!bot.alive) bot.mesh.visible = false; }, 2500);
     setTimeout(() => { if (bot.mesh) { bot.mesh.rotation.x = 0; } }, 2900);
-    const killerTeam = shooter.isPlayer ? 'ct' : shooter.team;
+    const killerTeam = shooter.isPlayer ? (player.team || 'ct') : shooter.team;
     G.roundKills[killerTeam]++;
-    const kn = killerIsPlayer ? 'YOU' : (shooter.bot ? shooter.bot.short : '???');
+    const kn = killerIsPlayer ? (player.name || 'YOU') : (shooter.bot ? shooter.bot.short : '???');
     const kt = killerTeam;
     addKillfeed(kn, kt, bot.short, bot.team, currentWeaponName(shooter), head);
     if (killerIsPlayer) {
@@ -1963,13 +2420,23 @@ function damagePlayer(dmg, shooter, head) {
   }
   player.hp -= dmg;
   AudioSys.hurt();
-  flashDamage(shooter);
+  try {
+    if (shooter && shooter.remotePos) flashDamageRemote(shooter.remotePos);
+    else flashDamage(shooter);
+  } catch { flashDamage(shooter); }
   updateHUD();
   if (player.hp <= 0) {
     player.hp = 0; player.alive = false; player.deaths++;
     player.aiming = false;
     if (BOMB.defuser === 'player') BOMB.defuser = null;
-    const kn = shooter.bot ? shooter.bot.short : 'Enemy';
+    // PvP T death drops the bomb where we died so teammates can recover it.
+    try {
+      if (isOnline() && player.hasBomb && !BOMB.planted) {
+        player.hasBomb = false;
+        bombDropAt(player.pos, false);
+      }
+    } catch {}
+    const kn = shooter.bot ? shooter.bot.short : (shooter.remoteName || shooter.remote?.data?.name || 'Enemy');
     $('respawn-killer').textContent = kn + (head ? ' (HEADSHOT)' : '');
     $('respawn-timer').textContent = BOMB.planted
       ? 'BOMB IS PLANTED — your team must still defuse it…'
@@ -1983,19 +2450,37 @@ function damagePlayer(dmg, shooter, head) {
     updateSpectateOverlay();
     if (viewmodel) viewmodel.visible = false;
     const killerTeam = shooter.team || 't';
+    const victimTeam = player.team || 'ct';
     G.roundKills[killerTeam]++;
-    addKillfeed(kn, killerTeam, 'YOU', 'ct', currentWeaponName(shooter), head);
+    addKillfeed(kn, killerTeam, player.name || 'YOU', victimTeam, currentWeaponName(shooter), head);
+    // Broadcast victim-authoritative kill so remotes get killfeed + round check.
+    try {
+      if (isOnline() && (shooter.remote || shooter.remoteName)) {
+        Net.sendKilled({
+          killerId: shooter.remote?.data?.id ?? null, killerName: kn, killerTeam,
+          victimId: Net.id, victimName: player.name || 'YOU', victimTeam,
+          weapon: currentWeaponName(shooter), head: !!head,
+        });
+      }
+    } catch {}
     updateHUD(); checkRoundEnd();
   }
 }
 function currentWeaponName(shooter) {
   if (shooter.isPlayer) return WEAPONS[player.cur].name;
+  if (shooter && shooter.weaponName) return shooter.weaponName;
+  if (shooter && shooter.remote && shooter.remote.data && shooter.remote.data.weapon && WEAPONS[shooter.remote.data.weapon]) return WEAPONS[shooter.remote.data.weapon].name;
   return G.round <= 1 ? 'Desert Eagle' : 'AK-47'; // pistol round flavor
 }
 
 function playerNearPlantedBomb(range = 2.8) {
   if (!BOMB.planted || !BOMB.pos) return false;
   return Math.hypot(player.pos.x - BOMB.pos.x, player.pos.z - BOMB.pos.z) < range;
+}
+function playerInPlantSite() {
+  if (!player.alive || BOMB.planted || (player.team || 'ct') !== 't' || !player.hasBomb) return null;
+  for (const s of SITES) { if (isInSite(player.pos, s)) return s; }
+  return null;
 }
 
 // ---------------- Player shooting (CS-style recoil + bloom) ----------------
@@ -2004,6 +2489,7 @@ function playerTryFire(t) {
   if (!player.alive || player.reloading > 0 || t < player.nextShot) return;
   if (isFreeze() || G.roundEnding) return; // CS freeze: no shooting
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
+  if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
   if (w.mag <= 0) { AudioSys.click(300, 0.06, 0.3); player.nextShot = t + 0.3; startReload(); return; }
   if (!def.auto && !mouseJustDown) return;
   // spray reset after pause (tap = accurate again)
@@ -2029,7 +2515,15 @@ function playerTryFire(t) {
   if (vmMuzzle) vmMuzzle.getWorldPosition(muzzleWorld);
   else muzzleWorld.copy(origin);
   spawnTracer(muzzleWorld, origin.clone().add(dir.clone().multiplyScalar(2.2)), def.tracer);
-  fireHitscan({ team: 'ct', isPlayer: true }, origin, dir, def, t);
+  fireHitscan({ team: player.team || 'ct', isPlayer: true }, origin, dir, def, t);
+  // Relay tracer to remotes so they see/hear our shot.
+  try {
+    if (isOnline()) Net.sendShot({
+      ox: origin.x, oy: origin.y, oz: origin.z,
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      weapon: def.name, tracer: def.tracer, sound: def.sound,
+    });
+  } catch {}
   // --- heat up ---
   player.bloom = Math.min(def.bloomMax, player.bloom + def.bloomAdd * (player.aiming ? 0.55 : 1) * moveF);
   // --- true recoil (permanent climb — pull down to compensate) ---
@@ -2307,8 +2801,16 @@ function updateHUD() {
     $('timer').textContent = isFreeze() ? ('❄ ' + G.freezeLeft.toFixed(1)) : fmtTime(G.timeLeft);
     $('timer').classList.toggle('low', !isFreeze() && G.timeLeft < 20);
   }
-  const ctAlive = (player.alive ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
-  const tAlive = bots.filter((b) => b.alive && b.team === 't').length;
+  let ctAlive = (player.alive && (player.team || 'ct') === 'ct' ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
+  let tAlive = (player.alive && player.team === 't' ? 1 : 0) + bots.filter((b) => b.alive && b.team === 't').length;
+  try {
+    if (isOnline()) {
+      for (const r of Net.remoteList()) {
+        if (!r.alive) continue;
+        if ((r.team || 't') === 'ct') ctAlive++; else tAlive++;
+      }
+    }
+  } catch {}
   let phase = '';
   if (isFreeze()) phase = ` · ❄ FREEZE ${G.freezeLeft.toFixed(1)}`;
   else if (isBuyTime()) phase = ` · BUY ${G.buyLeft.toFixed(1)}s`;
@@ -2355,11 +2857,29 @@ function drawMinimap(t) {
   // bots (bomb carrier gets a white ring, spectate target gets a green ring)
   for (const b of bots) {
     if (!b.alive) continue;
+    if (!b.mesh.visible && isMultiplayer()) continue; // hidden PvP bots
     g.fillStyle = b.team === 'ct' ? '#5eb2ff' : '#ff7043';
     g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 3, 0, 7); g.fill();
     if (b.hasBomb) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 5, 0, 7); g.stroke(); }
     if (!player.alive && player.specTarget === b) { g.strokeStyle = '#3dff7a'; g.lineWidth = 2; g.beginPath(); g.arc(px(b.pos.x), pz(b.pos.z), 6, 0, 7); g.stroke(); }
   }
+  // real remote players: white ring = enemy, green ring = spectate target
+  try {
+    if (isOnline()) {
+      for (const [rid, e] of remotes) {
+        const rd = e.data; if (!rd || !rd.alive) continue;
+        g.fillStyle = (rd.team || 't') === 'ct' ? '#5eb2ff' : '#ff7043';
+        g.beginPath(); g.arc(px(e.pos.x), pz(e.pos.z), 3.4, 0, 7); g.fill();
+        g.strokeStyle = (rd.team !== (player.team || 'ct')) ? '#ffffff' : 'rgba(255,255,255,0.4)';
+        g.lineWidth = 1;
+        g.beginPath(); g.arc(px(e.pos.x), pz(e.pos.z), 5, 0, 7); g.stroke();
+        if (!player.alive && player.specTarget && player.specTarget.__remoteId === rid) {
+          g.strokeStyle = '#3dff7a'; g.lineWidth = 2;
+          g.beginPath(); g.arc(px(e.pos.x), pz(e.pos.z), 6.5, 0, 7); g.stroke();
+        }
+      }
+    }
+  } catch {}
   // player arrow (greyed out while spectating)
   const x = px(player.pos.x), y = pz(player.pos.z);
   g.save(); g.translate(x, y); g.rotate(-player.yaw + Math.PI);
@@ -2370,30 +2890,76 @@ function drawMinimap(t) {
 
 // ---------------- Round flow ----------------
 function aliveCounts() {
-  const ct = (player.alive ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
-  const t = bots.filter((b) => b.alive && b.team === 't').length;
+  const myTeam = player.team || 'ct';
+  let ct = ((player.alive && myTeam === 'ct') ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
+  let t = ((player.alive && myTeam === 't') ? 1 : 0) + bots.filter((b) => b.alive && b.team === 't').length;
+  try {
+    if (isOnline()) {
+      for (const r of Net.remoteList()) {
+        if (!r.alive) continue;
+        if ((r.team || 't') === 'ct') ct++; else t++;
+      }
+    }
+  } catch {}
   return { ct, t };
+}
+function isRoundHost() {
+  // Lowest net id hosts round flow + bomb timer to keep clients in sync.
+  try {
+    if (!isOnline() || Net.id == null) return true;
+    for (const r of Net.remoteList()) if (r.id < Net.id) return false;
+    return true;
+  } catch { return true; }
 }
 
 // ---------------- Spectate after death ----------------
-// CS-style: dead players follow a living teammate. Teammates (CT) first,
-// falling back to any living bot so a planted-bomb finish stays watchable.
+// CS-style: dead players follow a living teammate. Teammates first,
+// falling back to any living bot/remote so a planted-bomb finish stays watchable.
+// Online PvP: teammates (same team) first, then any living remote.
+function remoteSpectateProxies(myTeam) {
+  const out = [];
+  try {
+    for (const [rid, e] of remotes) {
+      if (!e.data || !e.data.alive) continue;
+      out.push({
+        __remoteId: rid, __isRemote: true,
+        get pos() { return e.pos; },
+        get yaw() { return e.yaw; },
+        get alive() { return !!(e.data && e.data.alive); },
+        team: e.data.team || 't',
+        short: e.data.name || ('Player' + rid),
+      });
+    }
+  } catch {}
+  // Teammates first for familiar behavior.
+  out.sort((a, b) => ((b.team === myTeam) - (a.team === myTeam)));
+  return out;
+}
 function spectateTargets() {
-  const ct = bots.filter((b) => b.alive && b.team === 'ct');
-  if (ct.length) return ct;
-  return bots.filter((b) => b.alive);
+  const myTeam = player.team || 'ct';
+  const mates = bots.filter((b) => b.alive && b.team === myTeam);
+  const matesR = remoteSpectateProxies(myTeam).filter((r) => r.team === myTeam);
+  if (mates.length || matesR.length) return [...matesR, ...mates];
+  const anyB = bots.filter((b) => b.alive);
+  const anyR = remoteSpectateProxies(myTeam);
+  return [...anyR, ...anyB];
 }
 function spectateCurrent() {
   if (player.alive) return null;
   const list = spectateTargets();
   if (!list.length) { player.specTarget = null; return null; }
-  if (player.specTarget && player.specTarget.alive && list.includes(player.specTarget)) {
-    return player.specTarget;
+  if (player.specTarget && player.specTarget.alive) {
+    // Bots are stable refs; remote proxies are re-created — match by __remoteId.
+    if (list.includes(player.specTarget)) return player.specTarget;
+    if (player.specTarget.__remoteId != null) {
+      const same = list.find((x) => x.__remoteId === player.specTarget.__remoteId);
+      if (same) { player.specTarget = same; return same; }
+    }
   }
   player.specTarget = list[0];
   // Face the same way as the new target so the view doesn't snap wildly.
-  // (player yaw convention is offset by PI from bot mesh yaw.)
-  player.yaw = player.specTarget.yaw + Math.PI;
+  // Bots use mesh yaw (offset by PI from player yaw); remotes already use player yaw.
+  player.yaw = player.specTarget.__isRemote ? player.specTarget.yaw : player.specTarget.yaw + Math.PI;
   player.pitch = 0;
   return player.specTarget;
 }
@@ -2403,6 +2969,14 @@ function applySpectateVisibility() {
     if (!b.alive) continue; // death anim owns dead-bot visibility
     b.mesh.visible = !(cur && player.specMode === 'first' && b === cur);
   }
+  // Hide the spectated remote's own mesh in first-person (we're inside their head).
+  try {
+    for (const [rid, e] of remotes) {
+      if (!e.data || !e.data.alive) continue;
+      if (cur && cur.__remoteId === rid && player.specMode === 'first') e.mesh.visible = false;
+      else if (e.data.alive) e.mesh.visible = true;
+    }
+  } catch {}
 }
 function updateSpectateOverlay() {
   const el = $('spectate-text'), hint = $('spectate-hint');
@@ -2423,9 +2997,12 @@ function spectateNext() {
   if (player.alive) return;
   const list = spectateTargets();
   if (!list.length) { player.specTarget = null; updateSpectateOverlay(); return; }
-  const i = list.indexOf(player.specTarget);
+  let i = list.indexOf(player.specTarget);
+  if (i < 0 && player.specTarget && player.specTarget.__remoteId != null) {
+    i = list.findIndex((x) => x.__remoteId === player.specTarget.__remoteId);
+  }
   player.specTarget = list[(i + 1) % list.length];
-  player.yaw = player.specTarget.yaw + Math.PI;
+  player.yaw = player.specTarget.__isRemote ? player.specTarget.yaw : player.specTarget.yaw + Math.PI;
   player.pitch = 0;
   AudioSys.click(1200, 0.05, 0.25);
   updateSpectateOverlay();
@@ -2490,7 +3067,7 @@ function startMatch() {
   $('hud').classList.remove('hidden');
   lockPointer();
 }
-function startRound(first = false) {
+function startRound(first = false, fromNet = false) {
   const diedLastRound = !first && !player.alive;
   G.roundKills = { ct: 0, t: 0 };
   G.timeLeft = ROUND_TIME; G.buyOpen = false; G.roundEnding = false;
@@ -2505,32 +3082,47 @@ function startRound(first = false) {
       player.armor = 0;
     }
   }
-  // reset actors — defusal spawns: player with CTs east-central, Ts west far.
+  // reset actors — team-aware spawns (CT east-central, T west far).
   player.hp = 100;
   player.alive = true; player.reloading = 0;
   player.specTarget = null;
+  player.hasBomb = false;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
   vmRig.punchP = 0; vmRig.punchY = 0; vmRig.shake = 0; vmRig.fovKick = 0; vmRig.aimK = 0;
-  player.pos.copy(spawns.ct[0]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-1, 1)));
+  {
+    const mySpawns = (player.team || 'ct') === 't' ? spawns.t : spawns.ct;
+    player.pos.copy(mySpawns[0]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-1, 1)));
+  }
   player.vel.set(0, 0, 0); player.yaw = faceCenterYawPlayer(player.pos); player.pitch = 0;
   if (!player.weapons[player.cur].owned) player.cur = player.weapons.deagle.owned ? 'deagle' : SLOT_ORDER.find((k) => player.weapons[k].owned) || 'deagle';
   buildViewmodel(player.cur);
   if (viewmodel) viewmodel.visible = true;
-  for (const b of bots) { resetBot(b); b.mesh.visible = true; }
-  // scatter bots to their spawns (face center) — CTs hold east, Ts push from west.
-  bots.filter((b) => b.team === 'ct').forEach((b, i) => {
-    b.pos.copy(spawns.ct[(i + 1) % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
-    b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
-  });
-  bots.filter((b) => b.team === 't').forEach((b, i) => {
-    b.pos.copy(spawns.t[i % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
-    b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
-  });
+  if (!isMultiplayer()) { for (const b of bots) { resetBot(b); b.mesh.visible = true; } }
+  else { clearBotsForMP(); }
+  // scatter bots to their spawns (face center) — skipped in pure PvP.
+  if (!isMultiplayer()) {
+    bots.filter((b) => b.team === 'ct').forEach((b, i) => {
+      b.pos.copy(spawns.ct[(i + 1) % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
+      b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
+    });
+    bots.filter((b) => b.team === 't').forEach((b, i) => {
+      b.pos.copy(spawns.t[i % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
+      b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
+    });
+  }
+  try { for (const [, e] of remotes) { if (e.data) { e.data.alive = true; e.data.hp = 100; } } } catch {}
   bombResetRound();
+  try { if (isOnline() && (player.team || 'ct') === 't') player.hasBomb = true; } catch {}
   const tSite = BOMB.targetSite || 'A';
-  const carrierName = BOMB.carrier ? BOMB.carrier.short : 'T';
+  const carrierName = BOMB.carrier ? BOMB.carrier.short : ((player.team === 't' && player.hasBomb) ? (player.name || 'YOU') : 'T');
   $('respawn-overlay').classList.add('hidden');
-  announce(first ? `ROUND 1 — PISTOL · T PUSH ${tSite} (${carrierName} HAS BOMB)` : `ROUND ${G.round} — T PUSH ${tSite} · HOLD THE SITES`, 2200);
+  if (isMultiplayer()) {
+    const n = (Net.realPlayers || (remotes.size + 1));
+    announce(first ? `ROUND 1 — PVP - ${n} PLAYERS - NO BOTS (${(player.team || 'ct').toUpperCase()})` : `ROUND ${G.round} — PVP - ${(player.team || 'ct').toUpperCase()} - ${n}P`, 2200);
+  } else {
+    announce(first ? `ROUND 1 — PISTOL - T PUSH ${tSite} (${carrierName} HAS BOMB)` : `ROUND ${G.round} — T PUSH ${tSite} - HOLD THE SITES`, 2200);
+  }
+  try { if (isOnline() && isRoundHost() && !fromNet) Net.sendRound({ action: 'start', round: G.round, first: !!first }); } catch {}
   setTimeout(() => { if (G.phase === 'playing' && isBuyTime() && player.alive && !G.roundEnding && !G.buyOpen) toggleBuy(true); }, 400);
   updateBuyTimer();
   updateHUD();
@@ -2558,12 +3150,13 @@ function checkRoundEnd() {
   else if (t <= 0) endRound('ct', BOMB.droppedPos ? 'T WIPED — SITE HELD' : 'T WIPED');
   else if (ct <= 0) endRound('t', 'CT WIPED');
 }
-function endRound(winner, reason) { // 'ct' | 't' | 'draw'
+function endRound(winner, reason, fromNet = false) { // 'ct' | 't' | 'draw'
   if (G.phase !== 'playing' || G.roundEnding) return;
   G.roundEnding = true;
   if (G.buyOpen) toggleBuy(false);
   updateInteractHUD(null);
   for (const b of bots) { b.planting = false; b.defusing = false; }
+  try { if (isOnline() && !fromNet) Net.sendRound({ action: 'end', winner, reason: reason || '', round: G.round }); } catch {}
   if (winner === 'ct') { G.score.ct++; addMoney(MONEY_WIN); AudioSys.roundWin(); announce((reason || 'ROUND WON') + ' — +$' + MONEY_WIN, 2200); }
   else if (winner === 't') { G.score.t++; addMoney(MONEY_LOSS); AudioSys.roundLose(); announce((reason || 'ROUND LOST') + ' — +$' + MONEY_LOSS, 2200); }
   else { addMoney(MONEY_DRAW); announce((reason || 'DRAW') + ' — +$' + MONEY_DRAW, 1800); }
@@ -2571,6 +3164,13 @@ function endRound(winner, reason) { // 'ct' | 't' | 'draw'
   updateHUD();
   if (G.score.ct >= ROUNDS_TO_WIN_MATCH || G.score.t >= ROUNDS_TO_WIN_MATCH) { endMatch(); return; }
   G.round++;
+  // Online: host drives the next round; guests wait for 'round/start' (plus fallback timer).
+  try {
+    if (isOnline() && !isRoundHost()) {
+      setTimeout(() => { if (G.phase === 'playing' && G.roundEnding) startRound(false, true); }, 3400);
+      return;
+    }
+  } catch {}
   setTimeout(() => { if (G.phase === 'playing') startRound(); }, 3000);
 }
 function endMatch() {
@@ -2579,7 +3179,8 @@ function endMatch() {
   for (const b of bots) if (b.alive) b.mesh.visible = true; // unhide first-person spectate target
   if ($('bomb-status')) $('bomb-status').classList.add('hidden');
   document.exitPointerLock && document.exitPointerLock();
-  const win = G.score.ct > G.score.t;
+  const myTeam = player.team || 'ct';
+  const win = myTeam === 't' ? (G.score.t > G.score.ct) : (G.score.ct > G.score.t);
   $('end-title').textContent = win ? '🏆 VICTORY' : '💀 DEFEAT';
   $('end-title').style.color = win ? '#7dff9a' : '#ff6b6b';
   const acc = G.shots ? Math.round((G.hits / G.shots) * 100) : 0;
@@ -2616,6 +3217,13 @@ function updatePlayer(dt, t) {
     const before = player.specTarget;
     updateSpectate(dt);
     if (player.specTarget !== before) updateSpectateOverlay();
+    try {
+      if (isOnline()) Net.sendState({
+        x: player.pos.x, y: player.pos.y, z: player.pos.z,
+        yaw: player.yaw, pitch: player.pitch, hp: 0, alive: false,
+        weapon: player.cur, aiming: false, moving: false,
+      });
+    } catch {}
     return;
   }
   const frozen = isFreeze();
@@ -2740,6 +3348,14 @@ function updatePlayer(dt, t) {
   const wantGap = 6 + player.bloom * 620 + hSpeed * 1.3 + (player.onGround ? 0 : 9) + (player.aiming ? -2 : 0);
   crossGap += (clamp(wantGap, 5, 46) - crossGap) * Math.min(1, dt * 10);
   // hide spread UI glitch: hide crosshair lines while reloading draw? keep visible
+  // --- multiplayer snapshot out (~20Hz) ---
+  try {
+    if (isOnline()) Net.sendState({
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      yaw: player.yaw, pitch: player.pitch, hp: Math.max(0, Math.round(player.hp)),
+      alive: player.alive, weapon: player.cur, aiming: !!player.aiming, moving: hSpeed > 0.8,
+    });
+  } catch {}
 }
 
 // ---------------- FPS meter ----------------
@@ -2748,7 +3364,15 @@ function fpsTick() {
   fpsAcc += 1; fpsN += 1;
   const now = performance.now();
   if (now - fpsAt > 500) {
-    $('fps-counter').textContent = `${Math.round(fpsAcc * 1000 / (now - fpsAt))} FPS · ${bots.filter((b) => b.alive).length} hostiles up`;
+    const fps = Math.round(fpsAcc * 1000 / (now - fpsAt));
+    if (isMultiplayer()) {
+      const foes = [...remotes.values()].filter((e) => e.data && e.data.alive && (e.data.team !== (player.team || 'ct'))).length;
+      $('fps-counter').textContent = `${fps} FPS · ${foes} enemies (PVP · NO BOTS) · ${Net.realPlayers} online`;
+    } else if (isOnline()) {
+      $('fps-counter').textContent = `${fps} FPS · ${bots.filter((b) => b.alive).length} bots up · alone online`;
+    } else {
+      $('fps-counter').textContent = `${fps} FPS · ${bots.filter((b) => b.alive).length} hostiles up`;
+    }
     fpsAcc = 0; fpsAt = now;
   }
 }
@@ -2785,7 +3409,8 @@ function loop() {
       if (G.buyLeft <= 0 && G.buyOpen) toggleBuy(false);
     }
     updatePlayer(dt, t);
-    for (const b of bots) updateBot(b, dt, t);
+    if (!isMultiplayer()) { for (const b of bots) updateBot(b, dt, t); }
+    try { if (isOnline()) updateRemoteMeshes(dt, t); } catch {}
     updateBomb(dt, t);
     updateEffects(dt, t);
     // HUD: ~4Hz normally, every frame during freeze/buy/bomb countdown for smooth display
@@ -2817,6 +3442,38 @@ function loop() {
 }
 
 // ---------------- Boot ----------------
+function defaultWsUrl() {
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    // Same host, /ws path (server.js). File:// preview falls back to localhost:8080.
+    if (location.protocol.startsWith('http')) return `${proto}://${location.host}/ws`;
+  } catch {}
+  return 'ws://localhost:8080/ws';
+}
+async function connectMultiplayer(statusCb) {
+  const nameEl = document.getElementById('mp-name');
+  const urlEl = document.getElementById('mp-url');
+  const teamEl = document.getElementById('mp-team');
+  const name = (nameEl && nameEl.value ? nameEl.value : ('Player' + ((Math.random() * 900 + 100) | 0))).slice(0, 16);
+  const url = (urlEl && urlEl.value ? urlEl.value.trim() : '') || defaultWsUrl();
+  const wantTeam = (teamEl && teamEl.value) || 'auto';
+  if (statusCb) statusCb('CONNECTING…');
+  try {
+    wireMultiplayer();
+    const r = await Net.connect(url, name, wantTeam);
+    player.team = r.team; player.name = name;
+    if (urlEl) urlEl.value = url;
+    try { localStorage.setItem('h5cs_name', name); localStorage.setItem('h5cs_url', url); } catch {}
+    if (statusCb) statusCb(`ONLINE AS ${r.team.toUpperCase()} · ${Net.realPlayers} PLAYER(S)`);
+    updateMPStatus();
+    return true;
+  } catch (e) {
+    console.warn('mp connect failed', e);
+    if (statusCb) statusCb('CONNECT FAILED — SOLO VS BOTS (' + (e.message || 'no server') + ')');
+    updateMPStatus();
+    return false;
+  }
+}
 function boot() {
   $('loading-note').textContent = 'Building map…';
   initThree();
@@ -2826,6 +3483,16 @@ function boot() {
   for (let i = 0; i < 4; i++) makeBot('ct', i);
   for (let i = 0; i < 4; i++) makeBot('t', i);
   initInput();
+  try { wireMultiplayer(); updateMPStatus(); } catch {}
+  // Restore last MP settings into the menu (if the new MP panel exists).
+  try {
+    const n = localStorage.getItem('h5cs_name'); const u = localStorage.getItem('h5cs_url');
+    if (n && document.getElementById('mp-name')) document.getElementById('mp-name').value = n;
+    if (u && document.getElementById('mp-url')) document.getElementById('mp-url').value = u;
+    else if (document.getElementById('mp-url') && !document.getElementById('mp-url').value) {
+      document.getElementById('mp-url').value = defaultWsUrl();
+    }
+  } catch {}
   updateHUD();
   // click canvas to (re)lock pointer — needed after ESC / buy menu /
   // spectating (browsers only allow pointer lock from a user gesture)
@@ -2840,7 +3507,32 @@ function boot() {
   });
   $('opt-sound').addEventListener('change', (e) => { opts.sound = e.target.checked; });
   $('opt-diff').addEventListener('change', (e) => { opts.difficulty = parseFloat(e.target.value); });
-  $('play-btn').addEventListener('click', () => { AudioSys.init(); startMatch(); });
+  const mpNote = (msg) => {
+    const el = document.getElementById('mp-note');
+    if (el) el.textContent = msg;
+    const ln = $('loading-note');
+    if (ln && msg) ln.textContent = msg;
+  };
+  const soloBtn = document.getElementById('solo-btn');
+  const onlineBtn = document.getElementById('online-btn');
+  if (soloBtn) soloBtn.addEventListener('click', () => {
+    try { Net.disconnect(); for (const id of [...remotes.keys()]) removeRemoteMesh(id); } catch {}
+    player.team = 'ct';
+    AudioSys.init(); startMatch();
+  });
+  if (onlineBtn) onlineBtn.addEventListener('click', async () => {
+    AudioSys.init();
+    onlineBtn.disabled = true;
+    const ok = await connectMultiplayer(mpNote);
+    onlineBtn.disabled = false;
+    // Join regardless (alone-on-server keeps bots until a second human joins).
+    startMatch();
+    if (!ok) mpNote('SERVER UNREACHABLE — PLAYING SOLO VS BOTS');
+  });
+  // Back-compat: old single DEPLOY button (if MP panel missing).
+  const legacyPlay = $('play-btn');
+  if (legacyPlay && !soloBtn) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
+  else if (legacyPlay) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
   $('resume-btn').addEventListener('click', resumeGame);
   $('restart-btn').addEventListener('click', () => { $('pause-menu').classList.add('hidden'); G.phase = 'playing'; startMatch(); });
   $('again-btn').addEventListener('click', () => startMatch());

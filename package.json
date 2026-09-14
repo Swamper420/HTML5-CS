@@ -1,0 +1,14 @@
+{
+  "name": "html5-cs-strike-zone",
+  "version": "1.1.0",
+  "description": "HTML5-CS Strike Zone — browser FPS with bot + multiplayer (no bots when real players are online)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --port 8080"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
