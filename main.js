@@ -397,6 +397,36 @@ const AudioSys = {
     this._tone({ type: 'sine', f0: 95, f1: 45, dur: 0.2, peak: 0.5, decay: 0.18 });
     this._noise({ dur: 0.14, type: 'lowpass', freq: 700, sweepTo: 200, peak: 0.3, decay: 0.13, rate: 0.8 });
   },
+  headpop(pos = null) {
+    // wet skull crunch: sharp crack + pulpy burst + hollow knock — positional
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.07, type: 'highpass', freq: 1800, peak: 0.7, decay: 0.06, rate: 1.4, pos, kind: 'impact' });
+    this._noise({ dur: 0.22, type: 'lowpass', freq: 1400, sweepTo: 220, peak: 0.75, decay: 0.2, rate: 0.9, pos, kind: 'impact' });
+    this._tone({ type: 'sine', f0: 320, f1: 70, dur: 0.14, peak: 0.5, decay: 0.13, pos, kind: 'impact' });
+    this._tone({ type: 'triangle', f0: 900, f1: 300, dur: 0.07, peak: 0.22, decay: 0.06, pos, kind: 'impact', verb: 0.2 });
+    // delayed wet splat as chunks land
+    setTimeout(() => {
+      this._noise({ dur: 0.12, type: 'lowpass', freq: 800, sweepTo: 200, peak: 0.3, decay: 0.11, rate: 0.7, pos, kind: 'impact' });
+    }, 160 + Math.random() * 120);
+  },
+  gib(pos = null, big = false) {
+    // full dismemberment splat: meatier + longer than headpop, with bone rattle
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.1, type: 'highpass', freq: 1200, peak: big ? 0.85 : 0.65, decay: 0.08, rate: 1.2, pos, kind: 'explosion', echo: 0.05 });
+    this._noise({ dur: 0.35, type: 'lowpass', freq: 1100, sweepTo: 150, peak: big ? 0.9 : 0.7, decay: 0.32, rate: 0.8, pos, kind: 'explosion' });
+    this._tone({ type: 'sine', f0: 200, f1: 45, dur: 0.25, peak: 0.55, decay: 0.22, pos, kind: 'explosion' });
+    for (let i = 0; i < (big ? 4 : 2); i++) {
+      this._noise({ dur: 0.06, type: 'bandpass', freq: rand(900, 2400), Q: 1.6, peak: 0.2, decay: 0.055, rate: rand(0.9, 1.3), pos, kind: 'impact', at: rand(0.12, 0.5) });
+    }
+  },
+  helmetHit(pos) {
+    // helmet clatter: hollow metallic tok + ring, positional
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    const s = this._spatial(pos, 'impact');
+    if (s.vol < 0.02) return;
+    this._tone({ type: 'triangle', f0: rand(700, 950), f1: 320, dur: 0.09, peak: 0.28, decay: 0.09, pos, kind: 'impact', verb: 0.25 });
+    this._noise({ dur: 0.04, type: 'highpass', freq: 3000, peak: 0.16, decay: 0.035, rate: 1.4, pos, kind: 'impact' });
+  },
   step(pos = null, sprint = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
     const isSelf = !pos || typeof pos.x !== 'number';
@@ -1557,16 +1587,17 @@ function makeSoldier(team) {
   // head + helmet + eyewear (CT visor / T scarf)
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.32), matSkin);
   head.position.y = 1.76; head.castShadow = true; g.add(head);
-  // jaw / beard shadow for T, clean for CT
+  // jaw / beard shadow for T, clean for CT — kept as refs so head-pops hide them too
+  let beard = null, scarf = null, glass = null;
   if (team === 't') {
-    const beard = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.05),
+    beard = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.05),
       new THREE.MeshStandardMaterial({ color: 0x2e1f12, roughness: 1 }));
     beard.position.set(0, 1.66, 0.16); g.add(beard);
-    const scarf = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, 0.36),
+    scarf = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, 0.36),
       new THREE.MeshStandardMaterial({ color: 0x8a2f22, roughness: 1 }));
     scarf.position.y = 1.56; g.add(scarf);
   } else {
-    const glass = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.05),
+    glass = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.05),
       new THREE.MeshStandardMaterial({ color: 0x0e141c, roughness: 0.15, metalness: 0.8 }));
     glass.position.set(0, 1.79, 0.17); g.add(glass);
   }
@@ -1575,11 +1606,12 @@ function makeSoldier(team) {
   const helmBand = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 0.44), matVest);
   helmBand.position.y = 1.92; g.add(helmBand);
   // CT: NVG mount block. T: cloth tail
+  let nvg = null, tail = null;
   if (team === 'ct') {
-    const nvg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.08), matPad);
+    nvg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.08), matPad);
     nvg.position.set(0, 1.95, 0.24); g.add(nvg);
   } else {
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 0.04), matHelmet);
+    tail = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 0.04), matHelmet);
     tail.position.set(0, 1.86, -0.22); tail.rotation.x = 0.2; g.add(tail);
   }
   // arms with rolled-sleeve cuffs + gloves
@@ -1618,7 +1650,19 @@ function makeSoldier(team) {
   gunG.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   g.add(gunG);
 
-  g.userData = { legL, legR, head, torso, gun: gunG, gunG, team };
+  // head-part registry: everything that vanishes on a head-pop (skull + lid + eyewear).
+  // Stored so ragdoll/gib code can hide them as one unit and restore on round reset.
+  const headParts = [head, helmet, helmBand];
+  if (beard) headParts.push(beard);
+  if (scarf) headParts.push(scarf);
+  if (glass) headParts.push(glass);
+  if (nvg) headParts.push(nvg);
+  if (tail) headParts.push(tail);
+  g.userData = {
+    legL, legR, head, helmet, helmBand, beard, scarf, glass, nvg, tail, headParts,
+    torso, armL, armR, bootL, bootR, vest, pack,
+    gun: gunG, gunG, team, stump: null,
+  };
   return g;
 }
 
@@ -2061,20 +2105,67 @@ function updateRemoteMeshes(dt, t) {
     if (moving) e.walkPhase += dt * 9;
     const sw = moving ? Math.sin(e.walkPhase) * 0.5 : 0;
     try {
-      m.userData.legL.rotation.x = sw; m.userData.legR.rotation.x = -sw;
-      m.position.y = e.pos.y + (moving ? Math.abs(Math.sin(e.walkPhase)) * 0.05 : 0);
-      // Aim-ish gun pitch from remote pitch.
-      if (m.userData.gun) m.userData.gun.rotation.x = clamp(-(r.pitch || 0) * 0.5, -0.6, 0.6);
-      // Muzzle flash blink.
-      const fl = t < e.flashAt ? 1 : 0;
-      m.scale.set(1, 1, 1);
-      void fl;
-      // Dead => fall over like bots.
+      // revive: round reset — restore head/helmet/limbs cleared by goreRemoteDeath
+      if (r.alive && (e.fall || e.headless)) {
+        try { restoreSoldierMesh(m); } catch (err) {}
+        e.fall = null; e.knock = null; e.deathPos = null; e.deathT = 0; e.headless = false; e._thudded = false;
+        m.rotation.set(0, e.yaw + Math.PI, 0);
+      }
+      // Dead => momentum ragdoll like bots (fall away from killer, limbs sprawl).
       if (!r.alive) {
-        if (m.rotation.x > -Math.PI / 2 + 0.05) m.rotation.x -= dt * 6;
-        m.position.y = Math.max(0.2, m.position.y);
+        // snapshot-only death (blast / suicide with no 'killed' gore yet): generic fall + pool
+        if (!e.fall) {
+          try {
+            e.fall = pickFallParams(e.pos, null, 1);
+            e.deathPos = e.pos.clone();
+            e.knock = new THREE.Vector3(rand(-0.4, 0.4), 0, rand(-0.4, 0.4));
+            e.deathT = 0; e._thudded = false; e.headless = false;
+            spawnBloodPool(e.pos.x, e.pos.z, true);
+            poseCorpseLimbs(m, e.fall.sprawl);
+          } catch (err) {}
+        }
+        e.deathT = Math.min(1.6, (e.deathT || 0) + dt);
+        const dk = Math.min(1, e.deathT / 0.55);
+        const dease = 1 - Math.pow(1 - dk, 3);
+        const ef = e.fall || { dirX: 0, dirZ: 1, spin: 0, roll: 0, power: 1 };
+        try {
+          if (e.deathPos && e.knock) {
+            m.position.set(
+              e.deathPos.x + e.knock.x * dease,
+              Math.max(0.12, e.deathPos.y + Math.sin(Math.min(1, dk) * Math.PI) * 0.22 * (ef.power || 1)),
+              e.deathPos.z + e.knock.z * dease
+            );
+            e.pos.set(m.position.x, e.deathPos.y, m.position.z);
+          } else {
+            m.position.y = Math.max(0.2, m.position.y);
+          }
+          const baseYaw = (e.yaw || 0) + Math.PI;
+          const fX = Math.sin(baseYaw), fZ = Math.cos(baseYaw);
+          const fDot = (ef.dirX || 0) * fX + (ef.dirZ || 0) * fZ;
+          const sDot = (ef.dirX || 0) * fZ - (ef.dirZ || 0) * fX;
+          const tip = Math.PI / 2 * 0.95;
+          m.rotation.x = (fDot >= 0 ? tip : -tip) * (0.75 + Math.abs(fDot) * 0.45) * dease;
+          m.rotation.z = clamp(-sDot * tip * 0.9 + (ef.roll || 0), -1.2, 1.2) * dease;
+          m.rotation.y = baseYaw + (ef.spin || 0) * dease;
+          if (e.headless && e.deathT < 0.9 && Math.random() < dt * 14) {
+            try { spawnBurst(new THREE.Vector3(e.pos.x, 1.0 - dease * 0.75, e.pos.z), 0xa00d10, 2, 1.6, 0.4, 0.08); } catch (err) {}
+          }
+          if (!e._thudded && dk >= 1) {
+            e._thudded = true;
+            try { spawnSmoke(new THREE.Vector3(e.pos.x, 0.25, e.pos.z), 0.7, 0.9, 0xbfae8e); } catch (err) {}
+          }
+        } catch (err) {}
+        m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
       } else {
+        // alive: walk swing + gun pitch + ease back upright from any old tip
+        try {
+          m.userData.legL.rotation.x = sw; m.userData.legR.rotation.x = -sw;
+          // don't stomp the ragdoll slide position when alive — ride the lerp pos + bob
+          m.position.y = e.pos.y + (moving ? Math.abs(Math.sin(e.walkPhase)) * 0.05 : 0);
+          if (m.userData.gun) m.userData.gun.rotation.x = clamp(-(r.pitch || 0) * 0.5, -0.6, 0.6);
+        } catch (err) {}
         if (Math.abs(m.rotation.x) > 0.01) m.rotation.x *= Math.max(0, 1 - dt * 6);
+        if (Math.abs(m.rotation.z || 0) > 0.01) m.rotation.z *= Math.max(0, 1 - dt * 6);
         m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
       }
       updateBlob(e, e.pos.x, e.pos.z, !!r.alive, moving);
@@ -2179,7 +2270,22 @@ function wireMultiplayer() {
       // Remote-vs-remote or remote-vs-us killfeed + round check.
       if (m.victimId === Net.id) return; // already handled locally in damagePlayer
       const e = remotes.get(m.victimId);
-      if (e) { e.data.alive = false; e.data.hp = 0; }
+      if (e) {
+        e.data.alive = false; e.data.hp = 0;
+        // gore: head-pop / ragdoll on the victim's mesh, directed away from the killer
+        try {
+          let sdir = null;
+          if (m.killerId === Net.id && typeof camera !== 'undefined' && camera) {
+            sdir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+          } else if (m.killerId != null && remotes.get(m.killerId)) {
+            const k = remotes.get(m.killerId);
+            sdir = new THREE.Vector3(e.pos.x - k.pos.x, 0, e.pos.z - k.pos.z);
+            if (sdir.lengthSq() < 0.01) sdir.set(rand(-1, 1), 0, rand(-1, 1));
+            sdir.normalize();
+          }
+          goreRemoteDeath(e, !!m.head, m.weapon || 'AK-47', sdir);
+        } catch (err) {}
+      }
       addKillfeed(m.killerName || '???', m.killerTeam || 't', m.victimName || '???', m.victimTeam || 'ct', m.weapon || 'AK-47', !!m.head);
       if (m.killerId === Net.id) {
         G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(m.head, true);
@@ -2381,6 +2487,330 @@ function spawnBloodPool(x, z, big = false) {
 function clearDecals() {
   for (const d of decals) { try { scene.remove(d.mesh); d.mesh.geometry.dispose(); d.mesh.material.dispose(); } catch (e) {} }
   decals.length = 0;
+}
+
+// ---------------- Gore: ragdolls, exploding heads, gibs ----------------
+// Design: corpses stay whole (realistic — bullets don't dismember torsos) but
+// fall with momentum away from the shot, limbs sprawl, blood sprays directional.
+// Only heads pop (AWP always, Deagle often, rifles sometimes, HE always gibs):
+// skull + helmet become independent tumbling physics props, neck stump bleeds.
+// HE / point-blank AWP can additionally tear a limb into a flying flesh gib.
+// All gib meshes persist to round end like corpses (capped), reset in startRound.
+const gibs = []; // {mesh, vel, ang, life, restY, bounced, bloodAt, helmet, flesh}
+let _gibMats = null;
+function gibMats() {
+  if (_gibMats) return _gibMats;
+  _gibMats = {
+    flesh: new THREE.MeshStandardMaterial({ color: 0x8a1214, roughness: 0.55 }),
+    fleshD: new THREE.MeshStandardMaterial({ color: 0x5d0b0d, roughness: 0.7 }),
+    bone: new THREE.MeshStandardMaterial({ color: 0xe8ddc4, roughness: 0.6 }),
+    brain: new THREE.MeshStandardMaterial({ color: 0xd98a94, roughness: 0.45 }),
+    helmetCT: new THREE.MeshStandardMaterial({ color: 0x1d2f45, roughness: 0.75 }),
+    helmetT: new THREE.MeshStandardMaterial({ color: 0x6b5a35, roughness: 0.75 }),
+    clothCT: new THREE.MeshStandardMaterial({ color: 0x2e4a6e, roughness: 0.95 }),
+    clothT: new THREE.MeshStandardMaterial({ color: 0x8a6f42, roughness: 0.95 }),
+  };
+  return _gibMats;
+}
+function clearGibs() {
+  for (const gib of gibs) {
+    try { scene.remove(gib.mesh); } catch (e) {}
+    try { if (gib.mesh.geometry) gib.mesh.geometry.dispose(); } catch (e) {}
+    // materials are shared via gibMats() — do not dispose
+  }
+  gibs.length = 0;
+  // hide neck stumps parented to corpses (reused next round via userData.stump)
+  try {
+    for (const b of bots) {
+      if (b.mesh && b.mesh.userData && b.mesh.userData.stump) {
+        try { b.mesh.userData.stump.visible = false; } catch (e) {}
+      }
+    }
+    for (const [, e] of remotes) {
+      if (e.mesh && e.mesh.userData && e.mesh.userData.stump) {
+        try { e.mesh.userData.stump.visible = false; } catch (err) {}
+      }
+    }
+  } catch (e) {}
+}
+function capGibs() {
+  const cap = opts.quality ? 40 : 18;
+  while (gibs.length > cap) {
+    const old = gibs.shift();
+    try { scene.remove(old.mesh); } catch (e) {}
+    try { if (old.mesh.geometry) old.mesh.geometry.dispose(); } catch (e) {}
+  }
+}
+function spawnGibMesh(mesh, pos, vel, go = {}) {
+  mesh.position.copy(pos);
+  mesh.castShadow = true;
+  scene.add(mesh);
+  gibs.push({
+    mesh,
+    vel: vel.clone(),
+    ang: new THREE.Vector3(rand(-11, 11), rand(-11, 11), rand(-11, 11)),
+    life: 30, // persist to round end; startRound clears
+    restY: go.restY !== undefined ? go.restY : 0.09,
+    bounced: 0,
+    bloodAt: 0,
+    flesh: !!go.flesh,
+    helmet: !!go.helmet,
+    silent: !!go.silent,
+  });
+  capGibs();
+  return mesh;
+}
+// directional arterial spray: red particles + dark mist + ground spatter along shot dir
+function spawnBloodSpray(pos, dir, power = 1) {
+  try {
+    const n = opts.quality ? Math.round(10 * power) + 6 : 6;
+    spawnBurst(pos, 0xb00000, n, 4.5 * power, 0.5, 0.09);
+    spawnBurst(pos, 0x7a0a0c, Math.max(3, n >> 1), 2.4 * power, 0.7, 0.12);
+    const mist = pos.clone();
+    if (dir) mist.addScaledVector(dir, 0.5);
+    mist.y = Math.max(0.3, mist.y - 0.15);
+    spawnSmoke(mist, 0.3 * power, 0.7, 0x8a1518);
+    // fling a few physical blood-flesh droplets that arc and stain where they land
+    const droplets = opts.quality ? Math.round(4 * power) : 2;
+    for (let i = 0; i < droplets; i++) {
+      const m = gibMats();
+      const chunk = new THREE.Mesh(
+        new THREE.BoxGeometry(rand(0.05, 0.1), rand(0.04, 0.08), rand(0.05, 0.1)),
+        Math.random() < 0.5 ? m.flesh : m.fleshD
+      );
+      const v = new THREE.Vector3(rand(-1, 1), rand(0.4, 1.4), rand(-1, 1)).normalize()
+        .multiplyScalar(rand(2, 4.5 * power));
+      if (dir) v.addScaledVector(dir, rand(1, 3 * power));
+      v.y += rand(1, 2.5 * power);
+      spawnGibMesh(chunk, pos, v, { flesh: true, restY: 0.05 });
+    }
+  } catch (e) {}
+}
+// skull + brain + helmet explosion at head position. Hides headParts on the corpse,
+// adds a bleeding neck stump, launches helmet as a clattering projectile.
+function explodeHead(mesh, headWorldPos, shotDir, power = 1, team = 't') {
+  try {
+    const ud = mesh.userData || {};
+    const parts = ud.headParts || (ud.head ? [ud.head] : []);
+    for (const p of parts) { try { if (p) p.visible = false; } catch (e) {} }
+    // neck stump so the corpse doesn't look hollow
+    try {
+      if (!ud.stump) {
+        const stump = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.09, 0.11, 0.16, 8),
+          new THREE.MeshStandardMaterial({ color: 0x6d0d0f, roughness: 0.6 })
+        );
+        stump.position.set(0, 1.58, 0);
+        mesh.add(stump);
+        ud.stump = stump;
+      } else {
+        ud.stump.visible = true;
+      }
+    } catch (e) {}
+    const M = gibMats();
+    // red mist core + brain-matter burst + bone shards
+    spawnBurst(headWorldPos, 0xc01418, opts.quality ? 18 : 8, 5 * power, 0.6, 0.11);
+    spawnBurst(headWorldPos, 0xff6a6a, opts.quality ? 8 : 4, 3 * power, 0.5, 0.09);
+    spawnSmoke(headWorldPos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.5 * power, 0.8, 0x7a0f12);
+    // skull shards (pale) + brain blobs (pink) as tumbling physics
+    const nBone = opts.quality ? 5 : 3, nBrain = opts.quality ? 5 : 2;
+    for (let i = 0; i < nBone; i++) {
+      const s = rand(0.04, 0.09);
+      const shard = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.6, s * 0.8), M.bone);
+      const v = new THREE.Vector3(rand(-1, 1), rand(0.5, 1.5), rand(-1, 1)).normalize().multiplyScalar(rand(2.5, 6 * power));
+      if (shotDir) v.addScaledVector(shotDir, rand(1.5, 4 * power));
+      v.y += rand(1.5, 3.5);
+      spawnGibMesh(shard, headWorldPos, v, { flesh: true, restY: 0.04 });
+    }
+    for (let i = 0; i < nBrain; i++) {
+      const s = rand(0.06, 0.12);
+      const blob = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.8, s), M.brain);
+      const v = new THREE.Vector3(rand(-1, 1), rand(0.2, 1.2), rand(-1, 1)).normalize().multiplyScalar(rand(2, 5 * power));
+      if (shotDir) v.addScaledVector(shotDir, rand(1, 3 * power));
+      v.y += rand(1, 3);
+      spawnGibMesh(blob, headWorldPos, v, { flesh: true, restY: 0.05 });
+    }
+    // flesh slabs from the scalp/jaw
+    for (let i = 0; i < (opts.quality ? 4 : 2); i++) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(rand(0.07, 0.13), rand(0.05, 0.09), rand(0.07, 0.12)), M.flesh);
+      const v = new THREE.Vector3(rand(-1, 1), rand(0.4, 1.3), rand(-1, 1)).normalize().multiplyScalar(rand(2.5, 5.5 * power));
+      if (shotDir) v.addScaledVector(shotDir, rand(1.5, 3.5 * power));
+      v.y += rand(1.2, 3);
+      spawnGibMesh(slab, headWorldPos, v, { flesh: true, restY: 0.06 });
+    }
+    // helmet launches separately — spins, bounces, clatters
+    try {
+      const helm = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.18, 0.42), team === 'ct' ? M.helmetCT : M.helmetT);
+      const hv = new THREE.Vector3(rand(-1, 1), 1, rand(-1, 1)).normalize().multiplyScalar(rand(3, 5.5 * power));
+      if (shotDir) hv.addScaledVector(shotDir, rand(2, 4.5 * power));
+      hv.y += rand(2.5, 4.5);
+      spawnGibMesh(helm, headWorldPos.clone().add(new THREE.Vector3(0, 0.25, 0)), hv, { helmet: true, restY: 0.1 });
+    } catch (e) {}
+    // ground gore: big pool + spatter along shot dir
+    try {
+      spawnBloodPool(headWorldPos.x, headWorldPos.z, true);
+      const d = shotDir ? shotDir.clone().setY(0).normalize() : new THREE.Vector3(1, 0, 0);
+      for (let i = 0; i < 3; i++) {
+        spawnDecal('blood',
+          new THREE.Vector3(headWorldPos.x + d.x * (0.8 + i * 0.7) + rand(-0.4, 0.4), 0.06, headWorldPos.z + d.z * (0.8 + i * 0.7) + rand(-0.4, 0.4)),
+          new THREE.Vector3(0, 1, 0), 0.9 + Math.random() * 0.7, 0.6);
+      }
+    } catch (e) {}
+    try { AudioSys.headpop(headWorldPos); } catch (e) {}
+  } catch (e) {}
+}
+// tear a limb into a flying flesh gib (HE / close AWP). Hides one arm or leg proxy-wise:
+// we keep the rig intact but spawn a cloth-covered flesh chunk as the "torn" limb.
+function tearLimbGib(victimPos, shotDir, team, big = false) {
+  try {
+    const M = gibMats();
+    const origin = new THREE.Vector3(victimPos.x + rand(-0.2, 0.2), rand(0.7, 1.3), victimPos.z + rand(-0.2, 0.2));
+    const n = big ? (opts.quality ? 4 : 2) : (opts.quality ? 2 : 1);
+    for (let i = 0; i < n; i++) {
+      const isCloth = Math.random() < 0.5;
+      const chunk = new THREE.Mesh(
+        new THREE.BoxGeometry(rand(0.14, 0.2), rand(0.3, 0.45), rand(0.14, 0.18)),
+        isCloth ? (team === 'ct' ? M.clothCT : M.clothT) : M.flesh
+      );
+      const v = new THREE.Vector3(rand(-1, 1), rand(0.6, 1.4), rand(-1, 1)).normalize().multiplyScalar(rand(3, big ? 8 : 6));
+      if (shotDir) v.addScaledVector(shotDir, rand(2, 5));
+      v.y += rand(2, big ? 5 : 4);
+      spawnGibMesh(chunk, origin, v, { flesh: true, restY: 0.12 });
+    }
+    spawnBloodSpray(origin, shotDir, big ? 1.6 : 1.1);
+    try { AudioSys.gib(origin, big); } catch (e) {}
+  } catch (e) {}
+}
+function restoreSoldierMesh(mesh) {
+  try {
+    const ud = mesh.userData || {};
+    const parts = ud.headParts || [];
+    for (const p of parts) { try { if (p) p.visible = true; } catch (e) {} }
+    if (ud.head) { try { ud.head.rotation.set(0, 0, 0); } catch (e) {} }
+    if (ud.torso) { try { ud.torso.rotation.set(0, 0, 0); } catch (e) {} }
+    if (ud.legL) { try { ud.legL.rotation.set(0, 0, 0); } catch (e) {} }
+    if (ud.legR) { try { ud.legR.rotation.set(0, 0, 0); } catch (e) {} }
+    if (ud.armL) { try { ud.armL.rotation.set(-0.55, 0, 0); } catch (e) {} }
+    if (ud.armR) { try { ud.armR.rotation.set(-0.55, 0, 0); } catch (e) {} }
+    if (ud.gunG) { try { ud.gunG.visible = true; } catch (e) {} }
+    if (ud.stump) { try { ud.stump.visible = false; } catch (e) {} }
+    mesh.rotation.set(0, mesh.rotation.y || 0, 0);
+  } catch (e) {}
+}
+// physics for helmets / skull / flesh: gravity + bounce + blood stain on rest
+function updateGibs(dt) {
+  for (let i = 0; i < gibs.length; i++) {
+    const gib = gibs[i];
+    try {
+      gib.vel.y -= 20 * dt;
+      gib.mesh.position.addScaledVector(gib.vel, dt);
+      gib.mesh.rotation.x += gib.ang.x * dt;
+      gib.mesh.rotation.y += gib.ang.y * dt;
+      gib.mesh.rotation.z += gib.ang.z * dt;
+      const p = gib.mesh.position;
+      if (p.y < gib.restY) {
+        p.y = gib.restY;
+        if (Math.abs(gib.vel.y) > 1.6 && gib.bounced < 3) {
+          gib.bounced++;
+          gib.vel.y *= gib.helmet ? -0.45 : -0.32;
+          gib.vel.x *= 0.55; gib.vel.z *= 0.55;
+          gib.ang.multiplyScalar(0.5);
+          if (gib.helmet) { try { AudioSys.helmetHit(p); } catch (e) {} }
+          else if (gib.flesh && Math.random() < 0.6) {
+            try { spawnDecal('blood', new THREE.Vector3(p.x, 0.06, p.z), new THREE.Vector3(0, 1, 0), 0.5 + Math.random() * 0.5, 0.5); } catch (e) {}
+          }
+        } else {
+          gib.vel.set(0, 0, 0);
+          gib.ang.set(0, 0, 0);
+          // bleed-out stain once when coming to rest
+          if (gib.flesh && !gib._stained) {
+            gib._stained = true;
+            try { spawnDecal('blood', new THREE.Vector3(p.x, 0.06, p.z), new THREE.Vector3(0, 1, 0), 0.7 + Math.random() * 0.6, 0.55); } catch (e) {}
+          }
+        }
+      } else if (gib.flesh && gib.mesh.position.y > 0.5) {
+        // blood trail while airborne
+        gib.bloodAt -= dt;
+        if (gib.bloodAt <= 0) {
+          gib.bloodAt = 0.07;
+          try { spawnBurst(gib.mesh.position, 0x9a0d10, 1, 0.8, 0.4, 0.07); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+}
+// where should this corpse fall? Away from the shooter, with randomness.
+// Returns {axis(x/z tip), yawSpin, power} consumed by updateDeadBots / remote dead anim.
+function pickFallParams(botPos, shotDir, power = 1) {
+  const d = shotDir ? shotDir.clone().setY(0) : new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1));
+  if (d.lengthSq() < 0.01) d.set(rand(-1, 1), 0, rand(-1, 1));
+  d.normalize();
+  return {
+    dirX: d.x, dirZ: d.z,
+    spin: rand(-0.9, 0.9) * power,
+    roll: rand(-0.45, 0.45),
+    power: clamp(power, 0.6, 2.2),
+    sprawl: Math.random(),
+  };
+}
+function poseCorpseLimbs(mesh, sprawl) {
+  // random sprawl so every corpse rests differently: arms flung, knees bent, head lolled
+  try {
+    const ud = mesh.userData || {};
+    const a = 0.9 + sprawl * 0.9;
+    if (ud.armL) { ud.armL.rotation.set(-0.55 + rand(-a, a * 0.4), 0, rand(-1.1, 1.1)); }
+    if (ud.armR) { ud.armR.rotation.set(-0.55 + rand(-a, a * 0.4), 0, rand(-1.1, 1.1)); }
+    if (ud.legL) { ud.legL.rotation.x = rand(-0.25, 0.35); }
+    if (ud.legR) { ud.legR.rotation.x = rand(-0.25, 0.35); }
+    if (ud.torso) { ud.torso.rotation.y = rand(-0.3, 0.3); }
+    // drop the world gun beside the body (it stays parented but tips with the corpse)
+    if (ud.gunG && Math.random() < 0.35) { ud.gunG.rotation.z = rand(-0.5, 0.5); }
+  } catch (e) {}
+}
+// PvP gore for a remote player's mesh: same rules as bots (head-pop odds by weapon),
+// but driven by the network 'killed' event (authoritative victim) rather than damageBot.
+function goreRemoteDeath(entry, head, weaponLabel, shotDir) {
+  if (!entry || !entry.mesh) return;
+  try {
+    if (entry.fall) return; // already gored (snapshot transition may fire twice)
+    const wName = String(weaponLabel || (entry.data && entry.data.weapon) || 'AK-47').toUpperCase();
+    const isFire = wName.includes('MOLOTOV');
+    const explosive = !isFire && (wName.includes('HE') || wName.includes('C4'));
+    const isAWP = wName.includes('AWP');
+    const isDeagle = wName.includes('DESERT') || wName.includes('DEAGLE') || wName.includes('EAGLE');
+    let power = explosive ? 2.1 : isAWP ? 2.0 : isDeagle ? 1.4 : 1.0;
+    if (head) power += 0.15;
+    const sdir = shotDir ? shotDir.clone() : null;
+    entry.fall = pickFallParams(entry.pos, sdir, power);
+    entry.deathPos = entry.pos.clone();
+    const slideDist = explosive ? rand(0.9, 1.6) : isAWP ? rand(0.7, 1.2) : isDeagle ? rand(0.45, 0.8) : rand(0.3, 0.65);
+    const flat = sdir ? sdir.clone().setY(0) : new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1));
+    if (flat.lengthSq() < 0.01) flat.set(rand(-1, 1), 0, rand(-1, 1));
+    flat.normalize();
+    entry.knock = flat.multiplyScalar(slideDist);
+    entry.deathT = 0; entry._thudded = false; entry.headless = false;
+    const team = (entry.data && entry.data.team) || 't';
+    const headPos = new THREE.Vector3(entry.pos.x, entry.pos.y + 1.76, entry.pos.z);
+    let pop = false, popPower = 1;
+    if (explosive) {
+      pop = Math.random() < 0.75; popPower = 1.7;
+      tearLimbGib(entry.pos, sdir, team, true);
+    } else if (head) {
+      if (isAWP) { pop = true; popPower = 1.7; }
+      else if (isDeagle) { pop = Math.random() < 0.65; popPower = 1.3; }
+      else { pop = Math.random() < 0.25; popPower = 1.0; }
+    }
+    if (pop) {
+      entry.headless = true;
+      try { explodeHead(entry.mesh, headPos, sdir, popPower, team); } catch (e) {}
+    } else {
+      try { spawnBloodSpray(head ? headPos : new THREE.Vector3(entry.pos.x, entry.pos.y + 1.1, entry.pos.z), sdir, head ? 1.2 : power); } catch (e) {}
+      try { spawnBloodPool(entry.pos.x, entry.pos.z, true); } catch (e) {}
+      if (head) { try { AudioSys.headpop(headPos); } catch (e) {} }
+    }
+    try { poseCorpseLimbs(entry.mesh, entry.fall.sprawl); } catch (e) {}
+    entry.mesh.visible = true;
+  } catch (e) {}
 }
 
 function spawnTracer(a, b, color) {
@@ -2697,6 +3127,7 @@ function updateEffects(dt, t = 0) {
     }
   } catch (e) {}
   try { updateDeadBots(dt); } catch (e) {}
+  try { updateGibs(dt); } catch (e) {}
   // ---- viewmodel springs (recoil feel) ----
   if (vmBase && vmKickG) {
     // kick spring: stiff spring back to 0
@@ -2789,14 +3220,50 @@ function updateBlob(entry, x, z, alive, moving) {
   } catch (e) {}
 }
 // staged death fall: fast tip-over -> ground thud dust -> settle (corpses persist to round end)
+// momentum ragdoll: corpse is knocked along the bullet/blast, tips over onto
+// its back/front/side (biased by shot dir vs facing), limbs sprawl, then rests.
+// Headless corpses (head-pop) keep the stump hidden-face and bleed out.
 function updateDeadBots(dt) {
   for (const b of bots) {
     if (b.alive || !b.mesh.visible) continue;
-    b.deathT = Math.min(1.4, (b.deathT || 0) + dt);
-    const k = Math.min(1, b.deathT / 0.45);
+    b.deathT = Math.min(1.6, (b.deathT || 0) + dt);
+    const k = Math.min(1, b.deathT / 0.55);
     const ease = 1 - Math.pow(1 - k, 3);
-    b.mesh.rotation.x = -Math.PI / 2 * ease;
-    b.mesh.position.y = 0.2 * ease + Math.sin(Math.min(1, k) * Math.PI) * 0.12;
+    const fall = b.fall || { dirX: 0, dirZ: 1, spin: 0, roll: 0, power: 1 };
+    try {
+      // knockback slide + hop: fast out, friction stop
+      if (b.deathPos && b.knock) {
+        const slide = 1 - ease;
+        b.mesh.position.set(
+          b.deathPos.x + b.knock.x * ease,
+          Math.max(0.12, Math.sin(Math.min(1, k) * Math.PI) * 0.22 * (fall.power || 1)),
+          b.deathPos.z + b.knock.z * ease
+        );
+        // keep logical pos glued to the corpse so blood pools / bomb drops line up
+        b.pos.set(b.mesh.position.x, 0, b.mesh.position.z);
+        void slide;
+      } else {
+        b.mesh.position.y = 0.2 * ease + Math.sin(Math.min(1, k) * Math.PI) * 0.12;
+      }
+      // tip-over: forward/back from shot-vs-facing + sideways roll + yaw spin
+      const fwdX = Math.sin(b.yaw || 0), fwdZ = Math.cos(b.yaw || 0);
+      const fwdDot = (fall.dirX || 0) * fwdX + (fall.dirZ || 0) * fwdZ;
+      const sideDot = (fall.dirX || 0) * fwdZ - (fall.dirZ || 0) * fwdX;
+      const tipMag = Math.PI / 2 * (0.92 + Math.min(0.35, (fall.power || 1) * 0.1));
+      // falling forward (shot from behind) pitches face-down (+x), from front falls back
+      const targetRX = (fwdDot >= 0 ? tipMag : -tipMag) * (0.75 + Math.abs(fwdDot) * 0.45);
+      const targetRZ = clamp(-sideDot * tipMag * 0.9 + (fall.roll || 0), -1.2, 1.2);
+      b.mesh.rotation.x = targetRX * ease;
+      b.mesh.rotation.z = targetRZ * ease;
+      b.mesh.rotation.y = (b.yaw || 0) + (fall.spin || 0) * ease;
+      // headless stump: keep neck bleeding briefly after landing
+      if (b.headless && b.deathT < 0.9 && Math.random() < dt * 14) {
+        try {
+          const sp = new THREE.Vector3(b.pos.x, 1.0 - ease * 0.75, b.pos.z);
+          spawnBurst(sp, 0xa00d10, 2, 1.6, 0.4, 0.08);
+        } catch (e) {}
+      }
+    } catch (e) {}
     if (!b._thudded && k >= 1) {
       b._thudded = true;
       try { spawnSmoke(new THREE.Vector3(b.pos.x, 0.25, b.pos.z), 0.7, 0.9, 0xbfae8e); } catch (e) {}
@@ -2841,6 +3308,7 @@ function resetBot(bot) {
   bot.yaw = faceCenterYaw(bot.pos);
   bot.hp = 100; bot.alive = true;
   bot.flinchT = 0; bot.flinchHead = false; bot.deathT = 0; bot._thudded = false;
+  bot.headless = false; bot.gibbed = false; bot.fall = null; bot.knock = null; bot.deathPos = null;
   bot.wp = waypoints.length ? randPick(waypoints).clone() : bot.pos.clone();
   bot.target = null; bot.state = 'roam'; bot.mesh.visible = true;
   bot.hasBomb = false; bot.planting = false; bot.defusing = false;
@@ -2849,6 +3317,7 @@ function resetBot(bot) {
   bot.siteOffset.set(rand(-2, 2), 0, rand(-2, 2));
   // CTs split to guard A/B; T objective assigned per-round in bombResetRound().
   if (bot.team === 'ct') bot.guardSite = bot.idx % 2 === 0 ? 'A' : 'B';
+  try { restoreSoldierMesh(bot.mesh); } catch (e) {}
   bot.mesh.rotation.set(0, bot.yaw, 0);
   bot.mesh.position.copy(bot.pos);
   try { if (bot.blob) { bot.blob.visible = true; bot.blob.position.set(bot.pos.x, 0.02, bot.pos.z); } } catch (e) {}
@@ -3175,7 +3644,7 @@ function botShoot(bot, t, targetPos) {
   const dir = targetPos.clone().sub(from).normalize();
   dir.x += rand(-spread, spread); dir.y += rand(-spread, spread); dir.z += rand(-spread, spread);
   dir.normalize();
-  fireHitscan({ team: bot.team, isPlayer: false, bot }, from, dir, { damage: 11 * diff, headMult: 2.2, range: 90, tracer: 0xff9a5c, sound: 'rifle' }, t);
+  fireHitscan({ team: bot.team, isPlayer: false, bot }, from, dir, { name: 'AK-47', damage: 11 * diff, headMult: 2.2, range: 90, tracer: 0xff9a5c, sound: 'rifle' }, t);
   bot.flashAt = t + 0.05;
 }
 
@@ -3918,7 +4387,10 @@ function explodeDamage(pos, radius, baseDmg, owner, weaponLabel) {
     const shooter = owner.isPlayer
       ? { team: oTeam, isPlayer: true, weaponName: weaponLabel }
       : { team: oTeam, isPlayer: false, bot: owner.bot || null, weaponName: weaponLabel };
-    damageBot(b, dmg, shooter, false, target);
+    try {
+      const bdir = target.clone().sub(pos).normalize();
+      damageBot(b, dmg, shooter, false, target, { dir: bdir, weapon: weaponLabel, explosive: true, power: 2.1 });
+    } catch (e) { damageBot(b, dmg, shooter, false, target); }
   }
   // local player (victim-authoritative: applies for ANY owner's blast we simulate)
   if (player.alive && G.phase === 'playing') {
@@ -4444,7 +4916,10 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
     return { hit: true, d: bestT };
   } else if (hitBot) {
     let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.9, 1.1);
-    damageBot(hitBot, dmg, shooter, head, end);
+    try {
+      const wk = (wdef && wdef.name) || currentWeaponName(shooter);
+      damageBot(hitBot, dmg, shooter, head, end, { dir: dir.clone(), weapon: wk });
+    } catch (e) { damageBot(hitBot, dmg, shooter, head, end); }
     return { hit: true, d: bestT };
   } else if (hitPlayer) {
     let dmg = wdef.damage * fallK * (head ? 2.0 : 1) * rand(0.85, 1.1);
@@ -4473,18 +4948,36 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
   return { hit: false, d: bestT };
 }
 
-function damageBot(bot, dmg, shooter, head, hitPos) {
+function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
   if (!bot.alive || G.phase !== 'playing') return;
   // armor-lite: bots have no armor
   bot.hp -= dmg;
   const _hp = hitPos || botChest(bot);
+  // resolve shot direction for directional gore (bullet travel dir, horizontal-ish)
+  let _sdir = gore.dir || null;
+  try {
+    if (!_sdir) {
+      if (shooter && shooter.isPlayer && typeof camera !== 'undefined' && camera) {
+        _sdir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      } else if (shooter && shooter.bot) {
+        _sdir = bot.pos.clone().sub(shooter.bot.pos).setY(0);
+        if (_sdir.lengthSq() < 0.01) _sdir.set(rand(-1, 1), 0, rand(-1, 1));
+        _sdir.normalize();
+      } else if (shooter && (shooter.remotePos || (shooter.remote && shooter.remote.pos))) {
+        const rp = shooter.remotePos || shooter.remote.pos;
+        _sdir = new THREE.Vector3(bot.pos.x - rp.x, 0, bot.pos.z - rp.z);
+        if (_sdir.lengthSq() < 0.01) _sdir.set(rand(-1, 1), 0, rand(-1, 1));
+        _sdir.normalize();
+      }
+    }
+  } catch (e) { _sdir = null; }
   spawnBurst(_hp, 0xb00000, head ? 12 : 8, 4, 0.5);
   spawnBurst(_hp, 0x7a0a0c, 6, 2.5, 0.7, 0.12); // dark arterial spray
   // directional mist + ground spatter so firefights stain the lane
   try {
-    const d = shooter && shooter.isPlayer && camera
+    const d = _sdir ? _sdir.clone() : (shooter && shooter.isPlayer && camera
       ? new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
-      : (shooter && shooter.bot ? shooter.bot.pos.clone().sub(bot.pos).setY(0).normalize() : new THREE.Vector3(1, 0, 0));
+      : (shooter && shooter.bot ? shooter.bot.pos.clone().sub(bot.pos).setY(0).normalize() : new THREE.Vector3(1, 0, 0)));
     const mist = _hp.clone().addScaledVector(d, 0.5); mist.y = Math.max(0.3, mist.y - 0.2);
     spawnSmoke(mist, 0.3, 0.7, 0x8a1518);
     if (Math.random() < 0.5) spawnDecal('blood', new THREE.Vector3(bot.pos.x, 0.06, bot.pos.z), new THREE.Vector3(0, 1, 0), 0.9 + Math.random() * 0.7, 0.55);
@@ -4514,14 +5007,69 @@ function damageBot(bot, dmg, shooter, head, hitPos) {
       // Reassign remaining Ts to recover it.
       for (const o of bots) if (o.alive && o.team === 't') o.wp.copy(objectiveWaypoint(o));
     }
-    // death: crumple + persistent corpse with blood pool (CS elimination — cleared next round)
+    // death: momentum ragdoll + persistent corpse with blood pool (cleared next round)
     bot.deathT = 0; bot._thudded = false;
-    bot.mesh.rotation.x = 0;
-    bot.mesh.position.y = 0;
+    bot.headless = false; bot.gibbed = false;
+    bot.mesh.rotation.set(0, bot.yaw || 0, 0);
+    bot.mesh.position.copy(bot.pos);
     try {
-      spawnBloodPool(bot.pos.x, bot.pos.z, true);
-      spawnBurst(botChest(bot), 0x8a0f12, 14, 3.5, 0.8, 0.12);
-    } catch (e) {}
+      const wName = String((gore && gore.weapon) || (shooter && shooter.weaponName) || currentWeaponName(shooter) || '').toUpperCase();
+      const isFire = wName.includes('MOLOTOV') || wName.includes('FIRE') || wName.includes('BURN');
+      const explosive = !isFire && (!!(gore && gore.explosive) || wName.includes('HE') || wName.includes('C4'));
+      const isAWP = wName.includes('AWP');
+      const isDeagle = wName.includes('DESERT') || wName.includes('DEAGLE') || wName.includes('EAGLE');
+      const sdir = _sdir ? _sdir.clone() : null;
+      // knock power scales the fall + slide: AWP/HE hurl bodies, rifles shove
+      let power = (gore && gore.power) || 1;
+      if (power === 1) {
+        if (explosive) power = 2.1;
+        else if (isAWP) power = 2.0;
+        else if (isDeagle) power = 1.4;
+        else power = 1.0;
+      }
+      if (head) power += 0.15;
+      bot.fall = pickFallParams(bot.pos, sdir, power);
+      bot.deathPos = bot.pos.clone();
+      const slideDist = explosive ? rand(0.9, 1.6) : (isAWP ? rand(0.7, 1.2) : isDeagle ? rand(0.45, 0.8) : rand(0.3, 0.65));
+      const flat = sdir ? sdir.clone().setY(0) : new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1));
+      if (flat.lengthSq() < 0.01) flat.set(rand(-1, 1), 0, rand(-1, 1));
+      flat.normalize();
+      bot.knock = flat.multiplyScalar(slideDist);
+      // ---- exploding head? ----
+      let pop = false, popPower = 1;
+      const headPos = new THREE.Vector3(bot.pos.x, (bot.pos.y || 0) + 1.76, bot.pos.z);
+      if (explosive) {
+        // blastsGib: heads pop most of the time, limbs always tear
+        pop = Math.random() < 0.75;
+        popPower = 1.7;
+        tearLimbGib(bot.pos, sdir, bot.team, true);
+        bot.gibbed = true;
+      } else if (head) {
+        if (isAWP || dmg >= 90) { pop = true; popPower = 1.7; }
+        else if (isDeagle) { pop = Math.random() < 0.65; popPower = 1.3; }
+        else { pop = dmg >= 60 ? Math.random() < 0.5 : Math.random() < 0.22; popPower = 1.0; }
+      } else if (isAWP && Math.random() < 0.3) {
+        // close-range AWP body shots can still tear a limb off
+        tearLimbGib(bot.pos, sdir, bot.team, false);
+        bot.gibbed = true;
+      }
+      if (pop) {
+        bot.headless = true;
+        try { explodeHead(bot.mesh, headPos, sdir, popPower, bot.team); } catch (e) {}
+      } else {
+        // intact death: directional spray + pool + chest burst
+        try { spawnBloodSpray(head ? headPos : botChest(bot), sdir, head ? 1.2 : power); } catch (e) {}
+        spawnBloodPool(bot.pos.x, bot.pos.z, true);
+        spawnBurst(botChest(bot), 0x8a0f12, 14, 3.5, 0.8, 0.12);
+        if (head) { try { AudioSys.headpop(headPos); } catch (e) {} }
+      }
+      try { poseCorpseLimbs(bot.mesh, bot.fall.sprawl); } catch (e) {}
+    } catch (e) {
+      try {
+        spawnBloodPool(bot.pos.x, bot.pos.z, true);
+        spawnBurst(botChest(bot), 0x8a0f12, 14, 3.5, 0.8, 0.12);
+      } catch (e2) {}
+    }
     const killerTeam = shooter.isPlayer ? (player.team || 'ct') : shooter.team;
     G.roundKills[killerTeam]++;
     const kn = killerIsPlayer ? (player.name || 'YOU') : (shooter.bot ? shooter.bot.short : '???');
@@ -5365,6 +5913,7 @@ function startRound(first = false, fromNet = false) {
   try {
     clearDecals();
     clearNades();
+    try { clearGibs(); } catch (e2) {}
     for (const arr of [tracers, particles, smokes, shockwaves, worldFlashes, debrisChunks]) {
       for (const e of arr) { try { scene.remove(e.mesh); } catch (err) {} }
       arr.length = 0;
