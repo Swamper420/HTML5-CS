@@ -5,6 +5,7 @@
 // runs on clients with host (lowest id) authoritative for round flow.
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +29,19 @@ function parsePort() {
   return 8080;
 }
 const PORT = parsePort();
+// Bind address. Behind a reverse proxy (nginx/Caddy doing TLS) use HOST=127.0.0.1.
+const HOST = process.env.HOST || '0.0.0.0';
+// Set TRUST_PROXY=1 only when a reverse proxy you control sets X-Forwarded-For.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+// Send HSTS only when the site is served over HTTPS (HSTS=1).
+const HSTS = process.env.HSTS === '1';
+// Comma-separated extra WebSocket origins allowed to connect, e.g. "https://game.example.org".
+// Same-host pages are always allowed.
+const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean));
+// Extra CSP connect-src entries if players should reach relays on other hosts (e.g. "wss://relay.example.org").
+const CSP_CONNECT_EXTRA = (process.env.CSP_CONNECT_EXTRA || '').replace(/[^\w:/.\-* ]/g, '');
+const MAX_CLIENTS = Math.max(1, parseInt(process.env.MAX_CLIENTS || '32', 10) || 32);
+const MAX_PER_IP = Math.max(1, parseInt(process.env.MAX_PER_IP || '4', 10) || 4);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -39,32 +53,145 @@ const MIME = {
   '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg',
   '.wav': 'audio/wav',
+  '.txt': 'text/plain; charset=utf-8',
 };
+
+// Public files only. Anything not matched here (server.js, package*.json, *.md,
+// node_modules, .git, backups, editor swap files...) is never served.
+const PUBLIC_RULES = [
+  /^\/index\.html$/,
+  /^\/style\.css$/,
+  /^\/(main|net)\.js$/,
+  /^\/js\/[A-Za-z0-9_-]+\.js$/,
+  /^\/vendor\/[A-Za-z0-9._-]+\.(js|txt)$/,
+  /^\/sounds\/[A-Za-z0-9._-]+\.(mp3|ogg|wav|txt)$/,
+  /^\/favicon\.ico$/,
+];
+const ROOT = fs.realpathSync(__dirname);
+
+// CSP: the only inline script is the importmap in index.html; hash it at startup
+// so editing index.html never silently breaks the page.
+function buildCsp() {
+  let hashes = '';
+  try {
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+    let mm;
+    while ((mm = re.exec(html))) {
+      hashes += ` 'sha256-${crypto.createHash('sha256').update(mm[1], 'utf8').digest('base64')}'`;
+    }
+  } catch {}
+  return [
+    "default-src 'none'",
+    `script-src 'self'${hashes}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
+    `connect-src 'self'${CSP_CONNECT_EXTRA ? ' ' + CSP_CONNECT_EXTRA : ''}`,
+    "font-src 'self'",
+    "worker-src 'self' blob:",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+  ].join('; ');
+}
+const CSP = buildCsp();
+
+function securityHeaders(extra = {}) {
+  const h = {
+    'Content-Security-Policy': CSP,
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    ...extra,
+  };
+  if (HSTS) h['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+  return h;
+}
+
+function plain(res, code, text) {
+  res.writeHead(code, securityHeaders({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }));
+  res.end(text);
+}
 
 const server = http.createServer((req, res) => {
   try {
-    let urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.setHeader('Allow', 'GET, HEAD');
+      plain(res, 405, 'method not allowed'); return;
+    }
+    let urlPath;
+    try { urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname); }
+    catch { plain(res, 400, 'bad request'); return; }
     if (urlPath === '/') urlPath = '/index.html';
-    // Never serve dotfiles / .git / traversals
-    if (urlPath.includes('..') || urlPath.includes('/.git') || /(^|\/)\./.test(urlPath)) {
-      res.writeHead(403); res.end('forbidden'); return;
+    if (urlPath.includes('\0') || urlPath.includes('..') || !PUBLIC_RULES.some((r) => r.test(urlPath))) {
+      plain(res, 404, 'not found'); return;
     }
-    const filePath = path.normalize(path.join(__dirname, urlPath.slice(1)));
-    if (!filePath.startsWith(__dirname)) { res.writeHead(403); res.end('forbidden'); return; }
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-      res.writeHead(404); res.end('not found'); return;
-    }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
-    fs.createReadStream(filePath).pipe(res);
-  } catch (e) {
-    res.writeHead(500); res.end('server error');
+    let filePath;
+    try { filePath = fs.realpathSync(path.join(ROOT, urlPath.slice(1))); }
+    catch { plain(res, 404, 'not found'); return; }
+    // Block symlinks that point outside the game folder.
+    if (!filePath.startsWith(ROOT + path.sep)) { plain(res, 404, 'not found'); return; }
+    const st = fs.statSync(filePath);
+    if (!st.isFile()) { plain(res, 404, 'not found'); return; }
+    const ext = path.extname(filePath);
+    res.writeHead(200, securityHeaders({
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Content-Length': st.size,
+      'Cache-Control': ext === '.mp3' || urlPath.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-cache',
+    }));
+    if (req.method === 'HEAD') { res.end(); return; }
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
+  } catch {
+    try { plain(res, 500, 'server error'); } catch { res.destroy(); }
   }
 });
+// Slowloris / idle-connection limits.
+server.headersTimeout = 10_000;
+server.requestTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 50;
+server.on('clientError', (err, socket) => { try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch {} });
+
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (xff) return xff;
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+const ipCounts = new Map();
+
+function originAllowed(req) {
+  const origin = req.headers.origin;
+  if (!origin) return false; // browsers always send Origin on WebSocket upgrades
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
 
 // No per-message compression: tiny JSON packets gain nothing and deflate adds latency.
-const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false, maxPayload: 64 * 1024 });
+const wss = new WebSocketServer({
+  server, path: '/ws', perMessageDeflate: false, maxPayload: 16 * 1024,
+  verifyClient: ({ req }, done) => {
+    if (!originAllowed(req)) return done(false, 403, 'forbidden origin');
+    if (clients.size >= MAX_CLIENTS) return done(false, 503, 'server full');
+    if ((ipCounts.get(clientIp(req)) || 0) >= MAX_PER_IP) return done(false, 429, 'too many connections');
+    done(true);
+  },
+});
+
+// Strip control chars and bidi overrides so names/chat can't spoof UI or logs.
+const cleanText = (s, max) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, max);
 
 let nextId = 1;
+const RATE_PER_SEC = 120; // sustained messages/second per client
+const RATE_BURST = 240;
 // Dropped weapons on the floor: wid -> { wid, key, mag, reserve, x, y, z, ry, at }.
 // The server arbitrates pickups so two players can never grab the same gun.
 const drops = new Map();
@@ -114,22 +241,35 @@ function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const ip = clientIp(req);
+  ipCounts.set(ip, (ipCounts.get(ip) || 0) + 1);
   const id = nextId++;
-  const client = { ws, id, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true, lastStateAt: 0, lastChatAt: 0, lastRoundAt: 0 };
+  const client = { ws, id, ip, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true, lastStateAt: 0, lastChatAt: 0, lastRoundAt: 0,
+    tokens: RATE_BURST, lastRefill: Date.now(), strikes: 0 };
   try { ws._socket.setNoDelay(true); } catch {} // never let Nagle batch game packets
   ws.on('pong', () => { client.alive = true; });
   clients.set(id, client);
   console.log(`[+] client ${id} connected (${clients.size} online)`);
 
   ws.on('message', (buf) => {
+    // Token bucket: normal play is ~30-60 msg/s; floods get dropped, then kicked.
+    const nowR = Date.now();
+    client.tokens = Math.min(RATE_BURST, client.tokens + ((nowR - client.lastRefill) / 1000) * RATE_PER_SEC);
+    client.lastRefill = nowR;
+    if (client.tokens < 1) {
+      if (++client.strikes > 200) { try { ws.close(1008, 'rate limit'); } catch {} }
+      return;
+    }
+    client.tokens -= 1;
     let m;
     try { m = JSON.parse(buf.toString()); } catch { return; }
-    client.lastSeen = Date.now();
+    if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.type !== 'string') return;
+    client.lastSeen = nowR;
 
     switch (m.type) {
       case 'hello': {
-        const cleanName = String(m.name || `Player${id}`).replace(/[<>&"']/g, '').trim().slice(0, 16) || `Player${id}`;
+        const cleanName = cleanText(m.name || `Player${id}`, 64).replace(/[<>&"'`\\]/g, '').trim().slice(0, 16) || `Player${id}`;
         client.name = cleanName;
         const name = cleanName;
         if (!client.team) client.team = pickTeam(m.wantTeam); // once-guard — no mid-match team flips
@@ -184,7 +324,7 @@ wss.on('connection', (ws) => {
           yaw: +m.yaw || 0, pitch: +m.pitch || 0,
           hp: Math.max(0, Math.min(100, +m.hp || 100)),
           alive: !!m.alive,
-          weapon: String(m.weapon || 'deagle').slice(0, 12),
+          weapon: String(m.weapon || 'deagle').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12),
           aiming: !!m.aiming,
           moving: !!m.moving,
           crouch: !!m.crouch,                      // crouched hull / lowered hitbox
@@ -206,7 +346,10 @@ wss.on('connection', (ws) => {
         // Rate-limited: 1 round msg / 2s per client to stop fake-win spam.
         if (Date.now() - client.lastRoundAt < 2000 && m.action === 'end') break;
         client.lastRoundAt = Date.now();
+        if (m.action !== 'start' && m.action !== 'end') break;
         if (m.action === 'start') {
+          // Only the round host (lowest connected id) may start/reset rounds.
+          if (id !== Math.min(...clients.keys())) break;
           const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k);
           if (m.first || (typeof m.round === 'number' && m.round <= 1)) { match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
           else if (typeof m.round === 'number' && m.round > 0) match.round = m.round;
@@ -214,7 +357,7 @@ wss.on('connection', (ws) => {
         } else if (m.action === 'end') {
           const r = typeof m.round === 'number' && Number.isFinite(m.round) ? Math.max(1, Math.min(30, Math.floor(m.round))) : match.round;
           if (m.winner !== 'ct' && m.winner !== 't' && m.winner !== 'draw') break;
-          if (typeof m.reason === 'string') m.reason = m.reason.slice(0, 80);
+          if (typeof m.reason === 'string') m.reason = cleanText(m.reason, 80); else delete m.reason;
           if (r !== match.scoredRound && r >= match.round) {
             if (m.winner === 'ct') match.ct++;
             else if (m.winner === 't') match.t++;
@@ -238,7 +381,7 @@ wss.on('connection', (ws) => {
         if (m.type === 'chat') {
           if (Date.now() - client.lastChatAt < 800) break;
           client.lastChatAt = Date.now();
-          m.text = String(m.text || '').slice(0, 200);
+          m.text = cleanText(m.text || '', 200);
         }
         if (m.type === 'hit' && m.dmg !== undefined) {
           const d = +m.dmg;
@@ -266,6 +409,8 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     clients.delete(id);
+    const left = (ipCounts.get(ip) || 1) - 1;
+    if (left > 0) ipCounts.set(ip, left); else ipCounts.delete(ip);
     if (!clients.size) { drops.clear(); match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
     console.log(`[-] client ${id} left (${clients.size} online)`);
     broadcast({ type: 'player_left', id, realPlayers: clients.size });
@@ -319,7 +464,7 @@ function listenOn(port, attemptsLeft = 10) {
     server.on('error', (e) => console.error('[server] error:', e?.message || e));
     const addr = server.address();
     const actual = (addr && typeof addr === 'object' && addr.port) || port;
-    console.log(`HTML5-CS server on http://localhost:${actual}  (ws://localhost:${actual}/ws)`);
+    console.log(`HTML5-CS server on http://${HOST}:${actual}  (ws path /ws, max ${MAX_CLIENTS} players, ${MAX_PER_IP}/IP)`);
     console.log('Rule: clients disable bots when 2+ real players are online.');
   };
   const wrappedErr = (err) => {
@@ -328,6 +473,6 @@ function listenOn(port, attemptsLeft = 10) {
   };
   server.once('error', wrappedErr);
   server.once('listening', onListen);
-  server.listen(port);
+  server.listen(port, HOST);
 }
 listenOn(PORT);

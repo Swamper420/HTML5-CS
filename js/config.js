@@ -1,7 +1,7 @@
 // js/config.js — AGENTS: all tunable game data lives here.
 // ADD weapons/nades here (or via registerWeapon/registerNade) — don't touch combat code.
 // Ownership: WEAPONS, NADE_DEFS, map/economy/bomb timings, movement constants.
-// Pure data only: no player, no THREE, no DOM. Mutable round state (BOMB object) stays in main.js.
+// Pure data only: no player, no THREE, no DOM. Mutable round state (BOMB object) lives in bomb.js.
 
 export const WEAPONS = {
   ak:     { name: 'AK-47', slot: 0, damage: 26, headMult: 3.5, magSize: 30, startReserve: 90, fireInterval: 0.105, reloadTime: 2.4,

@@ -1,0 +1,190 @@
+// js/shooting.js — AGENTS: Player weapon handling: CS-style recoil/bloom/spray, fire, reload, weapon switching.
+// Ownership: playerTryFire, startReload, finishReload, switchWeapon, currentWeaponName.
+
+import * as THREE from 'three';
+import { Net } from '../net.js';
+import { AudioSys } from './audio.js';
+import { CROUCH_EYE_DROP, EYE, NADE_DEFS, SPRAY_AK, WEAPONS, isNadeKey } from './config.js';
+import { $, clamp, rand } from './utils.js';
+import { soldierFireKick } from './anim.js';
+import { updateInteractHUD } from './bomb.js';
+import { fireHitscan, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
+import { spawnShell, spawnSmoke, spawnTracer } from './effects.js';
+import { announce, updateHUD } from './hud.js';
+import { mouseJustDown, rmbJustDown, setCrossGap, setMouseJustDown, setRmbJustDown } from './input.js';
+import { isOnline } from './multiplayer.js';
+import { DUAL } from './pickups.js';
+import { playerMesh } from './playerbody.js';
+import { camera } from './render.js';
+import { G, isFreeze, keys, player } from './state.js';
+import { buildViewmodel, vmFlashGroup, vmL, vmMuzzle, vmRig } from './viewmodel.js';
+
+export function playerTryFire(t, hand = 'R') {
+  // nades never reach the hitscan path — they prime/throw instead
+  if (isNadeKey(player.cur)) return;
+  const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
+  if (!w || !def) return;
+  const dual = !!w.dual;
+  if (hand === 'L' && !dual) return;
+  const left = hand === 'L';
+  const magKey = left ? 'mag2' : 'mag', nextKey = left ? 'nextShotL' : 'nextShot';
+  const justDown = left ? rmbJustDown : mouseJustDown;
+  if (!player.alive || player.reloading > 0 || t < (player[nextKey] || 0)) return;
+  if (isFreeze() || G.roundEnding) return; // CS freeze: no shooting
+  if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
+  if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
+  if (w[magKey] <= 0) {
+    AudioSys.click(300, 0.06, 0.3); player[nextKey] = t + 0.3;
+    if (!dual || (w.mag <= 0 && (w.mag2 | 0) <= 0)) startReload();
+    return;
+  }
+  if (!def.auto && !justDown) return;
+  // spray reset after pause (tap = accurate again)
+  if (t - player.lastShotT > 0.5) { player.sprayIdx = 0; }
+  player[nextKey] = t + def.fireInterval;
+  player.lastShotT = t;
+  w[magKey]--; G.shots++;
+  // --- spread: base + heat bloom + movement + air ---
+  const hSpeed = Math.hypot(player.vel.x, player.vel.z);
+  const moveF = 1 + clamp(hSpeed / 5, 0, 1) * (wkey === 'awp' ? 2.2 : wkey === 'p90' ? 0.45 : 1.1) * (dual ? DUAL.moveMul : 1);
+  const airF = player.onGround ? 1 : player.wallRun ? (wkey === 'awp' ? 3 : 1.5) : (wkey === 'awp' ? 5 : 2.2);
+  const crouchF = player.onGround ? 1 - 0.3 * (player.crouch || 0) : 1; // crouched = steadier
+  const aimK = vmRig.aimK || 0;
+  const spreadBase = dual ? def.spreadHip * DUAL.spreadMul + DUAL.spreadAdd : def.spreadHip + (def.spreadAim - def.spreadHip) * aimK;
+  const bloomNow = player.bloom;
+  const spread = (spreadBase + bloomNow) * moveF * airF * crouchF;
+  // punch + shake are applied to the camera, so shoot from the *punched* view
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  dir.x += rand(-spread, spread); dir.y += rand(-spread, spread); dir.z += rand(-spread, spread);
+  dir.normalize();
+  setCrossGap(clamp(6 + spread * 950 + bloomNow * 550, 6, 46));
+  const origin = new THREE.Vector3(player.pos.x, player.pos.y + EYE - CROUCH_EYE_DROP * (player.crouch || 0), player.pos.z).add(dir.clone().multiplyScalar(0.4));
+  if (dual) origin.addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion), left ? -0.16 : 0.16);
+  const muzzleObj = left && vmL ? vmL.muzzle : vmMuzzle;
+  const flashObj = left && vmL ? vmL.flash : vmFlashGroup;
+  const muzzleWorld = new THREE.Vector3();
+  if (muzzleObj) muzzleObj.getWorldPosition(muzzleWorld);
+  else muzzleWorld.copy(origin);
+  spawnTracer(muzzleWorld, origin.clone().add(dir.clone().multiplyScalar(2.2)), def.tracer);
+  fireHitscan({ team: player.team || 'ct', isPlayer: true }, origin, dir, def, t);
+  // Relay tracer to remotes so they see/hear our shot.
+  try {
+    if (isOnline()) Net.sendShot({
+      ox: origin.x, oy: origin.y, oz: origin.z,
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      weapon: def.name, tracer: def.tracer, sound: def.sound,
+    });
+  } catch {}
+  // --- heat up ---
+  player.bloom = Math.min(def.bloomMax * (dual ? DUAL.bloomMaxMul : 1), player.bloom + def.bloomAdd * (dual ? DUAL.bloomMul : 1) * (player.aiming ? 0.55 : 1) * moveF * (1 - 0.3 * (player.crouch || 0)));
+  // --- true recoil (permanent climb — pull down to compensate) ---
+  let patX = 0, patY = 1;
+  if (wkey === 'ak') {
+    const p = SPRAY_AK[Math.min(player.sprayIdx, SPRAY_AK.length - 1)];
+    patX = p[0]; patY = p[1];
+  } else if (wkey === 'deagle') { patX = rand(-0.5, 0.5); patY = 1; }
+  else if (wkey === 'p90') { patX = Math.sin(player.sprayIdx * 0.9) * 0.6 + rand(-0.3, 0.3); patY = player.sprayIdx < 8 ? 1 : 0.55; }
+  else { patX = rand(-0.4, 0.4); patY = 1; }
+  const aimMul = (player.aiming ? (wkey === 'awp' ? 0.85 : 0.62) : 1) * (player.onGround ? 1 - 0.15 * (player.crouch || 0) : 1);
+  // first bullet is the accurate one
+  const firstMul = player.sprayIdx === 0 ? 0.85 : 1;
+  if (dual) {
+    // two guns bucking out of sync: big climb, and each gun whips the view toward its own side
+    const heat = 1 + clamp(player.sprayIdx / 6, 0, 1.2);
+    player.pitch += def.kickUp * DUAL.kickUpMul * rand(0.55, 1.45) * heat;
+    player.yaw += rand(-def.kickSide, def.kickSide) * DUAL.kickSideMul * heat + (left ? 1 : -1) * DUAL.whip * rand(0.6, 1.3) * (def.kickUp / 0.0115 * 0.35 + 0.65);
+    vmRig.roll += (left ? -1 : 1) * DUAL.roll * rand(0.6, 1.2);
+  } else {
+  player.pitch += def.kickUp * patY * aimMul * firstMul;
+  player.yaw += (rand(-def.kickSide, def.kickSide) + patX * def.kickSide * 0.9) * aimMul;
+  }
+  player.pitch = clamp(player.pitch, -1.45, 1.45);
+  player.sprayIdx++;
+  // --- recoverable punch / shake / fov (game feel, springs back) ---
+  vmRig.punchP += def.punch * (player.aiming ? 0.6 : 1);
+  vmRig.punchY += rand(-def.punch, def.punch) * 0.4;
+  vmRig.shake += def.shake;
+  vmRig.fovKick += def.fovPunch * (player.aiming ? 0.4 : 1);
+  // --- viewmodel spring kick + flash + shell + smoke ---
+  soldierFireKick(playerMesh, 0.85);
+  if (left) { vmRig.kickVL += def.vmKick * 19; vmRig.kickRotVL += def.punch * 12; vmRig.shake += def.shake; }
+  else { vmRig.kickV += def.vmKick * (dual ? 19 : 15) * (player.aiming ? 0.65 : 1); vmRig.kickRotV += def.punch * (dual ? 12 : 9); if (dual) vmRig.shake += def.shake; }
+  if (flashObj) {
+    for (const f of flashObj.children) {
+      f.material.opacity = 1;
+      f.rotation.z = Math.random() * Math.PI * 2;
+      const s = (wkey === 'awp' ? 1.9 : wkey === 'deagle' ? 1.35 : wkey === 'p90' ? 0.75 : 1.0) * rand(0.9, 1.15);
+      f.scale.set(s, s, 1);
+    }
+  }
+  if (muzzleObj) {
+    const mp = new THREE.Vector3(); muzzleObj.getWorldPosition(mp);
+    if (wkey !== 'awp' || !player.aiming) spawnSmoke(mp, wkey === 'awp' ? 0.3 : 0.18, 0.55);
+    // eject brass to the right
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const ejectP = mp.addScaledVector(right, -0.06).addScaledVector(up, -0.03);
+    spawnShell(ejectP, right, up, fwd);
+  }
+  if (wkey === 'awp') {
+    vmRig.boltT = 0.45;
+    setTimeout(() => AudioSys.mech(), 320);
+  }
+  if (left) setRmbJustDown(false); else setMouseJustDown(false);
+  if (w.mag === 0 && (!dual || (w.mag2 | 0) === 0)) setTimeout(() => startReload(), 260);
+  updateHUD();
+}
+export function startReload() {
+  if (isNadeKey(player.cur)) return;
+  const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
+  if (!w || !def) return;
+  const needMag = (def.magSize - w.mag) + (w.dual ? def.magSize - (w.mag2 | 0) : 0);
+  if (player.reloading > 0 || needMag <= 0 || w.reserve <= 0 || !player.alive) return;
+  const rt = def.reloadTime * (w.dual ? DUAL.reloadMul : 1);
+  player.reloading = rt; player.reloadDur = rt;
+  player.sprayIdx = 0;
+  AudioSys.reload();
+  $('reload-tip').classList.remove('hidden');
+}
+export function finishReload() {
+  if (isNadeKey(player.cur)) { player.reloading = 0; return; }
+  const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
+  if (!w || !def) { player.reloading = 0; return; }
+  const need = def.magSize - w.mag, take = Math.min(need, w.reserve);
+  w.mag += take; w.reserve -= take;
+  if (w.dual) { const t2 = Math.min(def.magSize - (w.mag2 | 0), w.reserve); w.mag2 = (w.mag2 | 0) + t2; w.reserve -= t2; }
+  player.reloading = 0;
+  player.bloom = 0;
+  $('reload-tip').classList.add('hidden');
+  updateHUD();
+}
+export function switchWeapon(key) {
+  if (!player.alive) return;
+  if (isNadeKey(key)) {
+    if ((player.nades[key] || 0) <= 0) { announce(`${NADE_DEFS[key].name} EMPTY — PRESS B`, 1100); AudioSys.dryfire(); return; }
+    if (player.cur === key) return;
+    player.last = player.cur; player.cur = key;
+    player.cook = null;
+    player.reloading = 0; $('reload-tip').classList.add('hidden');
+    player.bloom = 0; player.sprayIdx = 0; player.aiming = false;
+    buildViewmodel(key);
+    AudioSys.pin();
+    updateHUD();
+    return;
+  }
+  if (!player.weapons[key] || !player.weapons[key].owned || player.cur === key) return;
+  player.last = player.cur; player.cur = key;
+  player.cook = null;
+  try { updateInteractHUD(null); } catch (e) {}
+  player.reloading = 0; $('reload-tip').classList.add('hidden');
+  player.bloom = 0; player.sprayIdx = 0;
+  // You cannot carry a sight picture through a weapon swap — dropping ADS also
+  // stops the new gun snapping straight to its aim pose with no raise animation.
+  player.aiming = false;
+  buildViewmodel(key);
+  AudioSys.click(1200, 0.05, 0.3);
+  setTimeout(() => AudioSys.click(900, 0.05, 0.25), 120);
+  updateHUD();
+}
+
