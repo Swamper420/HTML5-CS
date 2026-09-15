@@ -32,6 +32,7 @@
   </div>
 
   <div id="bomb-status" class="hidden"><span id="bomb-icon">💣</span><span id="bomb-text">BOMB</span><span id="bomb-timer"></span></div>
+  <div id="pickup-hint" class="hidden"></div>
   <div id="interact-bar" class="hidden">
     <div id="interact-label">PLANTING…</div>
     <div class="interact-track"><div id="interact-fill"></div></div>
@@ -48,8 +49,11 @@
   <div id="scope-overlay" class="hidden"><div id="scope-circle"></div></div>
   <div id="damage-vignette"></div>
   <div id="heal-flash"></div>
+  <canvas id="flash-after"></canvas>
+  <div id="smoke-screen"></div>
   <div id="flash-overlay"></div>
   <div id="burn-overlay"></div>
+  <div id="gore-overlay"></div>
   <div id="direction-indicator"></div>
 
   <div id="bottom-bar">
@@ -60,9 +64,8 @@
     </div>
     <div id="weapon-panel">
       <div id="weapon-slots">
-        <div class="wslot" data-slot="0"><b>1</b><span>AK-47</span></div>
-        <div class="wslot" data-slot="1"><b>2</b><span>Deagle</span></div>
-        <div class="wslot" data-slot="2"><b>3</b><span>AWP</span></div>
+        <div class="wslot" data-slot="primary"><b>1</b><span>PRIMARY</span></div>
+        <div class="wslot" data-slot="pistol"><b>2</b><span>Deagle</span></div>
       </div>
       <div id="nade-slots">
         <div class="nslot" data-nade="he"><b>4</b><span>HE</span><i>×0</i></div>
@@ -86,27 +89,38 @@
   <div id="announce" class="hidden"></div>
   <div id="fps-counter">60 FPS</div>
   <div id="mp-status" class="offline">OFFLINE — SOLO VS BOTS</div>
-  <div id="hint-bar">WASD move · SHIFT sprint · SPACE jump · R reload · 1/2/3 guns · 4/5/6/7 nades (LMB throw, hold HE/Flash to cook, RMB underhand) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · <b>C</b> crouch · SPACE jump · <b>W+jump at a wall</b> wall run (SPACE to wall-jump) · R reload · <b>X</b> drop gun · <b>E</b> pick up / dual wield · 1 primary · 2 pistol · 4/5/6/7 nades (release to throw: LMB far, RMB short, both medium) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
 </div>
 
-<!-- Buy menu -->
-<div id="buy-menu" class="hidden">
-  <h2>BUY MENU <span class="key">B</span></h2>
-  <div class="buy-money">Funds: <span id="buy-money">$800</span> · <span id="buy-timer">BUY TIME 5.0s</span></div>
-  <div class="buy-grid">
-    <button class="buy-item" data-buy="ak"><b>[1] AK-47</b><span>$2500 · rifle</span></button>
-    <button class="buy-item" data-buy="awp"><b>[2] AWP</b><span>$4750 · sniper</span></button>
-    <button class="buy-item" data-buy="deagle"><b>[3] Desert Eagle</b><span>$700 · pistol</span></button>
-    <button class="buy-item" data-buy="ammo"><b>[4] Refill Ammo</b><span>$200</span></button>
-    <button class="buy-item" data-buy="armor"><b>[5] Armor + Helmet</b><span>$1000</span></button>
-    <button class="buy-item" data-buy="hp"><b>[6] Field Kit (+50 HP)</b><span>$500</span></button>
-    <button class="buy-item" data-buy="he"><b>[7] HE Grenade</b><span>$300 · frag, hold LMB to cook</span></button>
-    <button class="buy-item" data-buy="flash"><b>[8] Flashbang</b><span>$200 · blinds on LOS</span></button>
-    <button class="buy-item" data-buy="smoke"><b>[9] Smoke</b><span>$300 · dynamic vision block</span></button>
-    <button class="buy-item" data-buy="molotov"><b>[0] Molotov</b><span>$400 · area fire, shatters on impact</span></button>
+<!-- Buy menu (keeps pointer lock — virtual cursor, no mouse yank) -->
+<div id="buy-menu" aria-hidden="true">
+  <div class="bm-head">
+    <div class="bm-title">BUY</div>
+    <div class="bm-money" id="buy-money">$800</div>
+    <div class="bm-timer"><div class="bm-timer-track"><div id="buy-timer-fill"></div></div><span id="buy-timer">20s</span></div>
   </div>
-  <p class="buy-note">Press B or ESC to close · Buy only during first 5s of a round (incl. 3s freeze) · Alive only</p>
+  <div class="bm-cols">
+    <div class="bm-col"><h4>WEAPONS</h4>
+      <button class="buy-item" data-buy="ak" data-key="1"><kbd>1</kbd><b>AK-47</b><em class="bi-price"></em><span class="bi-sub">Rifle</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="p90" data-key="2"><kbd>2</kbd><b>P90</b><em class="bi-price"></em><span class="bi-sub">SMG · 50 rds</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="awp" data-key="3"><kbd>3</kbd><b>AWP</b><em class="bi-price"></em><span class="bi-sub">Sniper</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="deagle" data-key="4"><kbd>4</kbd><b>Desert Eagle</b><em class="bi-price"></em><span class="bi-sub">Pistol</span><i class="bi-state"></i></button>
+    </div>
+    <div class="bm-col"><h4>GEAR</h4>
+      <button class="buy-item" data-buy="armor" data-key="5"><kbd>5</kbd><b>Kevlar + Helmet</b><em class="bi-price"></em><span class="bi-sub">Armor 100</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="hp" data-key="6"><kbd>6</kbd><b>Field Kit</b><em class="bi-price"></em><span class="bi-sub">+50 HP</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="ammo" data-key="R"><kbd>R</kbd><b>Ammo</b><em class="bi-price"></em><span class="bi-sub">Refill all</span><i class="bi-state"></i></button>
+    </div>
+    <div class="bm-col"><h4>GRENADES</h4>
+      <button class="buy-item" data-buy="he" data-key="7"><kbd>7</kbd><b>HE Grenade</b><em class="bi-price"></em><span class="bi-sub">Frag</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="flash" data-key="8"><kbd>8</kbd><b>Flashbang</b><em class="bi-price"></em><span class="bi-sub">Blind</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="smoke" data-key="9"><kbd>9</kbd><b>Smoke</b><em class="bi-price"></em><span class="bi-sub">Vision block</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="molotov" data-key="0"><kbd>0</kbd><b>Molotov</b><em class="bi-price"></em><span class="bi-sub">Area fire</span><i class="bi-state"></i></button>
+    </div>
+  </div>
+  <div class="bm-foot"><span id="buy-toast"></span><span class="bm-keys"><kbd>1</kbd>–<kbd>0</kbd> <kbd>R</kbd> quick buy · <kbd>B</kbd>/<kbd>Esc</kbd> close · you can keep moving</span></div>
 </div>
+<div id="buy-cursor"></div>
 
 <!-- Main menu -->
 <div id="main-menu">
@@ -119,11 +133,13 @@
         <h3>▶ HOW TO PLAY</h3>
         <ul>
           <li><b>Click DEPLOY</b> to lock mouse &amp; spawn (CT side)</li>
-          <li><b>WASD</b> move · <b>Mouse</b> look · <b>LMB</b> fire / throw</li>
+          <li><b>WASD</b> move · <b>C</b> crouch (mid-air: crouch-jump) · <b>Mouse</b> look · <b>LMB</b> fire / throw</li>
+          <li><b>Wall run</b>: jump alongside a wall holding <b>W</b> · <b>SPACE</b> wall-jump · <b>C</b> drop off</li>
           <li><b>RMB</b> aim / AWP scope · <b>R</b> reload</li>
-          <li><b>1 / 2 / 3</b> guns · <b>4/5/6/7</b> HE / Flash / Smoke / Moly · <b>G</b> cycle</li>
-          <li>HE/Flash: hold <b>LMB</b> to cook, release to throw · <b>RMB</b> underhand</li>
-          <li><b>B</b> buy menu (first 5s) · <b>ESC</b> pause</li>
+          <li><b>X</b> drop gun · walk over / <b>E</b> pick up · grab or <b>buy</b> a 2nd copy to <b>dual wield</b> (LMB right · RMB left, very wild)</li>
+          <li><b>1</b> primary · <b>2</b> pistol · <b>4/5/6/7</b> HE / Flash / Smoke / Moly · <b>G</b> cycle</li>
+          <li>Grenades throw on release: <b>LMB</b> far · <b>RMB</b> short · <b>both</b> medium</li>
+          <li><b>B</b> buy menu (first 20s) · <b>ESC</b> pause</li>
           <li>3s freeze, then <b>GO</b> · first to <b>win 7 rounds</b> takes the match</li>
         </ul>
       </div>
@@ -132,6 +148,7 @@
         <ul class="loadout">
           <li><b>AK-47</b> — balanced rifle, $2500</li>
           <li><b>Desert Eagle</b> — heavy pistol, $700</li>
+          <li><b>P90</b> — 50-round SMG, accurate on the move, $2350</li>
           <li><b>AWP</b> — 1-shot sniper, scope on RMB</li>
           <li><b>HE $300</b> · <b>Flash $200</b> · <b>Smoke $300</b> · <b>Moly $400</b></li>
         </ul>
@@ -166,6 +183,7 @@
       </div>
       <div class="mp-row"><span id="mp-note">Solo = bots. Online alone = bots until a 2nd player joins, then pure PvP.</span></div>
       <button id="play-btn" class="hidden">▶ &nbsp;CLICK TO DEPLOY</button>
+      <button id="settings-btn" class="ghost">⚙ &nbsp;SETTINGS</button>
     </div>
     <div class="menu-row">
       <label><input type="checkbox" id="opt-quality" checked /> Shadows &amp; particles</label>
@@ -187,7 +205,36 @@
     <h2>PAUSED</h2>
     <p>Mouse released. Click resume to re-lock pointer.</p>
     <button id="resume-btn">RESUME</button>
+    <button id="settings-btn-pause" class="ghost">⚙ SETTINGS</button>
     <button id="restart-btn" class="ghost">RESTART MATCH</button>
+  </div>
+</div>
+
+<!-- Settings -->
+<div id="settings-menu" class="hidden">
+  <div class="menu-card settings-card">
+    <h2>SETTINGS</h2>
+    <div class="set-tabs">
+      <button class="set-tab active" data-tab="mouse">MOUSE</button>
+      <button class="set-tab" data-tab="video">VIDEO</button>
+      <button class="set-tab" data-tab="audio">AUDIO</button>
+      <button class="set-tab" data-tab="hud">CROSSHAIR &amp; HUD</button>
+    </div>
+    <div id="ch-preview" class="hidden">
+      <div class="ch-wrap">
+        <div class="ch-dot"></div>
+        <div class="ch-line ch-t"></div>
+        <div class="ch-line ch-b"></div>
+        <div class="ch-line ch-l"></div>
+        <div class="ch-line ch-r"></div>
+      </div>
+    </div>
+    <div id="set-body"></div>
+    <p class="set-hint">Saved in this browser only — no account, no server, nothing leaves this machine. <b>ESC</b> closes.</p>
+    <div class="set-actions">
+      <button id="settings-reset" class="ghost">RESET TO DEFAULTS</button>
+      <button id="settings-close" class="mp-btn solo">CLOSE</button>
+    </div>
   </div>
 </div>
 

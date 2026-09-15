@@ -63,6 +63,10 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 let nextId = 1;
+// Dropped weapons on the floor: wid -> { wid, key, mag, reserve, x, y, z, ry, at }.
+// The server arbitrates pickups so two players can never grab the same gun.
+const drops = new Map();
+const WEAPON_KEYS = new Set(['ak', 'deagle', 'awp', 'p90']);
 // id -> { ws, id, name, team, state, lastSeen }
 const clients = new Map();
 
@@ -124,6 +128,30 @@ wss.on('connection', (ws) => {
         broadcast({ type: 'player_joined', id, name, team: client.team, realPlayers: clients.size }, id);
         // Immediately push a roster snapshot so everyone can apply the no-bots rule
         broadcast({ type: 'roster', players: roster(), realPlayers: clients.size });
+        if (drops.size) send(ws, { type: 'weapon', action: 'sync', drops: [...drops.values()] });
+        break;
+      }
+      case 'weapon': {
+        const wid = String(m.wid || '').slice(0, 64);
+        if (!wid) break;
+        if (m.action === 'drop') {
+          if (!WEAPON_KEYS.has(m.key) || drops.has(wid)) break;
+          const d = { wid, key: m.key, mag: Math.max(0, Math.min(50, m.mag | 0)), reserve: Math.max(0, Math.min(250, m.reserve | 0)),
+            x: +m.x || 0, y: +m.y || 0, z: +m.z || 0, ry: +m.ry || 0, at: Date.now() };
+          drops.set(wid, d);
+          broadcast({ type: 'weapon', action: 'drop', ...d, vx: +m.vx || 0, vy: +m.vy || 0, vz: +m.vz || 0, fromId: id }, id);
+        } else if (m.action === 'rest') {
+          const d = drops.get(wid);
+          if (!d) break;
+          d.x = +m.x || 0; d.y = +m.y || 0; d.z = +m.z || 0; d.ry = +m.ry || 0;
+          broadcast({ type: 'weapon', action: 'rest', wid, x: d.x, y: d.y, z: d.z, ry: d.ry }, id);
+        } else if (m.action === 'pickup') {
+          const d = drops.get(wid);
+          if (!d) { send(ws, { type: 'weapon', action: 'deny', wid }); break; }
+          drops.delete(wid);
+          // everyone (including the winner) learns who got it
+          broadcast({ type: 'weapon', action: 'pickup', wid, key: d.key, mag: d.mag, reserve: d.reserve, byId: id });
+        }
         break;
       }
       case 'state': {
@@ -137,14 +165,23 @@ wss.on('connection', (ws) => {
           weapon: String(m.weapon || 'deagle').slice(0, 12),
           aiming: !!m.aiming,
           moving: !!m.moving,
+          crouch: !!m.crouch,                      // crouched hull / lowered hitbox
+          gnd: m.gnd !== false,                    // standing on ground or a box top
+          wr: Math.max(-1, Math.min(1, m.wr | 0)), // wall run: -1 wall on left, 1 right, 0 none
+          dual: !!m.dual,                          // dual wielding the current weapon
         };
         break;
       }
+      case 'round':
+        // a new round wipes the floor (keep anything dropped in the last 2s — it belongs to the new round)
+        if (m.action === 'start') { const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k); }
+        m.fromId = id; m.fromName = client.name; m.fromTeam = client.team;
+        broadcast(m, id);
+        break;
       case 'shot':
       case 'hit':
       case 'killed':
       case 'bomb':
-      case 'round':
       case 'nade':
       case 'chat': {
         // Relay gameplay events to everyone else; stamp sender id.
@@ -165,6 +202,7 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     clients.delete(id);
+    if (!clients.size) drops.clear();
     console.log(`[-] client ${id} left (${clients.size} online)`);
     broadcast({ type: 'player_left', id, realPlayers: clients.size });
     broadcast({ type: 'roster', players: roster(), realPlayers: clients.size });

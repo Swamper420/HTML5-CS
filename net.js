@@ -12,7 +12,7 @@ export const Net = {
   team: null,
   name: 'YOU',
   realPlayers: 1,          // includes self once connected
-  remotes: new Map(),      // id -> {id,name,team,x,y,z,yaw,pitch,hp,alive,weapon,aiming,moving,lastSeen}
+  remotes: new Map(),      // id -> {id,name,team,x,y,z,yaw,pitch,hp,alive,weapon,aiming,moving,crouch,gnd,wr,lastSeen}
   handlers: {},            // event -> [fn]
   _sendAt: 0,
   _pingAt: 0,
@@ -87,7 +87,7 @@ export const Net = {
           this.remotes.set(m.id, {
             id: m.id, name: m.name || `Player${m.id}`, team: m.team || 't',
             x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hp: 100, alive: true,
-            weapon: 'ak', aiming: false, moving: false, lastSeen: performance.now(),
+            weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(),
           });
         }
         this.realPlayers = m.realPlayers || (this.remotes.size + 1);
@@ -117,7 +117,8 @@ export const Net = {
             name: p.name || r.name, team: p.team || r.team,
             x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
             hp: p.hp, alive: p.alive, weapon: p.weapon,
-            aiming: !!p.aiming, moving: !!p.moving, lastSeen: now,
+            aiming: !!p.aiming, moving: !!p.moving,
+            crouch: !!p.crouch, gnd: p.gnd !== false, wr: p.wr | 0, dual: !!p.dual, lastSeen: now,
           });
         }
         // Prune stale remotes (>4s without snapshot and not in roster)
@@ -133,6 +134,7 @@ export const Net = {
       case 'bomb': this.emit('bomb', m); break;
       case 'round': this.emit('round', m); break;
       case 'nade': this.emit('nade', m); break;
+      case 'weapon': this.emit('weapon', m); break;
       case 'chat': this.emit('chat', m); break;
       case 'pong': this.emit('pong', m); break;
       default: break;
@@ -155,7 +157,7 @@ export const Net = {
         this.remotes.set(p.id, {
           id: p.id, name: p.name, team: p.team,
           x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hp: 100, alive: true,
-          weapon: 'ak', aiming: false, moving: false, lastSeen: performance.now(),
+          weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(),
         });
         this.emit('player_joined', p);
       } else {
@@ -184,6 +186,7 @@ export const Net = {
   sendBomb(b) { this._send({ type: 'bomb', ...b }); },
   sendRound(r) { this._send({ type: 'round', ...r }); },
   sendNade(n) { this._send({ type: 'nade', ...n }); },
+  sendWeapon(w) { this._send({ type: 'weapon', ...w }); },
   sendChat(text) { this._send({ type: 'chat', text: String(text).slice(0, 200) }); },
 
   disconnect() {
