@@ -2378,7 +2378,7 @@ function newAnimState() {
     spd: 0, fwd: 0, side: 0,      // smoothed body-space motion
     pitch: 0, crouch: 0, kneel: 0,
     fire: 0, flinch: 0, reload: 0,
-    land: 0, air: 0,
+    land: 0, air: 0, wall: 0,
     breathe: Math.random() * TAU,
     yawPrev: null, turn: 0,
     step: -1,                     // which foot last struck, for footstep hooks
@@ -2392,7 +2392,10 @@ function soldierFlinch(mesh, amt = 1) {
   const a = mesh && mesh.userData && mesh.userData.anim; if (a) a.flinch = Math.min(1, a.flinch + amt);
 }
 
-// inp: { vx, vz, yaw, pitch, grounded, crouch, kneel, reloading, moving }
+// inp: { vx, vz, yaw, pitch, grounded, crouch, kneel, reloading, moving, wall }
+// wall: -1 (wall on left) .. +1 (wall on right). Staggered wall-run pose:
+// wall-side foot plants high on the wall, trail leg extends, wall-side arm
+// flares for balance, torso stays over the feet while the head levels out.
 function animateSoldier(mesh, inp, dt, t) {
   const ud = mesh && mesh.userData;
   if (!ud || !ud.rig) return;
@@ -2436,10 +2439,13 @@ function animateSoldier(mesh, inp, dt, t) {
 
   // ---- gait clock ----
   // Cadence rises with speed the way a real stride does: longer AND faster steps.
+  // Wall runs step quicker and shorter than a ground sprint.
+  A.wall = damp(A.wall || 0, clamp(inp.wall || 0, -1, 1), 8, dt);
+  const wAbs = Math.min(1, Math.abs(A.wall));
   const spd = A.spd;
   const amp = clamp(spd / 4.6, 0, 1);                 // stride amplitude
   const runK = clamp((spd - 2.2) / 3.4, 0, 1);        // walk -> run blend
-  const cadence = spd > 0.15 ? (1.05 + spd * 0.30) : 0;
+  const cadence = spd > 0.15 ? (1.05 + spd * 0.30) * (1 + wAbs * 0.28) : 0;
   const backward = A.fwd < -0.35 ? -1 : 1;            // backpedal reverses the cycle
   A.phase += cadence * TAU * dt * backward;
   if (A.phase > TAU) A.phase -= TAU; if (A.phase < 0) A.phase += TAU;
@@ -2538,6 +2544,29 @@ function animateSoldier(mesh, inp, dt, t) {
       - 0.05 * rl - A.fire * 0.015;
     r.gun.position.z = (r.gun.userData.baseZ !== undefined ? r.gun.userData.baseZ : (r.gun.userData.baseZ = r.gun.position.z))
       - A.fire * 0.05;
+  }
+  // ---- WALL RUN: stagger the gait — wall foot plants high, trail leg drops,
+  //      body tips into the wall, head and gun stay level. Scales with |wall|. ----
+  if (wAbs > 0.01) {
+    const wk = A.wall, wR = Math.max(0, wk), wL = Math.max(0, -wk); // wall-side weight per leg
+    r.pelvis.rotation.z += wk * 0.16;
+    r.pelvis.position.y += 0.05 * wAbs;
+    r.spine.rotation.z -= wk * 0.12;
+    r.chest.rotation.z -= wk * 0.10;
+    r.neck.rotation.z -= wk * 0.14; // head counter-levels so the eyes stay flat
+    // wall-side hip flexes up + out (foot meets the wall), trail leg extends down/back
+    r.hipR.rotation.x += (-0.70 * wR + 0.38 * wL) * 1;
+    r.hipL.rotation.x += (-0.70 * wL + 0.38 * wR) * 1;
+    r.hipR.rotation.z -= 0.50 * wR; r.hipL.rotation.z += 0.50 * wL;
+    r.kneeR.rotation.x = clamp(r.kneeR.rotation.x + 0.85 * wR, 0, 2.50);
+    r.kneeL.rotation.x = clamp(r.kneeL.rotation.x + 0.85 * wL, 0, 2.50);
+    r.ankleR.rotation.x = clamp(r.ankleR.rotation.x - 0.30 * wR, -1.40, 0.90);
+    r.ankleL.rotation.x = clamp(r.ankleL.rotation.x - 0.30 * wL, -1.40, 0.90);
+    // wall-side arm flares out for balance, gun-side arm pins the weapon steady
+    r.shoulderL.rotation.z += 0.75 * wL; r.shoulderR.rotation.z -= 0.75 * wR;
+    r.shoulderL.rotation.x -= 0.30 * wL; r.shoulderR.rotation.x -= 0.30 * wR;
+    r.elbowL.rotation.x -= 0.25 * wL; r.elbowR.rotation.x -= 0.25 * wR;
+    if (r.gun) { r.gun.rotation.z -= wk * 0.12; r.gun.rotation.y -= wk * 0.08; }
   }
   return struck;
 }
@@ -3166,14 +3195,13 @@ function updateRemoteMeshes(dt, t) {
         }
         e.deathT = Math.min(1.6, (e.deathT || 0) + dt);
         updateRagdoll(m, dt);
-        const dk = Math.min(1, e.deathT / 0.55);
-        const dease = 1 - Math.pow(1 - dk, 3);
+        const { k: dk, e: dease } = corpseK(e.deathT);
         const ef = e.fall || { dirX: 0, dirZ: 1, spin: 0, roll: 0, power: 1 };
         try {
           if (e.deathPos && e.knock) {
             m.position.set(
               e.deathPos.x + e.knock.x * dease,
-              Math.max(0.12, e.deathPos.y + Math.sin(Math.min(1, dk) * Math.PI) * 0.22 * (ef.power || 1)),
+              Math.max(0.05, e.deathPos.y + Math.sin(Math.min(1, dk * 1.3) * Math.PI) * 0.10 * (ef.power || 1) * (1 - dk)),
               e.deathPos.z + e.knock.z * dease
             );
             try { slideCorpseOut(m, 0.5); } catch (err) {}
@@ -3213,7 +3241,7 @@ function updateRemoteMeshes(dt, t) {
           animateSoldier(m, {
             vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: -(e.pitch !== undefined ? e.pitch : (r.pitch || 0)),
             grounded: r.gnd !== undefined ? (!!r.gnd || !!wallSide) : (r.y || 0) < 0.06, crouch: !!r.crouch,
-            kneel: !!r.planting || !!r.defusing, reloading: !!r.reloading,
+            kneel: !!r.planting || !!r.defusing, reloading: !!r.reloading, wall: wallSide,
           }, dt, t);
         } catch (err) {}
         if (Math.abs(m.rotation.x) > 0.01) m.rotation.x *= Math.max(0, 1 - dt * 6);
@@ -4207,6 +4235,15 @@ function poseCorpseLimbs(mesh, sprawl, power) {
     if (r.gun) { r.gun.rotation.z += rand(-0.6, 0.6); r.gun.rotation.x += rand(-0.4, 0.4); }
   } catch (e) {}
 }
+// Body fall shares one clock: knees buckle first (slow start), then the torso
+// slams down accelerating (gravity, not eased-out), with a small ground bounce
+// on impact. Returns {k (0..1 linear), e (tip ease with bounce)}.
+function corpseK(deathT) {
+  const k = Math.min(1, (deathT || 0) / 0.85);
+  const slam = 1 - Math.cos(k * Math.PI / 2);
+  const bounce = k > 0.7 ? Math.sin((k - 0.7) / 0.3 * Math.PI) * 0.08 * (1 - k) : 0;
+  return { k, e: slam - bounce };
+}
 // Integrate one corpse's limp joints. Spring toward rest, damped, knees one-way.
 function updateRagdoll(mesh, dt) {
   const ud = mesh && mesh.userData;
@@ -4214,7 +4251,7 @@ function updateRagdoll(mesh, dt) {
   if (!rg) return;
   rg.t += dt;
   if (rg.t > 3.5) { ud.rag = null; return; } // fully settled — stop paying for it
-  const d = Math.exp(-5.5 * dt);
+  const d = Math.exp(-3.2 * dt); // loose damping: limbs keep whipping through the ~0.85s fall
   for (const j of rg.j) {
     if (!j.o) continue;
     j.vx = (j.vx + (j.tx - j.o.rotation.x) * j.stiff * dt) * d;
@@ -4750,18 +4787,17 @@ function updatePlayerBody(dt, t) {
     setPlayerBodyFirstPerson(false);
     player.deathT = Math.min(1.6, (player.deathT || 0) + dt);
     updateRagdoll(m, dt);
-    const k = Math.min(1, player.deathT / 0.55);
-    const ease = 1 - Math.pow(1 - k, 3);
+    const { k: pk, e: pease } = corpseK(player.deathT);
     const f = player.fall || { dirX: 0, dirZ: 1, spin: 0, roll: 0, power: 1 };
     const fwdX = -Math.sin(player.yaw), fwdZ = -Math.cos(player.yaw);
     const fDot = f.dirX * fwdX + f.dirZ * fwdZ;
     const sDot = f.dirX * fwdZ - f.dirZ * fwdX;
     const tip = Math.PI / 2 * 0.95;
-    m.position.set(player.pos.x, 0.2 * ease, player.pos.z);
+    m.position.set(player.pos.x, 0.05 + Math.sin(Math.min(1, pk * 1.3) * Math.PI) * 0.08 * (f.power || 1) * (1 - pk), player.pos.z);
     try { slideCorpseOut(m, 0.5); player.pos.set(m.position.x, 0, m.position.z); } catch (e) {}
-    m.rotation.x = (fDot >= 0 ? tip : -tip) * (0.75 + Math.abs(fDot) * 0.45) * ease;
-    m.rotation.z = clamp(-sDot * tip * 0.9 + (f.roll || 0), -1.2, 1.2) * ease;
-    m.rotation.y = player.yaw + Math.PI + (f.spin || 0) * ease;
+    m.rotation.x = (fDot >= 0 ? tip : -tip) * (0.75 + Math.abs(fDot) * 0.45) * pease;
+    m.rotation.z = clamp(-sDot * tip * 0.9 + (f.roll || 0), -1.2, 1.2) * pease;
+    m.rotation.y = player.yaw + Math.PI + (f.spin || 0) * pease;
     m.visible = true;
     try { updateBlob(player, player.pos.x, player.pos.z, false, false); } catch (e) {}
     return;
@@ -4781,6 +4817,7 @@ function updatePlayerBody(dt, t) {
     crouch: !!player.crouching,
     kneel: !!(keys['KeyE'] && (playerNearPlantedBomb() || playerInPlantSite())),
     reloading: player.reloading > 0,
+    wall: player.wallRun ? player.wallRun.side : 0,
   }, dt, t);
   try { updateBlob(player, player.pos.x, player.pos.z, true, Math.hypot(player.vel.x, player.vel.z) > 1.5); } catch (e) {}
 }
@@ -5179,8 +5216,7 @@ function updateDeadBots(dt) {
     if (!b.mesh.visible) continue;
     b.deathT = Math.min(1.6, (b.deathT || 0) + dt);
     updateRagdoll(b.mesh, dt);
-    const k = Math.min(1, b.deathT / 0.55);
-    const ease = 1 - Math.pow(1 - k, 3);
+    const { k, e: ease } = corpseK(b.deathT);
     const fall = b.fall || { dirX: 0, dirZ: 1, spin: 0, roll: 0, power: 1 };
     try {
       // knockback slide + hop: fast out, friction stop
@@ -5188,7 +5224,7 @@ function updateDeadBots(dt) {
         const slide = 1 - ease;
         b.mesh.position.set(
           b.deathPos.x + b.knock.x * ease,
-          Math.max(0.12, Math.sin(Math.min(1, k) * Math.PI) * 0.22 * (fall.power || 1)),
+          0.05 + Math.sin(Math.min(1, k * 1.3) * Math.PI) * 0.10 * (fall.power || 1) * (1 - k),
           b.deathPos.z + b.knock.z * ease
         );
         try { slideCorpseOut(b.mesh, 0.5); } catch (e) {}
@@ -5196,7 +5232,7 @@ function updateDeadBots(dt) {
         b.pos.set(b.mesh.position.x, 0, b.mesh.position.z);
         void slide;
       } else {
-        b.mesh.position.y = 0.2 * ease + Math.sin(Math.min(1, k) * Math.PI) * 0.12;
+        b.mesh.position.y = 0.05 + Math.sin(Math.min(1, k * 1.3) * Math.PI) * 0.08 * (1 - k);
       }
       // tip-over: forward/back from shot-vs-facing + sideways roll + yaw spin
       const fwdX = Math.sin(b.yaw || 0), fwdZ = Math.cos(b.yaw || 0);
@@ -9352,7 +9388,6 @@ function updatePlayer(dt, t) {
       player.vel.x = w.tx * Math.max(along, 0) * 0.85 + w.nx * WALLRUN.jumpOut;
       player.vel.z = w.tz * Math.max(along, 0) * 0.85 + w.nz * WALLRUN.jumpOut;
       player.vel.y = WALLRUN.jumpUp;
-      player.lastWallBox = w.box;
       endWallRun();
       AudioSys.step(null, true);
     } else if (!sameFace || w.t > WALLRUN.maxTime || !keys['KeyW'] || !canAct) {
@@ -9549,6 +9584,14 @@ function updatePlayer(dt, t) {
     rz += vmRig.busyK * 0.25;
     // sprint lowers gun
     if (sprint && hSpeed > 3) { py -= 0.03; rx -= 0.35; ry += 0.15; }
+    // wall run: gun shifts away from the wall and cants level, steps up the bob
+    if (player.wallRun) {
+      const ws = player.wallRun.side;
+      px -= ws * 0.045 * (1 - aimE * 0.5);
+      py += 0.012;
+      rz += ws * 0.16;
+      ry += ws * 0.10;
+    }
     if (vmL) {
       // two guns: spread them apart, each wobbling on its own
       const wob = Math.sin(t * 2.3) * 0.006, wob2 = Math.cos(t * 1.9) * 0.006;
