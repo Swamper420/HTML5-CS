@@ -45,11 +45,12 @@ const server = http.createServer((req, res) => {
   try {
     let urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (urlPath === '/') urlPath = '/index.html';
-    // Never serve .git or hidden files
-    if (urlPath.includes('..') || urlPath.includes('/.git')) {
+    // Never serve dotfiles / .git / traversals
+    if (urlPath.includes('..') || urlPath.includes('/.git') || /(^|\/)\./.test(urlPath)) {
       res.writeHead(403); res.end('forbidden'); return;
     }
-    const filePath = path.join(__dirname, urlPath.slice(1));
+    const filePath = path.normalize(path.join(__dirname, urlPath.slice(1)));
+    if (!filePath.startsWith(__dirname)) { res.writeHead(403); res.end('forbidden'); return; }
     if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
       res.writeHead(404); res.end('not found'); return;
     }
@@ -115,7 +116,7 @@ function send(ws, obj) {
 
 wss.on('connection', (ws) => {
   const id = nextId++;
-  const client = { ws, id, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true };
+  const client = { ws, id, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true, lastStateAt: 0, lastChatAt: 0, lastRoundAt: 0 };
   try { ws._socket.setNoDelay(true); } catch {} // never let Nagle batch game packets
   ws.on('pong', () => { client.alive = true; });
   clients.set(id, client);
@@ -128,9 +129,10 @@ wss.on('connection', (ws) => {
 
     switch (m.type) {
       case 'hello': {
-        const name = String(m.name || `Player${id}`).slice(0, 16);
-        client.name = name;
-        client.team = pickTeam(m.wantTeam);
+        const cleanName = String(m.name || `Player${id}`).replace(/[<>&"']/g, '').trim().slice(0, 16) || `Player${id}`;
+        client.name = cleanName;
+        const name = cleanName;
+        if (!client.team) client.team = pickTeam(m.wantTeam); // once-guard — no mid-match team flips
         console.log(`[+] #${id} "${name}" joined as ${client.team.toUpperCase()} (${clients.size} online)`);
         send(ws, { type: 'welcome', id, team: client.team, name, players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
         broadcast({ type: 'player_joined', id, name, team: client.team, realPlayers: clients.size }, id);
@@ -141,17 +143,22 @@ wss.on('connection', (ws) => {
       }
       case 'weapon': {
         const wid = String(m.wid || '').slice(0, 64);
-        if (!wid) break;
+        if (!wid || !/^[A-Za-z0-9._-]{1,64}$/.test(wid)) break;
         if (m.action === 'drop') {
           if (!WEAPON_KEYS.has(m.key) || drops.has(wid)) break;
+          if (drops.size >= 32) { const oldest = drops.keys().next().value; drops.delete(oldest); }
+          const cx = +m.x || 0, cy = +m.y || 0, cz = +m.z || 0;
+          if (!Number.isFinite(cx + cy + cz) || Math.abs(cx) > 45 || Math.abs(cz) > 45) break;
           const d = { wid, key: m.key, mag: Math.max(0, Math.min(50, m.mag | 0)), reserve: Math.max(0, Math.min(250, m.reserve | 0)),
-            x: +m.x || 0, y: +m.y || 0, z: +m.z || 0, ry: +m.ry || 0, at: Date.now() };
+            x: cx, y: Math.max(-1, Math.min(12, cy)), z: cz, ry: +m.ry || 0, at: Date.now() };
           drops.set(wid, d);
           broadcast({ type: 'weapon', action: 'drop', ...d, vx: +m.vx || 0, vy: +m.vy || 0, vz: +m.vz || 0, fromId: id }, id);
         } else if (m.action === 'rest') {
           const d = drops.get(wid);
           if (!d) break;
-          d.x = +m.x || 0; d.y = +m.y || 0; d.z = +m.z || 0; d.ry = +m.ry || 0;
+          const rx = +m.x || 0, ry2 = +m.y || 0, rz = +m.z || 0;
+          if (!Number.isFinite(rx + ry2 + rz) || Math.abs(rx) > 45 || Math.abs(rz) > 45) break;
+          d.x = rx; d.y = Math.max(-1, Math.min(12, ry2)); d.z = rz; d.ry = +m.ry || 0;
           broadcast({ type: 'weapon', action: 'rest', wid, x: d.x, y: d.y, z: d.z, ry: d.ry }, id);
         } else if (m.action === 'pickup') {
           const d = drops.get(wid);
@@ -165,9 +172,15 @@ wss.on('connection', (ws) => {
       case 'state': {
         // ~30Hz positional state — relayed to everyone else IMMEDIATELY (no server tick
         // holding it back), and kept for the 1Hz full keepalive snapshot.
+        const nowS = Date.now();
+        if (nowS - client.lastStateAt < 20) break; // rate-limit: 50Hz max
+        client.lastStateAt = nowS;
+        const sx = +m.x || 0, sy = +m.y || 0, sz = +m.z || 0;
+        if (!Number.isFinite(sx + sy + sz + (+m.yaw || 0) + (+m.pitch || 0))) break;
+        if (Math.abs(sx) > 45 || Math.abs(sz) > 45 || sy < -2 || sy > 15) break;
         client.state = {
           id, ct: +m.ct || 0,
-          x: +m.x || 0, y: +m.y || 0, z: +m.z || 0,
+          x: sx, y: sy, z: sz,
           yaw: +m.yaw || 0, pitch: +m.pitch || 0,
           hp: Math.max(0, Math.min(100, +m.hp || 100)),
           alive: !!m.alive,
@@ -190,13 +203,18 @@ wss.on('connection', (ws) => {
         // Server-authoritative score: first 'end' per round number wins, duplicates
         // (simultaneous detection on two clients, retransmits) are idempotent.
         // 'start' with first/round 1 resets the match (fresh startMatch on host).
+        // Rate-limited: 1 round msg / 2s per client to stop fake-win spam.
+        if (Date.now() - client.lastRoundAt < 2000 && m.action === 'end') break;
+        client.lastRoundAt = Date.now();
         if (m.action === 'start') {
           const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k);
           if (m.first || (typeof m.round === 'number' && m.round <= 1)) { match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
           else if (typeof m.round === 'number' && m.round > 0) match.round = m.round;
           m.score = matchScore(); m.round = match.round;
         } else if (m.action === 'end') {
-          const r = typeof m.round === 'number' ? m.round : match.round;
+          const r = typeof m.round === 'number' && Number.isFinite(m.round) ? Math.max(1, Math.min(30, Math.floor(m.round))) : match.round;
+          if (m.winner !== 'ct' && m.winner !== 't' && m.winner !== 'draw') break;
+          if (typeof m.reason === 'string') m.reason = m.reason.slice(0, 80);
           if (r !== match.scoredRound && r >= match.round) {
             if (m.winner === 'ct') match.ct++;
             else if (m.winner === 't') match.t++;
@@ -217,6 +235,20 @@ wss.on('connection', (ws) => {
       case 'nade':
       case 'chat': {
         // Relay gameplay events to everyone else; stamp sender id.
+        if (m.type === 'chat') {
+          if (Date.now() - client.lastChatAt < 800) break;
+          client.lastChatAt = Date.now();
+          m.text = String(m.text || '').slice(0, 200);
+        }
+        if (m.type === 'hit' && m.dmg !== undefined) {
+          const d = +m.dmg;
+          if (!Number.isFinite(d)) break;
+          m.dmg = Math.max(0, Math.min(100, d));
+        }
+        if ((m.type === 'bomb' || m.type === 'nade' || m.type === 'shot') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
+          if (!Number.isFinite(+m.x + +m.y + +m.z)) break;
+          if (Math.abs(+m.x) > 45 || Math.abs(+m.z) > 45) break;
+        }
         m.fromId = id;
         m.fromName = client.name;
         m.fromTeam = client.team;

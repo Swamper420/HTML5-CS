@@ -85,9 +85,7 @@ const PLAYER_BODY_CULL_Y = 0.88; // your own body is legs only — the belt sits
 const ROUND_TIME = 120;         // 2:00 round (CS-like, timer starts after freeze)
 const BUY_TIME = 20;            // CS2-style buy window (20s from round start)
 const FREEZE_TIME = 3;          // frozen in spawn: look + buy, no move/shoot
-const KILLS_TO_WIN_ROUND = 15;  // legacy (unused — rounds are elimination now)
 const ROUNDS_TO_WIN_MATCH = 7;
-const RESPAWN_DELAY = 3;        // legacy (unused — CS has no mid-round respawns)
 // CS economy
 const MONEY_START = 800;
 const MONEY_KILL = 300;
@@ -200,7 +198,8 @@ function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringif
 
 // Push SET into everything the game actually reads at runtime.
 function applySettings() {
-  opts.quality = true; // always high — no low-quality mode. opts.sound = SET.sound; opts.music = SET.music; opts.difficulty = SET.difficulty;
+  opts.quality = true; // always high — no low-quality mode.
+  opts.sound = SET.sound; opts.music = SET.music; opts.difficulty = SET.difficulty;
   try { if (renderer) renderer.shadowMap.enabled = true; } catch (e) {}
   try { if (sunLight) sunLight.castShadow = true; } catch (e) {}
   try { AudioSys.applyVolumes(); } catch (e) {}
@@ -1053,6 +1052,7 @@ const AudioSys = {
       try {
         o.start(t0 + startOffset);
         o.stop(t0 + startOffset + dur + 0.1);
+        o.onended = () => { try { o.disconnect(); flt.disconnect(); g.disconnect(); } catch {} };
       } catch (e) {}
     };
 
@@ -3355,8 +3355,6 @@ function wireMultiplayer() {
       const from = new THREE.Vector3(m.ox, m.oy, m.oz);
       const dir = new THREE.Vector3(m.dx, m.dy, m.dz).normalize();
       const end = from.clone().addScaledVector(dir, 30);
-      const reduce = isMultiplayer();
-      void reduce;
       spawnTracer(from, end, m.tracer || 0xff9a5c);
       spawnWorldFlash(from, m.tracer || 0xff9a5c, m.sound === 'sniper' ? 1.5 : 0.85);
       AudioSys.shoot(m.sound || 'rifle', from);
@@ -3383,6 +3381,7 @@ function wireMultiplayer() {
       if (m.targetId !== Net.id) return;
       if (!player.alive || G.phase !== 'playing') return;
       const e = remotes.get(m.fromId);
+      if (m.fromId != null && !e) return; // unknown sender — drop forged hits
       const shooter = {
         isPlayer: false, team: m.fromTeam || (e ? e.data.team : 't'),
         bot: null, remote: e || null,
@@ -3390,7 +3389,10 @@ function wireMultiplayer() {
         remotePos: e ? e.pos.clone() : null,
         weaponName: m.weapon || 'AK-47',
       };
-      damagePlayer(m.dmg, shooter, !!m.head);
+      let dmg = Number(m.dmg);
+      if (!isFinite(dmg)) return;
+      dmg = clamp(dmg, 0, 100); // per-hit cap — no remote one-shots via spoofed dmg
+      damagePlayer(dmg, shooter, !!m.head);
       if (player.alive === false) {
         // Tell everyone who killed us (victim-authoritative killfeed).
         Net.sendKilled({
@@ -3411,6 +3413,7 @@ function wireMultiplayer() {
       // Remote-vs-remote or remote-vs-us killfeed + round check.
       if (m.victimId === Net.id) return; // already handled locally in damagePlayer
       const e = remotes.get(m.victimId);
+      const wasAlive = !!(e && e.data.alive);
       if (e) {
         e.data.alive = false; e.data.hp = 0;
         // gore: head-pop / ragdoll on the victim's mesh, directed away from the killer
@@ -3433,6 +3436,7 @@ function wireMultiplayer() {
         if (m.victimId !== null && m.victimId !== undefined && m.victimId !== Net.id) statsHolder('remote:' + m.victimId).deaths++;
       } catch {}
       if (m.killerId === Net.id) {
+        if (!wasAlive) return;
         G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(m.head, true);
         AudioSys.kill();
         if (m.head) announce('HEADSHOT +$' + MONEY_KILL, 700);
@@ -3462,6 +3466,7 @@ function wireMultiplayer() {
 function applyRemoteNade(m) {
   if (G.phase !== 'playing') return;
   const t = performance.now() / 1000;
+  if (m.fromId != null && !remotes.get(m.fromId)) return; // unknown sender
   const owner = {
     isPlayer: false, team: m.fromTeam || 't',
     bot: null, remoteName: m.fromName || ('Player' + (m.fromId ?? '?')),
@@ -3469,14 +3474,24 @@ function applyRemoteNade(m) {
   };
   // Host-relayed bot utility (solo-with-guests spectating): attribute to a display name.
   if (m.botShort) owner.remoteName = `${m.botShort} (BOT)`;
+  const inMap = (x, y, z) => isFinite(x) && isFinite(y) && isFinite(z) && Math.abs(x) <= MAP_HALF + 6 && Math.abs(z) <= MAP_HALF + 6 && y >= -1 && y <= 12;
   if (m.action === 'throw' && NADE_DEFS[m.nade]) {
-    const origin = new THREE.Vector3(+m.x || 0, +m.y || 1.4, +m.z || 0);
-    const vel = new THREE.Vector3(+m.vx || 0, +m.vy || 0, +m.vz || 0);
+    const ox = +m.x || 0, oy = +m.y || 1.4, oz = +m.z || 0;
+    const vx = +m.vx || 0, vy = +m.vy || 0, vz = +m.vz || 0;
+    if (!inMap(ox, oy, oz)) return;
+    const origin = new THREE.Vector3(ox, oy, oz);
+    const vel = new THREE.Vector3(vx, vy, vz);
+    if (!isFinite(vel.x + vel.y + vel.z) || vel.length() > 32) return;
     if (vel.lengthSq() < 0.01) vel.set(0, 2, 0);
-    throwNade(m.nade, origin, vel, owner, +m.fuse || NADE_DEFS[m.nade].fuse, true);
+    let fuse = +m.fuse || NADE_DEFS[m.nade].fuse;
+    if (!isFinite(fuse)) return;
+    fuse = clamp(fuse, 0.2, NADE_DEFS[m.nade].fuse + 1.0);
+    throwNade(m.nade, origin, vel, owner, fuse, true);
   } else if (m.action === 'boom') {
     // in-hand cook from a remote player — detonate at the broadcast position
-    const at = new THREE.Vector3(+m.x || 0, +m.y || 1.3, +m.z || 0);
+    const ax = +m.x || 0, ay = +m.y || 1.3, az = +m.z || 0;
+    if (!inMap(ax, ay, az)) return;
+    const at = new THREE.Vector3(ax, ay, az);
     if (m.nade === 'he') detonateHE(at, owner, t, true);
     else if (m.nade === 'flash') detonateFlash(at, owner, t, true);
     else if (m.nade === 'smoke') deploySmoke(at, owner, t);
@@ -4537,7 +4552,6 @@ function spawnSmoke(p, scale = 0.35, life = 0.7, tint = 0xbbbbbb) {
   scene.add(s);
   smokes.push({ mesh: s, vel: new THREE.Vector3(rand(-0.3, 0.3), rand(0.8, 1.6), rand(-0.3, 0.3)), life, maxLife: life, grow: scale * 1.6 });
 }
-const _shellGeo = null;
 function spawnShell(worldPos, right, up, fwd) {
   if (!opts.quality && shells.length > 12) return;
   if (shells.length > 24) return;
@@ -4644,7 +4658,8 @@ function updateEffects(dt, t = 0) {
   if (muzzleLight.intensity > 0) muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt * 90);
   // drifting dust motes (cheap wind advection, wraps in-bounds)
   try {
-    const dust = scene.getObjectByName('dustMotes');
+    if (!_dustCache) _dustCache = scene.getObjectByName('dustMotes');
+    const dust = _dustCache;
     if (dust && dust.geometry) {
       const arr = dust.geometry.attributes.position.array;
       const wx = 0.35 * dt, wy = Math.sin(t * 0.7) * 0.06 * dt;
@@ -4885,6 +4900,10 @@ function updatePlayerBody(dt, t) {
 
 // ---------------- Collision ----------------
 const _tmpBox = new THREE.Box3();
+const _tmpMoveA = new THREE.Vector3();
+const _tmpMMEye = new THREE.Vector3();
+const _tmpMMTgt = new THREE.Vector3();
+let _dustCache = null;
 function collidesAt(p, radius, height = 1.7) {
   _tmpBox.min.set(p.x - radius, p.y + STEP_EPS, p.z - radius);
   _tmpBox.max.set(p.x + radius, p.y + height, p.z + radius);
@@ -4892,12 +4911,14 @@ function collidesAt(p, radius, height = 1.7) {
   return null;
 }
 function moveWithCollision(p, dx, dz, radius, height = 1.7) {
-  // X axis
+  // X axis — reuse temp vectors, no per-frame allocation
   let nx = p.x + dx;
-  const hitX = collidesAt(new THREE.Vector3(nx, p.y, p.z), radius, height);
+  _tmpMoveA.set(nx, p.y, p.z);
+  const hitX = collidesAt(_tmpMoveA, radius, height);
   if (!hitX) p.x = clamp(nx, -MAP_HALF, MAP_HALF);
   let nz = p.z + dz;
-  const hitZ = collidesAt(new THREE.Vector3(p.x, p.y, p.z + dz), radius, height);
+  _tmpMoveA.set(p.x, p.y, p.z + dz);
+  const hitZ = collidesAt(_tmpMoveA, radius, height);
   if (!hitZ) p.z = clamp(nz, -MAP_HALF, MAP_HALF);
 }
 // footprint overlap (strict — touching a wall's side doesn't count as over it)
@@ -4930,13 +4951,13 @@ function findRunnableWall() {
   const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
   const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
   let best = null;
-  const probe = new THREE.Vector3();
   for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    probe.set(p.x - nx * WALLRUN.probe, p.y + 0.3, p.z - nz * WALLRUN.probe);
-    const box = collidesAt(probe, r, 1.0);
+    _tmpMoveA.set(p.x - nx * WALLRUN.probe, p.y + 0.3, p.z - nz * WALLRUN.probe);
+    const box = collidesAt(_tmpMoveA, r, 1.0);
     if (!box || box.max.y < p.y + WALLRUN.minWallAbove) continue;
     // the wall face must actually be facing us along this axis (not a corner we're inside of)
-    if (collidesAt(new THREE.Vector3(p.x, p.y + 0.3, p.z), r, 1.0) === box) continue;
+    _tmpMoveA.set(p.x, p.y + 0.3, p.z);
+    if (collidesAt(_tmpMoveA, r, 1.0) === box) continue;
     const tx = -nz, tz = nx; // tangent
     const vAlong = player.vel.x * tx + player.vel.z * tz;
     const lookAlong = fx * tx + fz * tz;
@@ -5184,10 +5205,12 @@ function updateWorldWeapons(dt, t) {
 }
 function applyRemoteWeapon(m) {
   if (m.action === 'drop') {
-    spawnWorldWeapon({ wid: m.wid, key: m.key, mag: m.mag, reserve: m.reserve, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz, ry: m.ry });
+    if (typeof m.wid !== 'string' || m.wid.length > 64 || !WEAPONS[m.key]) return;
+    if (!isFinite(+m.x + +m.y + +m.z)) return;
+    spawnWorldWeapon({ wid: m.wid, key: m.key, mag: clamp(m.mag | 0, 0, 50), reserve: clamp(m.reserve | 0, 0, 250), x: clamp(+m.x || 0, -MAP_HALF - 6, MAP_HALF + 6), y: clamp(+m.y || 0, -1, 12), z: clamp(+m.z || 0, -MAP_HALF - 6, MAP_HALF + 6), vx: +m.vx || 0, vy: +m.vy || 0, vz: +m.vz || 0, ry: +m.ry || 0 });
   } else if (m.action === 'rest') {
     const e = worldWeapons.get(m.wid);
-    if (e) { e.pos.set(+m.x || 0, +m.y || 0, +m.z || 0); e.ry = +m.ry || e.ry; e.vel.set(0, 0, 0); e.rest = true; e.mesh.position.copy(e.pos); e.mesh.rotation.y = e.ry; }
+    if (e && isFinite(+m.x + +m.y + +m.z)) { e.pos.set(+m.x || 0, +m.y || 0, +m.z || 0); e.ry = +m.ry || e.ry; e.vel.set(0, 0, 0); e.rest = true; e.mesh.position.copy(e.pos); e.mesh.rotation.y = e.ry; }
   } else if (m.action === 'pickup') {
     const local = removeWorldWeapon(m.wid);
     if (m.byId === Net.id) applyPickup(local || m);
@@ -5609,7 +5632,7 @@ function bombResetRound() {
   BOMB.plantProgress = 0; BOMB.plantingBot = null; BOMB.planter = null; BOMB.plantSite = null;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
   BOMB._plantAdvT = -1; BOMB._defuseAdvT = -1;
-  BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0; BOMB._tenSecWarned = false;
+  BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0; BOMB._tenSecWarned = false; BOMB._fastFused = false;
   if (isMultiplayer()) {
     // Pure PvP: no bot carrier — T players carry (player.hasBomb set in startRound).
     for (const b of bots) b.hasBomb = false;
@@ -5778,14 +5801,18 @@ function defuseBomb(byPlayer, t, fromNet = false) {
 function applyRemoteBomb(m) {
   const t = performance.now() / 1000;
   const act = m.action;
+  if (m.fromId != null && !remotes.get(m.fromId)) return; // unknown sender
   if (act === 'plant') {
     if (BOMB.planted) return;
     const site = siteByName(m.site || 'A') || SITES[0];
+    const px = isFinite(+m.x) ? +m.x : site.x, pz = isFinite(+m.z) ? +m.z : site.z;
+    // plant must be inside the site radius — no cross-map plants
+    if (Math.hypot(px - site.x, pz - site.z) > site.r + 1.5) return;
     BOMB.planted = true; BOMB.site = site.name;
-    BOMB.pos = new THREE.Vector3(m.x || site.x, 0, m.z || site.z);
+    BOMB.pos = new THREE.Vector3(px, 0, pz);
     BOMB.carrier = null; BOMB.droppedPos = null;
     BOMB.plantProgress = 0; BOMB.plantingBot = null; BOMB.planter = null; BOMB.plantSite = null;
-    BOMB.explodeAt = t + BOMB_TIMER; BOMB.beepAt = t;
+    BOMB.explodeAt = t + BOMB_TIMER; BOMB.beepAt = t; BOMB._fastFused = false;
     BOMB.defuseProgress = 0; BOMB.defuser = null;
     player.hasBomb = false;
     spawnBombMesh(BOMB.pos, true);
@@ -5801,7 +5828,9 @@ function applyRemoteBomb(m) {
     endRound('ct', `BOMB DEFUSED BY ${m.by || m.fromName || 'CT'}`);
   } else if (act === 'drop') {
     if (BOMB.planted) return;
-    BOMB.droppedPos = new THREE.Vector3(m.x || 0, 0, m.z || 0);
+    const dx = +m.x || 0, dz = +m.z || 0;
+    if (!isFinite(dx + dz) || Math.abs(dx) > MAP_HALF + 6 || Math.abs(dz) > MAP_HALF + 6) return;
+    BOMB.droppedPos = new THREE.Vector3(dx, 0, dz);
     BOMB.carrier = null; BOMB.plantProgress = 0; BOMB.plantingBot = null; BOMB.planter = null; BOMB.plantSite = null;
     spawnBombMesh(BOMB.droppedPos, false);
     announce('BOMB DROPPED', 1400);
@@ -5829,10 +5858,12 @@ function applyRemoteRound(m) {
     // Guest follows host round numbering.
     if (typeof m.round === 'number' && m.round !== G.round) G.round = m.round;
     if (!G.roundEnding) return; // already live — ignore duplicate starts
+    if (isOnline() && m.fromId != null && !remotes.get(m.fromId)) return;
     startRound(!!m.first, true);
   } else if (m.action === 'end') {
     if (G.phase !== 'playing' || G.roundEnding) { applyServerScore(m); return; }
-    endRound(m.winner || 't', m.reason || '', true, m.score);
+    const w = m.winner === 'ct' ? 'ct' : m.winner === 'draw' ? 'draw' : 't';
+    endRound(w, String(m.reason || '').slice(0, 80), true, m.score);
   }
 }
 function updateBombHUD(t) {
@@ -5843,7 +5874,7 @@ function updateBombHUD(t) {
   bar.classList.remove('planted', 'ct');
   if (BOMB.exploded) {
     bar.classList.add('planted');
-    txt.innerHTML = '💥 <span class="t">C4 DETONATED</span>';
+    txt.textContent = '💥 C4 DETONATED';
     tmr.textContent = '0.0s';
     return;
   }
@@ -5854,18 +5885,18 @@ function updateBombHUD(t) {
       AudioSys.tenSecWarning();
     }
     bar.classList.add('planted');
-    txt.innerHTML = `💣 BOMB ON <span class="t">${BOMB.site}</span> — DEFUSE!`;
+    txt.textContent = `💣 BOMB ON ${BOMB.site} — DEFUSE!`;
     tmr.textContent = left.toFixed(1) + 's';
   } else if (BOMB.droppedPos) {
-    txt.innerHTML = `<span class="t">BOMB DROPPED</span> — UNSTABLE, DO NOT SHOOT`;
+    txt.textContent = `BOMB DROPPED — UNSTABLE, DO NOT SHOOT`;
     tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
   } else if (BOMB.carrier && BOMB.carrier.alive) {
     bar.classList.add('ct');
-    txt.innerHTML = `<span class="t">💣 ${BOMB.carrier.short}</span> heading <span class="t">${BOMB.targetSite}</span>`;
+    txt.textContent = `💣 ${BOMB.carrier.short} heading ${BOMB.targetSite}`;
     tmr.textContent = 'STOP THE PLANT';
   } else if (player.hasBomb && !BOMB.planted && (player.team || 'ct') === 't') {
     bar.classList.add('ct');
-    txt.innerHTML = `<span class="t">💣 YOU</span> — PLANT ON <span class="t">A / B</span>`;
+    txt.textContent = `💣 YOU — PLANT ON A / B`;
     tmr.textContent = 'HOLD E IN SITE';
   } else {
     txt.textContent = 'BOMB IN PLAY';
@@ -7083,7 +7114,13 @@ function nadeBounceSfx(p, hard = false) {
 }
 function removeNadeProj(i) {
   const p = nadeProjectiles[i];
-  try { scene.remove(p.mesh); } catch (e) {}
+  try {
+    scene.remove(p.mesh);
+    p.mesh.traverse((o) => {
+      try { if (o.isMesh) o.geometry.dispose(); } catch {}
+      try { if (o.isMesh || o.isSprite) o.material.dispose(); } catch {}
+    });
+  } catch (e) {}
   nadeProjectiles.splice(i, 1);
 }
 function clearNades() {
@@ -8750,15 +8787,28 @@ function updateScreenFeel(dt, t) {
 let announceTimer = null;
 function announce(msg, ms = 1200) {
   const a = $('announce');
-  a.innerHTML = `<div class="announce-title">${msg}</div>`;
+  a.textContent = '';
+  const d = document.createElement('div');
+  d.className = 'announce-title';
+  d.textContent = String(msg ?? '');
+  a.appendChild(d);
   a.classList.remove('hidden');
   clearTimeout(announceTimer);
   announceTimer = setTimeout(() => a.classList.add('hidden'), ms);
 }
 function announceRoundEnd(title, moneyText, track, ms = 3400) {
   const a = $('announce');
-  const musicHtml = track ? `<div class="announce-music"><span>🎵</span> <span>${track.title}</span></div>` : '';
-  a.innerHTML = `<div class="announce-title">${title} — ${moneyText}</div>${musicHtml}`;
+  a.textContent = '';
+  const d = document.createElement('div');
+  d.className = 'announce-title';
+  d.textContent = `${String(title ?? '')} — ${String(moneyText ?? '')}`;
+  a.appendChild(d);
+  if (track && track.title) {
+    const m = document.createElement('div');
+    m.className = 'announce-music';
+    m.textContent = `🎵 ${String(track.title)}`;
+    a.appendChild(m);
+  }
   a.classList.remove('hidden');
   clearTimeout(announceTimer);
   announceTimer = setTimeout(() => a.classList.add('hidden'), ms);
@@ -8809,7 +8859,7 @@ function renderScoreboard() {
     $('sb-foot').textContent = `ROUND ${G.round} · CT ${G.score.ct} — ${G.score.t} T${pingTxt}`;
   } catch {}
 }
-setInterval(() => { try { if (scoreboardVisible()) renderScoreboard(); } catch {} }, 500);
+setInterval(() => { try { if (G.phase === 'playing' && scoreboardVisible()) renderScoreboard(); } catch {} }, 500);
 function addKillfeed(killer, kTeam, victim, vTeam, wpn, head) {
   const kf = $('killfeed');
   const div = document.createElement('div');
@@ -8893,9 +8943,9 @@ const mmSpotTime = new WeakMap(); // entity -> performance timestamp (seconds)
 const MM_SPOT_LINGER = 2.0; // seconds enemies remain visible after last LOS
 function mmCanSeeEnemy(entityPos, tNow) {
   if (!player.alive) return true; // dead = spectate, show all
-  const eye = new THREE.Vector3(player.pos.x, EYE, player.pos.z);
-  const targetEye = new THREE.Vector3(entityPos.x, EYE, entityPos.z);
-  return hasLOSClear(eye, targetEye);
+  _tmpMMEye.set(player.pos.x, EYE, player.pos.z);
+  _tmpMMTgt.set(entityPos.x, EYE, entityPos.z);
+  return hasLOSClear(_tmpMMEye, _tmpMMTgt);
 }
 function mmEnemyVisible(entity, entityTeam, entityPos, tNow) {
   const myTeam = player.team || 'ct';
@@ -9326,9 +9376,12 @@ function checkRoundEnd() {
       return;
     }
     if (ct <= 0) {
-      // No one left to defuse — fast-forward to detonation for pacing.
-      BOMB.explodeAt = Math.min(BOMB.explodeAt, performance.now() / 1000 + 2.5);
-      announce('ALL CT DOWN — BOMB WILL DETONATE', 1800);
+      // No one left to defuse — fast-forward to detonation for pacing (once).
+      if (!BOMB._fastFused) {
+        BOMB._fastFused = true;
+        BOMB.explodeAt = Math.min(BOMB.explodeAt, performance.now() / 1000 + 2.5);
+        announce('ALL CT DOWN — BOMB WILL DETONATE', 1800);
+      }
       return;
     }
     return; // Ts all dead but bomb ticking — play the defuse!
@@ -9394,8 +9447,8 @@ function endMatch() {
   const mins = ((performance.now() - G.startTime) / 60000).toFixed(1);
   $('end-sub').textContent = `Final: CT ${G.score.ct} — ${G.score.t} T · ${mins} min`;
   const track = win ? AudioSys.roundWin('MATCH_WIN') : AudioSys.roundLose('MATCH_LOSS');
-  const trackInfo = track ? `<br><span style="color:#ffd76d;font-size:14px;letter-spacing:1px;font-weight:700;">🎵 ${track.title}</span>` : '';
-  $('end-stats').innerHTML = `Kills <b>${G.kills}</b> · Deaths <b>${player.deaths}</b> · Headshots <b>${G.headshots}</b><br>Accuracy <b>${acc}%</b> (${G.hits}/${G.shots}) · Cash <b>$${player.money}</b>${trackInfo}`;
+  const trackInfo = track ? `<br><span style="color:#ffd76d;font-size:14px;letter-spacing:1px;font-weight:700;">🎵 ${esc(track.title)}</span>` : '';
+  $('end-stats').innerHTML = `Kills <b>${G.kills | 0}</b> · Deaths <b>${player.deaths | 0}</b> · Headshots <b>${G.headshots | 0}</b><br>Accuracy <b>${acc | 0}%</b> (${G.hits | 0}/${G.shots | 0}) · Cash <b>$${player.money | 0}</b>${trackInfo}`;
   $('end-screen').classList.remove('hidden');
 }
 function pauseGame() {
@@ -9878,8 +9931,10 @@ async function connectMultiplayer(statusCb) {
   const nameEl = document.getElementById('mp-name');
   const urlEl = document.getElementById('mp-url');
   const teamEl = document.getElementById('mp-team');
-  const name = (nameEl && nameEl.value ? nameEl.value : ('Player' + ((Math.random() * 900 + 100) | 0))).slice(0, 16);
-  const url = (urlEl && urlEl.value ? urlEl.value.trim() : '') || defaultWsUrl();
+  const name = (nameEl && nameEl.value ? nameEl.value : ('Player' + ((Math.random() * 900 + 100) | 0))).replace(/[<>&"']/g, '').trim().slice(0, 16) || 'Player';
+  let url = (urlEl && urlEl.value ? urlEl.value.trim() : '') || defaultWsUrl();
+  if (!/^wss?:\/\/[^/]+(\/.*)?$/.test(url)) url = defaultWsUrl();
+  url = url.slice(0, 200);
   const wantTeam = (teamEl && teamEl.value) || 'auto';
   if (statusCb) statusCb('CONNECTING…');
   try {
@@ -9913,9 +9968,10 @@ function boot() {
   try { wireMultiplayer(); updateMPStatus(); } catch {}
   // Restore last MP settings into the menu (if the new MP panel exists).
   try {
-    const n = localStorage.getItem('h5cs_name'); const u = localStorage.getItem('h5cs_url');
+    const n = String(localStorage.getItem('h5cs_name') || '').replace(/[<>&"']/g, '').slice(0, 16);
+    const u = String(localStorage.getItem('h5cs_url') || '').slice(0, 200);
     if (n && document.getElementById('mp-name')) document.getElementById('mp-name').value = n;
-    if (u && document.getElementById('mp-url')) document.getElementById('mp-url').value = u;
+    if (u && /^wss?:\/\//.test(u) && document.getElementById('mp-url')) document.getElementById('mp-url').value = u;
     else if (document.getElementById('mp-url') && !document.getElementById('mp-url').value) {
       document.getElementById('mp-url').value = defaultWsUrl();
     }
@@ -9956,8 +10012,7 @@ function boot() {
   });
   // Back-compat: old single DEPLOY button (if MP panel missing).
   const legacyPlay = $('play-btn');
-  if (legacyPlay && !soloBtn) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
-  else if (legacyPlay) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
+  if (legacyPlay) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
   $('resume-btn').addEventListener('click', resumeGame);
   $('restart-btn').addEventListener('click', () => { $('pause-menu').classList.add('hidden'); G.phase = 'playing'; AudioSys.stopMusic(0.2); startMatch(); });
   $('again-btn').addEventListener('click', () => { AudioSys.stopMusic(0.2); startMatch(); });

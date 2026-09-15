@@ -121,9 +121,13 @@ export const Net = {
         const now = performance.now();
         for (const p of (m.players || [])) {
           if (p.id === this.id) continue;
+          if (!Number.isFinite(+p.x + +p.y + +p.z)) continue;
+          if (Math.abs(+p.x) > 45 || Math.abs(+p.z) > 45) continue;
+          const cleanName = String(p.name || '').replace(/[<>&"']/g, '').slice(0, 16);
+          const cleanTeam = p.team === 'ct' ? 'ct' : 't';
           let r = this.remotes.get(p.id);
           if (!r) {
-            r = { id: p.id, name: p.name || `Player${p.id}`, team: p.team || 't', lastSeen: now, ping: 0 };
+            r = { id: p.id, name: cleanName || `Player${p.id}`, team: cleanTeam, lastSeen: now, ping: 0 };
             this.remotes.set(p.id, r);
             this.emit('player_joined', { id: p.id, name: r.name, team: r.team });
           }
@@ -137,11 +141,11 @@ export const Net = {
           if (ct && r.lastCt && ct <= r.lastCt) continue;
           if (ct) r.lastCt = ct;
           Object.assign(r, {
-            name: p.name || r.name, team: p.team || r.team,
-            x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
-            hp: p.hp, alive: p.alive, weapon: p.weapon,
+            name: cleanName || r.name, team: cleanTeam,
+            x: +p.x || 0, y: +p.y || 0, z: +p.z || 0, yaw: +p.yaw || 0, pitch: +p.pitch || 0,
+            hp: Math.max(0, Math.min(100, +p.hp || 0)), alive: p.alive !== false, weapon: String(p.weapon || 'deagle').slice(0, 12),
             aiming: !!p.aiming, moving: !!p.moving,
-            crouch: !!p.crouch, gnd: p.gnd !== false, wr: p.wr | 0, dual: !!p.dual,
+            crouch: !!p.crouch, gnd: p.gnd !== false, wr: Math.max(-1, Math.min(1, p.wr | 0)), dual: !!p.dual,
           });
           this._pushSample(r, ct || now, now, p);
         }
@@ -239,16 +243,18 @@ export const Net = {
     }
     for (const p of players) {
       if (p.id === this.id) continue;
+      const cn = String(p.name || '').replace(/[<>&"']/g, '').slice(0, 16) || `Player${p.id}`;
+      const ct2 = p.team === 'ct' ? 'ct' : 't';
       if (!this.remotes.has(p.id)) {
         this.remotes.set(p.id, {
-          id: p.id, name: p.name, team: p.team,
+          id: p.id, name: cn, team: ct2,
           x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hp: 100, alive: true,
           weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(), ping: 0,
         });
-        this.emit('player_joined', p);
+        this.emit('player_joined', { ...p, name: cn, team: ct2 });
       } else {
         const r = this.remotes.get(p.id);
-        r.name = p.name; r.team = p.team;
+        r.name = cn; r.team = ct2;
       }
     }
   },
