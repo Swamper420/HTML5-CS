@@ -71,6 +71,11 @@ const WEAPON_KEYS = new Set(['ak', 'deagle', 'awp', 'p90']);
 // id -> { ws, id, name, team, state, lastSeen }
 const clients = new Map();
 
+// Authoritative match score — server level, so PvP clients can never diverge
+// (packet order / simultaneous round-end detection used to split scores).
+const match = { ct: 0, t: 0, round: 1, scoredRound: 0 };
+const matchScore = () => ({ ct: match.ct, t: match.t });
+
 function teamCounts() {
   let ct = 0, t = 0;
   for (const c of clients.values()) {
@@ -127,10 +132,10 @@ wss.on('connection', (ws) => {
         client.name = name;
         client.team = pickTeam(m.wantTeam);
         console.log(`[+] #${id} "${name}" joined as ${client.team.toUpperCase()} (${clients.size} online)`);
-        send(ws, { type: 'welcome', id, team: client.team, name, players: roster(), realPlayers: clients.size });
+        send(ws, { type: 'welcome', id, team: client.team, name, players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
         broadcast({ type: 'player_joined', id, name, team: client.team, realPlayers: clients.size }, id);
         // Immediately push a roster snapshot so everyone can apply the no-bots rule
-        broadcast({ type: 'roster', players: roster(), realPlayers: clients.size });
+        broadcast({ type: 'roster', players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
         if (drops.size) send(ws, { type: 'weapon', action: 'sync', drops: [...drops.values()] });
         break;
       }
@@ -181,10 +186,28 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'round':
-        // a new round wipes the floor (keep anything dropped in the last 2s — it belongs to the new round)
-        if (m.action === 'start') { const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k); }
+        // Server-authoritative score: first 'end' per round number wins, duplicates
+        // (simultaneous detection on two clients, retransmits) are idempotent.
+        // 'start' with first/round 1 resets the match (fresh startMatch on host).
+        if (m.action === 'start') {
+          const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k);
+          if (m.first || (typeof m.round === 'number' && m.round <= 1)) { match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
+          else if (typeof m.round === 'number' && m.round > 0) match.round = m.round;
+          m.score = matchScore(); m.round = match.round;
+        } else if (m.action === 'end') {
+          const r = typeof m.round === 'number' ? m.round : match.round;
+          if (r !== match.scoredRound && r >= match.round) {
+            if (m.winner === 'ct') match.ct++;
+            else if (m.winner === 't') match.t++;
+            match.scoredRound = r;
+            match.round = r + 1;
+          }
+          m.score = matchScore(); m.round = r;
+        }
         m.fromId = id; m.fromName = client.name; m.fromTeam = client.team;
         broadcast(m, id);
+        // Echo authoritative score back to the sender too (sender skips its own broadcast).
+        send(ws, { type: 'round_echo', score: matchScore(), round: match.round });
         break;
       case 'shot':
       case 'hit':
@@ -210,10 +233,10 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     clients.delete(id);
-    if (!clients.size) drops.clear();
+    if (!clients.size) { drops.clear(); match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
     console.log(`[-] client ${id} left (${clients.size} online)`);
     broadcast({ type: 'player_left', id, realPlayers: clients.size });
-    broadcast({ type: 'roster', players: roster(), realPlayers: clients.size });
+    broadcast({ type: 'roster', players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
   });
 
   ws.on('error', () => { try { ws.close(); } catch {} });
@@ -238,7 +261,7 @@ setInterval(() => {
     players.push({ ...c.state, name: c.name, team: c.team });
   }
   if (!players.length) return;
-  const msg = JSON.stringify({ type: 'snapshot', players, realPlayers: clients.size, t: Date.now() });
+  const msg = JSON.stringify({ type: 'snapshot', players, realPlayers: clients.size, t: Date.now(), score: matchScore(), round: match.round });
   for (const c of clients.values()) {
     if (c.ws.readyState === 1) c.ws.send(msg);
   }

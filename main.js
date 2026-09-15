@@ -51,7 +51,7 @@ const primaryKey = () => PRIMARIES.find((k) => player.weapons[k] && player.weapo
 // smokeFuse = pop time after throw; molotov ignites on first impact (fuse = failsafe)
 const NADE_DEFS = {
   he:      { name: 'HE GRENADE', short: 'HE',    slot: 3, price: 300, max: 2, fuse: 1.5, radius: 7.5, damage: 98,  throwPower: 17, underPower: 7,  color: 0x4d7c3a, desc: 'Frag — radial damage' },
-  flash:   { name: 'FLASHBANG',  short: 'FLASH', slot: 4, price: 200, max: 2, fuse: 1.5, radius: 26,  blindMax: 3.2, throwPower: 17, underPower: 7,  color: 0xe8ecf2, desc: 'Blinds on LOS' },
+  flash:   { name: 'FLASHBANG',  short: 'FLASH', slot: 4, price: 200, max: 2, fuse: 1.5, radius: 26,  blindMax: 3.2, throwPower: 17, underPower: 7,  color: 0x8fc3ec, desc: 'Blinds on LOS' },
   smoke:   { name: 'SMOKE',      short: 'SMOKE', slot: 5, price: 300, max: 2, fuse: 1.7, radius: 3.8, duration: 18, throwPower: 17, underPower: 7, color: 0x9aa0ab, desc: 'Dynamic vision block' },
   molotov: { name: 'MOLOTOV',    short: 'MOLY',  slot: 6, price: 400, max: 1, fuse: 2.0, radius: 2.8, duration: 7.0, dps: 52, throwPower: 17, underPower: 7, color: 0xc76a1e, desc: 'Area denial fire' },
 };
@@ -138,7 +138,7 @@ const SETTINGS_DEFAULTS = {
   // mouse & aim
   sens: 2.2, adsSens: 100, invertY: false, crouchToggle: false,
   // video
-  fov: 75, fpsCap: 240, vsync: false, quality: true, sway: 100, shake: 100, gore: true, goreLevel: 5, difficulty: 1,
+  fov: 75, fpsCap: 240, vsync: false, sway: 100, shake: 100, gore: true, goreLevel: 5, difficulty: 1,
   // audio
   sound: true, music: true, volMaster: 85, volMusic: 85,
   // crosshair & hud
@@ -157,7 +157,6 @@ const SETTINGS_SPEC = {
     { k: 'fov', label: 'Field of view', type: 'range', min: 60, max: 110, step: 1, unit: '°' },
     { k: 'vsync', label: 'VSync (lock to display refresh, ignores cap)', type: 'bool' },
     { k: 'fpsCap', label: 'FPS cap', type: 'range', min: 30, max: 500, step: 10, unit: ' fps' },
-    { k: 'quality', label: 'Shadows & particles', type: 'bool' },
     { k: 'sway', label: 'View bob & weapon sway', type: 'range', min: 0, max: 150, step: 5, unit: '%' },
     { k: 'shake', label: 'Screen shake', type: 'range', min: 0, max: 150, step: 5, unit: '%' },
     { k: 'gore', label: 'Blood & gore', type: 'bool' },
@@ -201,9 +200,9 @@ function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringif
 
 // Push SET into everything the game actually reads at runtime.
 function applySettings() {
-  opts.quality = SET.quality; opts.sound = SET.sound; opts.music = SET.music; opts.difficulty = SET.difficulty;
-  try { if (renderer) renderer.shadowMap.enabled = SET.quality; } catch (e) {}
-  try { if (sunLight) sunLight.castShadow = SET.quality; } catch (e) {}
+  opts.quality = true; // always high — no low-quality mode. opts.sound = SET.sound; opts.music = SET.music; opts.difficulty = SET.difficulty;
+  try { if (renderer) renderer.shadowMap.enabled = true; } catch (e) {}
+  try { if (sunLight) sunLight.castShadow = true; } catch (e) {}
   try { AudioSys.applyVolumes(); } catch (e) {}
   if (!SET.music) { try { AudioSys.stopMusic(0.2); } catch (e) {} }
   try {
@@ -219,7 +218,6 @@ function applySettings() {
   } catch (e) {}
   // keep the quick-access main-menu row showing the same truth
   try {
-    if ($('opt-quality')) $('opt-quality').checked = SET.quality;
     if ($('opt-sound')) $('opt-sound').checked = SET.sound;
     if ($('opt-music')) $('opt-music').checked = SET.music;
     if ($('opt-diff')) $('opt-diff').value = String(SET.difficulty);
@@ -2883,30 +2881,10 @@ function buildViewmodel(key) {
     vmSightRear = gm.rear; vmSightFront = gm.front; vmStockParts = gm.stock;
     vmMag.userData.top = key === 'p90'; // P90 mag lifts off the top instead of dropping
   } else if (isNadeKey(key)) {
-    // ---- Tactical grenade in hand (first-person) ----
-    const def = NADE_DEFS[key];
-    const bodyCol = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.55, metalness: 0.25 });
-    const darkM = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.5, metalness: 0.6 });
-    if (key === 'molotov') {
-      // bottle + rag + fuel tint
-      add(vmKickG, new THREE.CylinderGeometry(0.032, 0.036, 0.13, 12),
-        new THREE.MeshStandardMaterial({ color: 0x3f6b2a, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.85 }), 0, -0.02, -0.30);
-      B(vmKickG, 0.020, 0.035, 0.020, darkM, 0, 0.06, -0.30); // neck
-      B(vmKickG, 0.030, 0.025, 0.030, new THREE.MeshStandardMaterial({ color: 0xd8cfc0, roughness: 1 }), 0.01, 0.085, -0.30, 0, 0, 0.4); // rag
-      B(vmKickG, 0.050, 0.020, 0.050, M.glove || darkM, 0, -0.10, -0.28); // gripping hand hint
-    } else {
-      // pin + lever + ribbed body
-      add(vmKickG, new THREE.SphereGeometry(0.045, 14, 12), bodyCol, 0, -0.02, -0.30);
-      C(vmKickG, 0.012, 0.012, 0.03, darkM, 0, 0.03, -0.30, 0, 10); // fuse housing
-      B(vmKickG, 0.055, 0.008, 0.014, M.steel, 0.01, 0.048, -0.30, 0, 0, 0.15); // lever
-      add(vmKickG, new THREE.TorusGeometry(0.014, 0.0035, 6, 12), M.steel, -0.035, 0.045, -0.30); // pin ring
-      if (key === 'flash') {
-        // slotted flash body bands
-        for (let i = 0; i < 3; i++) add(vmKickG, new THREE.TorusGeometry(0.045, 0.003, 6, 16), darkM, 0, -0.04 + i * 0.022, -0.30).rotation.x = Math.PI / 2;
-      } else if (key === 'smoke') {
-        C(vmKickG, 0.046, 0.046, 0.02, new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.6 }), 0, -0.02, -0.30, 0, 14);
-      }
-    }
+    // First-person: hi-def version of third-person silhouette, easy to tell apart.
+    const nm = makeFirstPersonNadeMesh(key);
+    nm.position.set(0, -0.02, -0.30);
+    vmKickG.add(nm);
     // hand holding it
     B(vmKickG, 0.075, 0.080, 0.085, M.glove, 0, -0.115, -0.24, 0.35);
     B(vmKickG, 0.030, 0.055, 0.060, M.glove, 0.045, -0.08, -0.27, 0.35);
@@ -3198,6 +3176,7 @@ function updateRemoteMeshes(dt, t) {
               Math.max(0.12, e.deathPos.y + Math.sin(Math.min(1, dk) * Math.PI) * 0.22 * (ef.power || 1)),
               e.deathPos.z + e.knock.z * dease
             );
+            try { slideCorpseOut(m, 0.5); } catch (err) {}
             e.pos.set(m.position.x, e.deathPos.y, m.position.z);
           } else {
             m.position.y = Math.max(0.2, m.position.y);
@@ -3259,6 +3238,7 @@ function wireMultiplayer() {
   Net.on('welcome', (m) => {
     player.team = (m.team === 't') ? 't' : 'ct';
     player.name = Net.name || 'YOU';
+    try { applyServerScore(m); if (typeof m.round === 'number' && m.round > 0 && G.phase !== 'playing') G.round = m.round; } catch {}
     announce(`ONLINE AS ${player.team.toUpperCase()} — ${player.name}`, 1800);
     refreshBotsForMP();
     updateMPStatus();
@@ -3379,6 +3359,9 @@ function wireMultiplayer() {
   });
   Net.on('round', (m) => {
     try { applyRemoteRound(m); } catch (e) { console.warn('round msg', e); }
+  });
+  Net.on('round_echo', (m) => {
+    try { applyServerScore(m); } catch (e) { console.warn('round echo', e); }
   });
   Net.on('nade', (m) => {
     try { applyRemoteNade(m); } catch (e) { console.warn('nade msg', e); }
@@ -3602,12 +3585,9 @@ function clearDecals() {
 }
 
 // ---------------- Gore: ragdolls, exploding heads, gibs ----------------
-// Design: corpses stay whole (realistic — bullets don't dismember torsos) but
-// fall with momentum away from the shot, limbs sprawl, blood sprays directional.
-// Only heads pop (AWP always, Deagle often, rifles sometimes, HE always gibs):
-// skull + helmet become independent tumbling physics props, neck stump bleeds.
-// HE / point-blank AWP can additionally tear a limb into a flying flesh gib.
-// All gib meshes persist to round end like corpses (capped), reset in startRound.
+// Design: corpses stay whole — bullets don't dismember torsos. Only the hit
+// part detaches (head pops, limb tears), rest flings along shot dir.
+// Full dismemberment is explosives-only (HE/C4). Counts kept low on purpose.
 const gibs = []; // {mesh, vel, ang, life, restY, bounced, bloodAt, helmet, flesh}
 let _gibMats = null;
 function gibMats() {
@@ -3627,7 +3607,9 @@ function gibMats() {
 function clearGibs() {
   for (const gib of gibs) {
     try { scene.remove(gib.mesh); } catch (e) {}
-    try { if (gib.mesh.geometry) gib.mesh.geometry.dispose(); } catch (e) {}
+    try { gib.mesh.traverse((o) => { if (o.isMesh) o.geometry.dispose(); }); } catch (e) {
+      try { if (gib.mesh.geometry) gib.mesh.geometry.dispose(); } catch (e2) {}
+    }
     // materials are shared via gibMats() — do not dispose
   }
   gibs.length = 0;
@@ -3650,19 +3632,26 @@ function capGibs() {
   while (gibs.length > cap) {
     const old = gibs.shift();
     try { scene.remove(old.mesh); } catch (e) {}
-    try { if (old.mesh.geometry) old.mesh.geometry.dispose(); } catch (e) {}
+    try { old.mesh.traverse((o) => { if (o.isMesh) o.geometry.dispose(); }); } catch (e) {
+      try { if (old.mesh.geometry) old.mesh.geometry.dispose(); } catch (e2) {}
+    }
   }
 }
 function spawnGibMesh(mesh, pos, vel, go = {}) {
   mesh.position.copy(pos);
-  mesh.castShadow = true;
+  try { mesh.traverse((o) => { if (o.isMesh) o.castShadow = true; }); } catch (e) { mesh.castShadow = true; }
   scene.add(mesh);
+  // rigid body state: point mass with radius, restitution + surface friction.
+  // Wall/ground contacts resolve in updateGibs via gibCollide.
   gibs.push({
     mesh,
     vel: vel.clone(),
-    ang: new THREE.Vector3(rand(-11, 11), rand(-11, 11), rand(-11, 11)),
+    ang: go.ang ? go.ang.clone() : new THREE.Vector3(rand(-11, 11), rand(-11, 11), rand(-11, 11)),
     life: 30, // persist to round end; startRound clears
     restY: go.restY !== undefined ? go.restY : 0.09,
+    radius: go.radius !== undefined ? go.radius : 0.14,
+    rest: go.rest !== undefined ? go.rest : 0.35, // bounciness 0..1
+    fric: go.fric !== undefined ? go.fric : 0.7, // surface friction on contact
     bounced: 0,
     bloodAt: 0,
     flesh: !!go.flesh,
@@ -3671,6 +3660,43 @@ function spawnGibMesh(mesh, pos, vel, go = {}) {
   });
   capGibs();
   return mesh;
+}
+// Rigid-body contact: push a sphere (p, radius) out of world AABBs.
+// Reflects velocity on the hit axis with restitution, kills the rest with
+// friction. Returns true on contact. ponytail: AABB-only, no stacking.
+function gibCollide(p, vel, radius, rest, fric) {
+  let hit = false;
+  for (const b of colliders) {
+    const cx = clamp(p.x, b.min.x, b.max.x);
+    const cy = clamp(p.y, b.min.y, b.max.y);
+    const cz = clamp(p.z, b.min.z, b.max.z);
+    const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 >= radius * radius) continue;
+    hit = true;
+    const d = Math.sqrt(d2);
+    if (d > 1e-5) {
+      const nx = dx / d, ny = dy / d, nz = dz / d;
+      p.x = cx + nx * radius; p.y = cy + ny * radius; p.z = cz + nz * radius;
+      const vn = vel.x * nx + vel.y * ny + vel.z * nz;
+      if (vn < 0) {
+        vel.x -= (1 + rest) * vn * nx;
+        vel.y -= (1 + rest) * vn * ny;
+        vel.z -= (1 + rest) * vn * nz;
+        vel.x *= (1 - fric * 0.4); vel.z *= (1 - fric * 0.4); vel.y *= (1 - fric * 0.2);
+      }
+    } else {
+      // center inside box: pop out along smallest penetration axis
+      const px = Math.min(p.x - b.min.x, b.max.x - p.x);
+      const py = Math.min(p.y - b.min.y, b.max.y - p.y);
+      const pz = Math.min(p.z - b.min.z, b.max.z - p.z);
+      if (px <= py && px <= pz) { p.x = (p.x - b.min.x < b.max.x - p.x) ? b.min.x - radius : b.max.x + radius; vel.x *= -rest; }
+      else if (py <= px && py <= pz) { p.y = (p.y - b.min.y < b.max.y - p.y) ? b.min.y - radius : b.max.y + radius; vel.y *= -rest; }
+      else { p.z = (p.z - b.min.z < b.max.z - p.z) ? b.min.z - radius : b.max.z + radius; vel.z *= -rest; }
+      vel.x *= (1 - fric * 0.3); vel.z *= (1 - fric * 0.3);
+    }
+  }
+  return hit;
 }
 // directional arterial spray: red particles + dark mist + ground spatter along shot dir
 function spawnBloodSpray(pos, dir, power = 1) {
@@ -3684,7 +3710,7 @@ function spawnBloodSpray(pos, dir, power = 1) {
     mist.y = Math.max(0.3, mist.y - 0.15);
     spawnSmoke(mist, 0.3 * power, 0.7, 0x8a1518);
     // fling a few physical blood-flesh droplets that arc and stain where they land
-    const droplets = opts.quality ? Math.round(4 * power) : 2;
+    const droplets = opts.quality ? Math.round(2 * power) : 1;
     for (let i = 0; i < droplets; i++) {
       const m = gibMats();
       const chunk = new THREE.Mesh(
@@ -3723,12 +3749,12 @@ function explodeHead(mesh, headWorldPos, shotDir, power = 1, team = 't') {
       }
     } catch (e) {}
     const M = gibMats();
-    // red mist core + brain-matter burst + bone shards
-    spawnBurst(headWorldPos, 0xc01418, opts.quality ? 18 : 8, 5 * power, 0.6, 0.11);
-    spawnBurst(headWorldPos, 0xff6a6a, opts.quality ? 8 : 4, 3 * power, 0.5, 0.09);
-    spawnSmoke(headWorldPos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.5 * power, 0.8, 0x7a0f12);
+    // red mist core + brain-matter burst + bone shards (kept small: head only)
+    spawnBurst(headWorldPos, 0xc01418, opts.quality ? 12 : 6, 5 * power, 0.6, 0.11);
+    spawnBurst(headWorldPos, 0xff6a6a, opts.quality ? 5 : 2, 3 * power, 0.5, 0.09);
+    spawnSmoke(headWorldPos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.4 * power, 0.8, 0x7a0f12);
     // skull shards (pale) + brain blobs (pink) as tumbling physics
-    const nBone = opts.quality ? 5 : 3, nBrain = opts.quality ? 5 : 2;
+    const nBone = opts.quality ? 3 : 2, nBrain = opts.quality ? 3 : 2;
     for (let i = 0; i < nBone; i++) {
       const s = rand(0.04, 0.09);
       const shard = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.6, s * 0.8), M.bone);
@@ -3746,7 +3772,7 @@ function explodeHead(mesh, headWorldPos, shotDir, power = 1, team = 't') {
       spawnGibMesh(blob, headWorldPos, v, { flesh: true, restY: 0.05 });
     }
     // flesh slabs from the scalp/jaw
-    for (let i = 0; i < (opts.quality ? 4 : 2); i++) {
+    for (let i = 0; i < (opts.quality ? 2 : 1); i++) {
       const slab = new THREE.Mesh(new THREE.BoxGeometry(rand(0.07, 0.13), rand(0.05, 0.09), rand(0.07, 0.12)), M.flesh);
       const v = new THREE.Vector3(rand(-1, 1), rand(0.4, 1.3), rand(-1, 1)).normalize().multiplyScalar(rand(2.5, 5.5 * power));
       if (shotDir) v.addScaledVector(shotDir, rand(1.5, 3.5 * power));
@@ -3774,26 +3800,73 @@ function explodeHead(mesh, headWorldPos, shotDir, power = 1, team = 't') {
     try { AudioSys.headpop(headWorldPos); } catch (e) {}
   } catch (e) {}
 }
-// tear a limb into a flying flesh gib (HE / close AWP). Hides one arm or leg proxy-wise:
-// we keep the rig intact but spawn a cloth-covered flesh chunk as the "torn" limb.
-function tearLimbGib(victimPos, shotDir, team, big = false) {
+// Hide the struck limb on the corpse and return its joint group (null = torso
+// chunk, nothing to hide). A flesh stump cap covers the socket.
+function detachLimb(mesh, part) {
+  try {
+    const ud = mesh && mesh.userData, rg = ud && ud.rig;
+    if (!rg) return null;
+    let joint = null;
+    if (part === 'leg') joint = Math.random() < 0.5 ? rg.hipL : rg.hipR;
+    else if (part === 'arm') joint = Math.random() < 0.5 ? rg.shoulderL : rg.shoulderR;
+    if (!joint) return null;
+    joint.visible = false;
+    try {
+      const cap = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.1, 0.14),
+        new THREE.MeshStandardMaterial({ color: 0x6d0d0f, roughness: 0.6 })
+      );
+      cap.position.copy(joint.position);
+      (joint.parent || mesh).add(cap);
+      (ud.stumps || (ud.stumps = [])).push(cap);
+    } catch (e) {}
+    return joint;
+  } catch (e) { return null; }
+}
+// Build an anatomical detached part: leg (thigh+shin+boot), arm
+// (sleeve+forearm+glove), or torso meat chunk. Cloth matches the team.
+function buildDetachedPart(part, team) {
+  const M = gibMats();
+  const g = new THREE.Group();
+  const cloth = team === 'ct' ? M.clothCT : M.clothT;
+  const skin = new THREE.MeshStandardMaterial({ color: 0xc9986b, roughness: 0.65 });
+  const bootM = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.9 });
+  const gloveM = new THREE.MeshStandardMaterial({ color: 0x2b2b26, roughness: 0.95 });
+  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
+  if (part === 'leg') {
+    add(new THREE.BoxGeometry(0.22, 0.4, 0.24), cloth, 0, -0.2, 0);
+    add(new THREE.BoxGeometry(0.2, 0.32, 0.22), cloth, 0, -0.56, 0);
+    add(new THREE.BoxGeometry(0.24, 0.14, 0.34), bootM, 0, -0.79, 0.05);
+    add(new THREE.BoxGeometry(0.2, 0.08, 0.2), M.flesh, 0, 0.03, 0); // stump
+  } else if (part === 'arm') {
+    add(new THREE.BoxGeometry(0.17, 0.36, 0.19), cloth, 0, -0.18, 0);
+    add(new THREE.BoxGeometry(0.15, 0.28, 0.16), skin, 0, -0.5, 0);
+    add(new THREE.BoxGeometry(0.15, 0.12, 0.16), gloveM, 0, -0.7, 0);
+    add(new THREE.BoxGeometry(0.15, 0.07, 0.15), M.flesh, 0, 0.03, 0);
+  } else {
+    add(new THREE.BoxGeometry(rand(0.1, 0.15), rand(0.12, 0.2), rand(0.1, 0.14)),
+      Math.random() < 0.5 ? cloth : M.flesh, 0, 0, 0);
+  }
+  return g;
+}
+// tear off ONLY the hit part (torso chunk or limb). One chunk, flung along
+// shot dir — the rest of the body stays whole and falls via ragdoll.
+function tearLimbGib(mesh, pos, shotDir, team, big = false, part = null) {
+  if (!pos) return;
   if (!SET.gore) return;
   try {
-    const M = gibMats();
-    const origin = new THREE.Vector3(victimPos.x + rand(-0.2, 0.2), rand(0.7, 1.3), victimPos.z + rand(-0.2, 0.2));
-    const n = big ? (opts.quality ? 4 : 2) : (opts.quality ? 2 : 1);
-    for (let i = 0; i < n; i++) {
-      const isCloth = Math.random() < 0.5;
-      const chunk = new THREE.Mesh(
-        new THREE.BoxGeometry(rand(0.14, 0.2), rand(0.3, 0.45), rand(0.14, 0.18)),
-        isCloth ? (team === 'ct' ? M.clothCT : M.clothT) : M.flesh
-      );
-      const v = new THREE.Vector3(rand(-1, 1), rand(0.6, 1.4), rand(-1, 1)).normalize().multiplyScalar(rand(3, big ? 8 : 6));
-      if (shotDir) v.addScaledVector(shotDir, rand(2, 5));
-      v.y += rand(2, big ? 5 : 4);
-      spawnGibMesh(chunk, origin, v, { flesh: true, restY: 0.12 });
-    }
-    spawnBloodSpray(origin, shotDir, big ? 1.6 : 1.1);
+    let hitPart = part || 'torso';
+    if (hitPart === 'torso' && Math.random() < 0.4) hitPart = 'arm'; // upper-body hits take the arm
+    const y = hitPart === 'leg' ? rand(0.3, 0.6) : hitPart === 'arm' ? rand(1.0, 1.35) : rand(0.7, 1.3);
+    const origin = new THREE.Vector3(pos.x + rand(-0.15, 0.15), y + (pos.y || 0), pos.z + rand(-0.15, 0.15));
+    if (mesh) detachLimb(mesh, hitPart === 'torso' ? null : hitPart);
+    const chunk = buildDetachedPart(hitPart, team);
+    const v = new THREE.Vector3(rand(-0.6, 0.6), rand(0.6, 1.2), rand(-0.6, 0.6)).normalize().multiplyScalar(rand(2.5, big ? 7 : 5));
+    if (shotDir) v.addScaledVector(shotDir, rand(2, 5));
+    v.y += rand(1.5, big ? 4 : 3);
+    const radius = hitPart === 'torso' ? 0.12 : 0.3;
+    spawnGibMesh(chunk, origin, v, { flesh: true, restY: hitPart === 'torso' ? 0.08 : 0.14, radius, rest: 0.3, fric: 0.75 });
+    spawnBloodSpray(origin, shotDir, big ? 1.4 : 1.0);
     try { AudioSys.gib(origin, big); } catch (e) {}
   } catch (e) {}
 }
@@ -3807,7 +3880,11 @@ function restoreSoldierMesh(mesh) {
     if (rg) {
       try {
         for (const j of [rg.pelvis, rg.spine, rg.chest, rg.neck, rg.hipL, rg.kneeL, rg.ankleL,
-                         rg.hipR, rg.kneeR, rg.ankleR, rg.gun]) { if (j) j.rotation.set(0, 0, 0); }
+                         rg.hipR, rg.kneeR, rg.ankleR, rg.shoulderL, rg.shoulderR, rg.elbowL, rg.elbowR, rg.gun]) {
+          if (!j) continue;
+          j.rotation.set(0, 0, 0);
+          j.visible = true; // re-attach limbs hidden by detachLimb
+        }
         rg.pelvis.position.set(0, rg.hipY, 0);
         rg.shoulderL.rotation.set(-0.55, 0, 0); rg.elbowL.rotation.set(-0.85, 0, 0);
         rg.shoulderR.rotation.set(-0.55, 0, 0); rg.elbowR.rotation.set(-0.85, 0, 0);
@@ -3818,32 +3895,47 @@ function restoreSoldierMesh(mesh) {
     }
     ud.anim = null; ud.rag = null; // fresh gait clock on respawn, drop the ragdoll
     if (ud.torso) { try { ud.torso.rotation.set(0, 0, 0); } catch (e) {} }
-    if (ud.legL) { try { ud.legL.rotation.set(0, 0, 0); } catch (e) {} }
-    if (ud.legR) { try { ud.legR.rotation.set(0, 0, 0); } catch (e) {} }
-    if (ud.armL) { try { ud.armL.rotation.set(-0.55, 0, 0); } catch (e) {} }
-    if (ud.armR) { try { ud.armR.rotation.set(-0.55, 0, 0); } catch (e) {} }
+    if (ud.legL) { try { ud.legL.rotation.set(0, 0, 0); ud.legL.visible = true; } catch (e) {} }
+    if (ud.legR) { try { ud.legR.rotation.set(0, 0, 0); ud.legR.visible = true; } catch (e) {} }
+    if (ud.armL) { try { ud.armL.rotation.set(-0.55, 0, 0); ud.armL.visible = true; } catch (e) {} }
+    if (ud.armR) { try { ud.armR.rotation.set(-0.55, 0, 0); ud.armR.visible = true; } catch (e) {} }
     if (ud.gunG) { try { ud.gunG.visible = true; } catch (e) {} }
     if (ud.stump) { try { ud.stump.visible = false; } catch (e) {} }
+    try {
+      for (const s of (ud.stumps || [])) { try { s.visible = false; s.parent && s.parent.remove(s); } catch (e) {} }
+      ud.stumps = [];
+    } catch (e) {}
     mesh.rotation.set(0, mesh.rotation.y || 0, 0);
   } catch (e) {}
 }
-// physics for helmets / skull / flesh: gravity + bounce + blood stain on rest
+// rigid-body gibs: gravity + air drag, wall contacts, ground bounce with
+// friction, then rest + bleed-out stain. ponytail: single sphere per gib,
+// no stacking/constraints — helmet clatter + flesh thud only.
 function updateGibs(dt) {
   for (let i = 0; i < gibs.length; i++) {
     const gib = gibs[i];
     try {
       gib.vel.y -= 20 * dt;
+      gib.vel.multiplyScalar(Math.max(0, 1 - 0.12 * dt)); // air drag
       gib.mesh.position.addScaledVector(gib.vel, dt);
       gib.mesh.rotation.x += gib.ang.x * dt;
       gib.mesh.rotation.y += gib.ang.y * dt;
       gib.mesh.rotation.z += gib.ang.z * dt;
       const p = gib.mesh.position;
+      const wallHit = gibCollide(p, gib.vel, gib.radius || 0.14, gib.helmet ? 0.45 : (gib.rest ?? 0.35), gib.fric ?? 0.7);
+      if (wallHit) {
+        gib.ang.multiplyScalar(0.6);
+        gib.bounced++;
+        if (gib.flesh && gib.vel.lengthSq() > 4 && Math.random() < 0.4) {
+          try { spawnDecal('blood', p.clone(), new THREE.Vector3(0, 1, 0), 0.4 + Math.random() * 0.4, 0.5); } catch (e) {}
+        }
+      }
       if (p.y < gib.restY) {
         p.y = gib.restY;
-        if (Math.abs(gib.vel.y) > 1.6 && gib.bounced < 3) {
+        if (Math.abs(gib.vel.y) > 1.6 && gib.bounced < 5) {
           gib.bounced++;
           gib.vel.y *= gib.helmet ? -0.45 : -0.32;
-          gib.vel.x *= 0.55; gib.vel.z *= 0.55;
+          gib.vel.x *= (1 - gib.fric * 0.5); gib.vel.z *= (1 - gib.fric * 0.5);
           gib.ang.multiplyScalar(0.5);
           if (gib.helmet) { try { AudioSys.helmetHit(p); } catch (e) {} }
           else if (gib.flesh && Math.random() < 0.6) {
@@ -3876,7 +3968,19 @@ const GORE_MULT = [0, 0.5, 1.0, 1.9, 3.0, 4.8];
 const GK = () => (SET.gore ? (GORE_MULT[clamp(Math.round(SET.goreLevel || 5), 0, 5)] || 0) : 0);
 const goreN = (base) => Math.max(0, Math.round(base * GK() * (opts.quality ? 1 : 0.5)));
 const goreCap = (base) => Math.round(base * Math.max(1, GK()));
-
+// Whole-corpse contact: keep the sliding body out of crates/walls so the
+// knockback never ends buried in geometry. Horizontal push-out only — the
+// tip-over tween owns Y. ponytail: no per-bone simulation, one capsule push.
+function slideCorpseOut(mesh, radius = 0.5) {
+  try {
+    const p = mesh.position, v = new THREE.Vector3();
+    if (gibCollide(p, v, radius, 0, 0)) {
+      p.y = Math.max(p.y, 0.05);
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
 // Which face of an axis-aligned box is this point on? Needed to lay a splat flat
 // against a wall instead of edge-on to it.
 function boxFaceNormal(box, p) {
@@ -3919,7 +4023,14 @@ function bloodSplatterRays(origin, dir, count = 8, spread = 1, maxDist = 7) {
     }
   }
 }
+// which part did the killing shot hit? head is known; torso vs leg from wound height.
+function woundPart(feetY, hitY, head) {
+  if (head) return 'head';
+  const h = (hitY || 0) - (feetY || 0);
+  return h < 0.8 ? 'leg' : 'torso';
+}
 // A body that stops being a body. Returns true if it actually came apart.
+// EXPLOSIVES ONLY — bullets never call this (they tear one part, see above).
 function explodeBody(mesh, pos, dir, power = 1, team = 't') {
   const k = GK();
   if (!k) return false;
@@ -3948,7 +4059,7 @@ function explodeBody(mesh, pos, dir, power = 1, team = 't') {
       spawnGibMesh(limb, at(0.3, 0.5, 1.5), kick(3.2 * power, 2.0), { flesh: true, restY: 0.12 });
     }
     // meat, bone and viscera
-    const chunks = goreN(7) + 4;
+    const chunks = goreN(4) + 2;
     for (let i = 0; i < chunks; i++) {
       const roll = Math.random();
       let g, mt;
@@ -3965,11 +4076,11 @@ function explodeBody(mesh, pos, dir, power = 1, team = 't') {
     spawnGibMesh(lid, at(0.2, 1.8, 2.1), kick(3.4 * power, 2.6), { helmet: true, restY: 0.1 });
 
     // the mess it leaves
-    spawnBloodSpray(origin, dir, 2.4 * power);
-    spawnBurst(origin, 0xa00d10, goreN(26) + 10, 9 * power, 0.9, 0.16);
-    spawnBurst(origin, 0x5d0b0d, goreN(16) + 6, 5 * power, 1.3, 0.22);
-    for (let i = 0; i < goreN(2) + 1; i++) spawnSmoke(at(0.5, 0.6, 1.4), 0.5 + Math.random() * 0.5, 1.1, 0x6a0d10);
-    bloodSplatterRays(origin, null, 22, 1.2, 8);
+    spawnBloodSpray(origin, dir, 2.0 * power);
+    spawnBurst(origin, 0xa00d10, goreN(18) + 8, 9 * power, 0.9, 0.16);
+    spawnBurst(origin, 0x5d0b0d, goreN(10) + 4, 5 * power, 1.3, 0.22);
+    for (let i = 0; i < goreN(1) + 1; i++) spawnSmoke(at(0.5, 0.6, 1.4), 0.5 + Math.random() * 0.5, 1.1, 0x6a0d10);
+    bloodSplatterRays(origin, null, 16, 1.2, 8);
     for (let i = 0; i < goreN(2) + 1; i++) spawnBloodPool(pos.x + rand(-1.3, 1.3), pos.z + rand(-1.3, 1.3), true);
     try { AudioSys.gib(origin, true); } catch (e) {}
     try { AudioSys.headpop(origin); } catch (e) {}
@@ -4144,11 +4255,13 @@ function goreRemoteDeath(entry, head, weaponLabel, shotDir) {
     let pop = false, popPower = 1;
     if (explosive) {
       pop = Math.random() < 0.75; popPower = 1.7;
-      tearLimbGib(entry.pos, sdir, team, true);
+      tearLimbGib(entry.mesh, entry.pos, sdir, team, true, 'torso');
     } else if (head) {
       if (isAWP) { pop = true; popPower = 1.7; }
       else if (isDeagle) { pop = Math.random() < 0.65; popPower = 1.3; }
       else { pop = Math.random() < 0.25; popPower = 1.0; }
+    } else if (isAWP && Math.random() < 0.25) {
+      tearLimbGib(entry.mesh, entry.pos, sdir, team, false, 'torso'); // net has no wound height — torso only
     }
     if (pop) {
       entry.headless = true;
@@ -4160,7 +4273,7 @@ function goreRemoteDeath(entry, head, weaponLabel, shotDir) {
     }
     try {
       const gk = GK();
-      if (gk > 0 && (explosive || isAWP || Math.random() < clamp((gk - 0.9) * 0.30, 0, 0.92))
+      if (gk > 0 && explosive
           && explodeBody(entry.mesh, entry.pos, shotDir, entry.fall.power, (entry.data && entry.data.team) || 't')) {
         entry.exploded = true;
         try {
@@ -4645,6 +4758,7 @@ function updatePlayerBody(dt, t) {
     const sDot = f.dirX * fwdZ - f.dirZ * fwdX;
     const tip = Math.PI / 2 * 0.95;
     m.position.set(player.pos.x, 0.2 * ease, player.pos.z);
+    try { slideCorpseOut(m, 0.5); player.pos.set(m.position.x, 0, m.position.z); } catch (e) {}
     m.rotation.x = (fDot >= 0 ? tip : -tip) * (0.75 + Math.abs(fDot) * 0.45) * ease;
     m.rotation.z = clamp(-sDot * tip * 0.9 + (f.roll || 0), -1.2, 1.2) * ease;
     m.rotation.y = player.yaw + Math.PI + (f.spin || 0) * ease;
@@ -5077,6 +5191,7 @@ function updateDeadBots(dt) {
           Math.max(0.12, Math.sin(Math.min(1, k) * Math.PI) * 0.22 * (fall.power || 1)),
           b.deathPos.z + b.knock.z * ease
         );
+        try { slideCorpseOut(b.mesh, 0.5); } catch (e) {}
         // keep logical pos glued to the corpse so blood pools / bomb drops line up
         b.pos.set(b.mesh.position.x, 0, b.mesh.position.z);
         void slide;
@@ -5603,15 +5718,23 @@ function applyRemoteBomb(m) {
     explodeBomb(t, m.reason || '💥 BOMB DETONATED', true);
   }
 }
+function applyServerScore(m) {
+  // Server is score authority: adopt its tally, never diverge on duplicates.
+  if (m && m.score && typeof m.score.ct === 'number' && typeof m.score.t === 'number') {
+    G.score.ct = m.score.ct; G.score.t = m.score.t;
+    try { updateHUD(); } catch {}
+  }
+}
 function applyRemoteRound(m) {
   if (m.action === 'start') {
+    applyServerScore(m);
     // Guest follows host round numbering.
     if (typeof m.round === 'number' && m.round !== G.round) G.round = m.round;
     if (!G.roundEnding) return; // already live — ignore duplicate starts
     startRound(!!m.first, true);
   } else if (m.action === 'end') {
-    if (G.phase !== 'playing' || G.roundEnding) return;
-    endRound(m.winner || 't', m.reason || '', true);
+    if (G.phase !== 'playing' || G.roundEnding) { applyServerScore(m); return; }
+    endRound(m.winner || 't', m.reason || '', true, m.score);
   }
 }
 function updateBombHUD(t) {
@@ -6288,7 +6411,8 @@ function updateBot(bot, dt, t) {
   if (moveDir) {
     const sep = botSeparate(bot, moveDir);
     moveDir.set(sep.x, 0, sep.z);
-    const step = moveDir.clone().multiplyScalar(speed * dt);
+    const step = moveDir.clone().multiplyScalar(speed * smokeSlowAt(_smokePt.set(bot.pos.x, bot.pos.y + 1, bot.pos.z)) * dt);
+    smokePushAt(_smokePt.set(bot.pos.x, bot.pos.y + 1, bot.pos.z), moveDir.x * speed * dt * 8, moveDir.z * speed * dt * 8, 1);
     const ox = bot.pos.x, oz = bot.pos.z;
     moveWithCollision(bot.pos, step.x, step.z, BOT_R);
     // Progress watchdog: if we're pushing but barely moving, re-plan, then peel off
@@ -6516,6 +6640,81 @@ function makeNadeMesh(type) {
   } catch (e) {}
   return g;
 }
+// High-definition first-person nades: same silhouettes as makeNadeMesh
+// (HE = green egg, flash = light-blue cylinder, smoke = grey cylinder + white band,
+// molotov = bottle) so thrown + held types never get confused, with close-up
+// detail: segment-dense bodies, caps, grooves, vents, labels, pin + lever.
+function makeFirstPersonNadeMesh(type) {
+  const g = new THREE.Group();
+  try {
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1f2226, roughness: 0.45, metalness: 0.65 });
+    const steel = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.28, metalness: 0.9 });
+    const mesh = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
+    const pinLever = (py) => {
+      mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.032, 12), dark, 0, py, 0);
+      const lv = mesh(new THREE.BoxGeometry(0.016, 0.11, 0.012), steel, 0.056, py - 0.045, 0);
+      lv.rotation.z = -0.12;
+      mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.02, 8), steel, 0.045, py - 0.002, 0).rotation.z = Math.PI / 2;
+      const ring = mesh(new THREE.TorusGeometry(0.016, 0.004, 8, 16), steel, -0.04, py + 0.005, 0);
+      ring.rotation.y = Math.PI / 2;
+      mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.028, 6), steel, -0.02, py + 0.005, 0).rotation.z = Math.PI / 2;
+    };
+    if (type === 'molotov') {
+      const glass = new THREE.MeshStandardMaterial({ color: 0x3f6b2a, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.9 });
+      mesh(new THREE.CylinderGeometry(0.048, 0.052, 0.17, 20), glass, 0, 0, 0);
+      mesh(new THREE.CylinderGeometry(0.042, 0.046, 0.10, 16), new THREE.MeshStandardMaterial({ color: 0x8a4a12, roughness: 0.35 }), 0, -0.028, 0);
+      for (const ry of [-0.05, 0.005]) { const rib = mesh(new THREE.TorusGeometry(0.050, 0.0025, 6, 24), glass, 0, ry, 0); rib.rotation.x = Math.PI / 2; }
+      mesh(new THREE.CylinderGeometry(0.053, 0.053, 0.045, 16), new THREE.MeshStandardMaterial({ color: 0xd8cfc0, roughness: 0.9 }), 0, -0.01, 0);
+      mesh(new THREE.CylinderGeometry(0.054, 0.054, 0.01, 16), new THREE.MeshStandardMaterial({ color: 0x8a2f22, roughness: 0.8 }), 0, 0.015, 0);
+      mesh(new THREE.CylinderGeometry(0.02, 0.042, 0.07, 16), glass, 0, 0.12, 0);
+      mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.028, 12), new THREE.MeshStandardMaterial({ color: 0x9a7a4a, roughness: 0.9 }), 0, 0.158, 0);
+      const rag = mesh(new THREE.BoxGeometry(0.04, 0.075, 0.04), new THREE.MeshStandardMaterial({ color: 0xe2d9c6, roughness: 1 }), 0.012, 0.20, 0);
+      rag.rotation.z = 0.35;
+      const knot = mesh(new THREE.BoxGeometry(0.032, 0.03, 0.032), new THREE.MeshStandardMaterial({ color: 0xc9bfa8, roughness: 1 }), -0.012, 0.175, 0);
+      knot.rotation.z = 0.5;
+      const T = decalTextures();
+      const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff9a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+      gl.scale.setScalar(0.22); gl.position.y = 0.24; g.add(gl);
+    } else if (type === 'he') {
+      const body = mesh(new THREE.SphereGeometry(0.062, 28, 20), new THREE.MeshStandardMaterial({ color: 0x4d7c3a, roughness: 0.5, metalness: 0.3 }));
+      body.scale.y = 1.15;
+      for (const gy of [-0.025, 0.008]) { const gr = mesh(new THREE.TorusGeometry(0.0615, 0.0022, 6, 28), dark, 0, gy, 0); gr.rotation.x = Math.PI / 2; }
+      mesh(new THREE.CylinderGeometry(0.0625, 0.0625, 0.013, 24), new THREE.MeshStandardMaterial({ color: 0xd8b93a, roughness: 0.6 }), 0, 0.035, 0);
+      mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.014, 12), dark, 0, -0.074, 0);
+      pinLever(0.082);
+    } else {
+      const isFlash = type === 'flash';
+      if (isFlash) {
+        // Light-blue flashbang: tapered body, recessed waist channels,
+        // vertical grip flutes, stepped collar + knurled bottom rim.
+        const blue = new THREE.MeshStandardMaterial({ color: 0x8fc3ec, roughness: 0.32, metalness: 0.5 });
+        const blueD = new THREE.MeshStandardMaterial({ color: 0x5d8ab5, roughness: 0.45, metalness: 0.55 });
+        mesh(new THREE.CylinderGeometry(0.044, 0.048, 0.14, 28), blue, 0, 0, 0);
+        for (const sy of [-0.032, -0.004, 0.024]) { const s = mesh(new THREE.TorusGeometry(0.0465, 0.0032, 6, 28), blueD, 0, sy, 0); s.rotation.x = Math.PI / 2; }
+        for (let i = 0; i < 8; i++) {
+          const a = i / 8 * Math.PI * 2;
+          mesh(new THREE.BoxGeometry(0.006, 0.062, 0.004), blueD, Math.cos(a) * 0.0465, -0.002, Math.sin(a) * 0.0465).rotation.y = -a;
+        }
+        mesh(new THREE.CylinderGeometry(0.047, 0.047, 0.01, 24), dark, 0, 0.072, 0);
+        mesh(new THREE.CylinderGeometry(0.047, 0.047, 0.008, 24), new THREE.MeshStandardMaterial({ color: 0x1d2f45, roughness: 0.6 }), 0, 0.054, 0);
+        mesh(new THREE.CylinderGeometry(0.048, 0.049, 0.014, 24), dark, 0, -0.072, 0);
+        const rim = mesh(new THREE.TorusGeometry(0.048, 0.0022, 6, 28), steel, 0, -0.064, 0); rim.rotation.x = Math.PI / 2;
+      } else {
+        const bodyCol = 0x7d8894;
+        mesh(new THREE.CylinderGeometry(0.046, 0.046, 0.14, 24), new THREE.MeshStandardMaterial({ color: bodyCol, roughness: 0.32, metalness: 0.55 }), 0, 0, 0);
+        mesh(new THREE.CylinderGeometry(0.047, 0.047, 0.012, 20), dark, 0, -0.07, 0);
+        mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.035, 20), new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.55 }), 0, 0.048, 0);
+        mesh(new THREE.CylinderGeometry(0.0485, 0.0485, 0.007, 20), dark, 0, 0.027, 0);
+        for (let i = 0; i < 6; i++) {
+          const a = i / 6 * Math.PI * 2;
+          mesh(new THREE.BoxGeometry(0.01, 0.012, 0.006), dark, Math.cos(a) * 0.044, -0.048, Math.sin(a) * 0.044).rotation.y = -a;
+        }
+      }
+      pinLever(0.088);
+    }
+  } catch (e) {}
+  return g;
+}
 function nadeThrowOrigin(dir, forBot, botPos) {
   if (forBot && botPos) return new THREE.Vector3(botPos.x, botPos.y + 1.5, botPos.z).addScaledVector(dir, 0.4);
   try {
@@ -6697,6 +6896,17 @@ function updateNades(dt, t) {
     for (let s = 0; s < steps && !removed; s++) {
       p.vel.y -= NADE_GRAV * h;
       p.pos.addScaledVector(p.vel, h);
+      if (tacticalSmokes.length) {
+        const sd = smokeDensityAt(p.pos, t);
+        if (sd > 0.25) {
+          p.vel.multiplyScalar(1 - Math.min(0.5, 1.6 * h * sd)); // thick air inside the cloud
+          smokePushAt(p.pos, p.vel.x * h * 2, p.vel.z * h * 2, sd);
+          if (t - (p._smokeWispT || 0) > 0.09) {
+            p._smokeWispT = t;
+            try { spawnSmoke(p.pos, 0.45, 0.7, 0xd8d4cb); } catch (e) {} // visible trail in the cloud
+          }
+        }
+      }
       const c = nadeResolve(p, r);
       if (!c) continue;
       const { n, speed } = c;
@@ -7051,6 +7261,32 @@ function disperseSmokes(at, radius, lifeCut) {
       s.dispersed = true;
     }
   }
+}
+// ponytail: smoke stays vision-only (CS rule) — bullets/nades/bodies only stir
+// it and wade through it, never blocked by it. HE shreds via disperseSmokes.
+const _smokePt = new THREE.Vector3();
+function smokePushAt(p, vx, vz, power = 1) {
+  if (!tacticalSmokes.length) return 0;
+  let dense = 0;
+  const t = performance.now() / 1000;
+  for (const s of tacticalSmokes) {
+    const R = smokeVolumeRadius(s, t);
+    if (R < 0.5 || t > s.until) continue;
+    const dx = p.x - s.pos.x, dz = p.z - s.pos.z, dy = (p.y ?? 1) - s.pos.y;
+    if (dx * dx + dz * dz > R * R * 1.2 || Math.abs(dy) > R) continue;
+    const k = power * clamp(1 - Math.hypot(dx, dz) / (R + 0.001), 0, 1);
+    if (k <= 0) continue;
+    dense = Math.max(dense, k);
+    s.pos.x = clamp(s.pos.x + vx * k * 0.06, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+    s.pos.z = clamp(s.pos.z + vz * k * 0.06, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+    s.drift.x = clamp((s.drift.x || 0) + vx * k * 0.015, -0.25, 0.25);
+    s.drift.z = clamp((s.drift.z || 0) + vz * k * 0.015, -0.25, 0.25);
+  }
+  return dense;
+}
+function smokeSlowAt(p) {
+  try { return 1 - 0.14 * clamp(smokeDensityAt(p, performance.now() / 1000), 0, 1); }
+  catch { return 1; }
 }
 let _smokeGeos = null, _smokeCloudTex = null;
 function smokeBlobGeometry() {
@@ -7519,6 +7755,17 @@ function fireHitscan(shooter, origin, dir, wdef, t) {
   }
 
   const end = origin.clone().add(dir.clone().multiplyScalar(bestT));
+  if (tacticalSmokes.length) {
+    let dent = null, dentK = 0;
+    for (let i = 1; i <= 6; i++) {
+      _smokePt.lerpVectors(origin, end, i / 6);
+      const k = smokePushAt(_smokePt, dir.x * 12, dir.z * 12, 0.7); // supersonic tunnel through the cloud
+      if (k > dentK) { dentK = k; dent = _smokePt.clone(); }
+    }
+    if (dent && dentK > 0.2) {
+      try { spawnSmoke(dent, 0.55, 0.8, 0xd8d4cb); } catch (e) {} // visible punch mark
+    }
+  }
   // effects
   spawnTracer(origin.clone(), end.clone(), wdef.tracer);
   if (shooter.isPlayer) {
@@ -7692,32 +7939,30 @@ function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
       if (flat.lengthSq() < 0.01) flat.set(rand(-1, 1), 0, rand(-1, 1));
       flat.normalize();
       bot.knock = flat.multiplyScalar(slideDist);
-      // ---- exploding head? ----
+      // ---- hit-part gore: only the struck part comes off, body flings whole ----
+      const part = woundPart(bot.pos.y, _hp.y, head);
       let pop = false, popPower = 1;
       const headPos = new THREE.Vector3(bot.pos.x, (bot.pos.y || 0) + 1.76, bot.pos.z);
       if (explosive) {
-        // blastsGib: heads pop most of the time, limbs always tear
         pop = Math.random() < 0.75;
         popPower = 1.7;
-        tearLimbGib(bot.pos, sdir, bot.team, true);
+        tearLimbGib(bot.mesh, bot.pos, sdir, bot.team, true, part === 'head' ? 'torso' : part);
         bot.gibbed = true;
       } else if (head) {
         if (isAWP || dmg >= 90) { pop = true; popPower = 1.7; }
         else if (isDeagle) { pop = Math.random() < 0.65; popPower = 1.3; }
         else { pop = dmg >= 60 ? Math.random() < 0.5 : Math.random() < 0.22; popPower = 1.0; }
       } else if (isAWP && Math.random() < 0.3) {
-        // close-range AWP body shots can still tear a limb off
-        tearLimbGib(bot.pos, sdir, bot.team, false);
+        // close-range AWP body shots can still tear the hit part off
+        tearLimbGib(bot.mesh, bot.pos, sdir, bot.team, false, part);
+        bot.gibbed = true;
+      } else if ((isDeagle || dmg >= 55) && part === 'leg' && Math.random() < 0.25) {
+        tearLimbGib(bot.mesh, bot.pos, sdir, bot.team, false, 'leg');
         bot.gibbed = true;
       }
-      // ---- total dismemberment ----
-      // Overkill, explosives and high gore levels turn the whole body into parts
-      // instead of a corpse. Checked before the head-pop so it wins.
+      // ---- explosives only: whole body comes apart. Bullets keep the corpse. ----
       const gk = GK();
-      const overkill = dmg >= 75 || (dmg >= 45 && (isAWP || isDeagle));
-      const burstChance = clamp((gk - 0.9) * 0.30, 0, 0.92);
-      const burst = gk > 0 && (explosive || overkill || Math.random() < burstChance);
-      if (burst && explodeBody(bot.mesh, bot.pos, sdir, power, bot.team)) {
+      if (gk > 0 && explosive && explodeBody(bot.mesh, bot.pos, sdir, power, bot.team)) {
         bot.gibbed = true; bot.headless = true; bot.exploded = true;
         try {
           const dp = camera ? camera.position.distanceTo(new THREE.Vector3(bot.pos.x, 1, bot.pos.z)) : 99;
@@ -7732,12 +7977,12 @@ function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
           if (dp < 6) screenGore(clamp(1 - dp / 6, 0.2, 0.9));
         } catch (e) {}
       } else {
-        // intact death: directional spray + pool + chest burst
-        try { spawnBloodSpray(head ? headPos : botChest(bot), sdir, head ? 1.2 : power); } catch (e) {}
+        // intact death: directional spray + pool, body stays whole and flings
+        try { spawnBloodSpray(head ? headPos : botChest(bot), sdir, head ? 1.1 : power * 0.9); } catch (e) {}
         spawnBloodPool(bot.pos.x, bot.pos.z, true);
         for (let i = 0; i < goreN(1); i++) spawnBloodPool(bot.pos.x + rand(-0.9, 0.9), bot.pos.z + rand(-0.9, 0.9), Math.random() < 0.5);
-        spawnBurst(botChest(bot), 0x8a0f12, goreN(14) + 6, 3.5, 0.8, 0.12);
-        bloodSplatterRays(botChest(bot), sdir, 10, 1.0, 7);
+        spawnBurst(botChest(bot), 0x8a0f12, goreN(8) + 4, 3.5, 0.8, 0.12);
+        bloodSplatterRays(botChest(bot), sdir, 6, 1.0, 7);
         if (head) { try { AudioSys.headpop(headPos); } catch (e) {} }
       }
       try { poseCorpseLimbs(bot.mesh, bot.fall.sprawl, bot.fall.power); } catch (e) {}
@@ -7798,7 +8043,9 @@ function damagePlayer(dmg, shooter, head) {
       player.deathT = 0;
       player.fall = pickFallParams(player.pos, sdir, head ? 1.4 : 1.0);
       const gk = GK();
-      player.exploded = gk > 0 && (dmg >= 75 || Math.random() < clamp((gk - 0.9) * 0.30, 0, 0.92));
+      const wExpl = String((shooter && shooter.weaponName) || '').toUpperCase();
+      const isExpl = /HE|C4|MOLOTOV/.test(wExpl) || dmg >= 400;
+      player.exploded = gk > 0 && isExpl;
       if (player.exploded && playerMesh) {
         setPlayerBodyFirstPerson(false);
         explodeBody(playerMesh, player.pos, sdir, player.fall.power, player.team || 'ct');
@@ -8932,7 +9179,7 @@ function checkRoundEnd() {
   else if (t <= 0) endRound('ct', BOMB.droppedPos ? 'T WIPED — SITE HELD' : 'T WIPED');
   else if (ct <= 0) endRound('t', 'CT WIPED');
 }
-function endRound(winner, reason, fromNet = false) { // 'ct' | 't' | 'draw'
+function endRound(winner, reason, fromNet = false, serverScore = null) { // 'ct' | 't' | 'draw'
   if (G.phase !== 'playing' || G.roundEnding) return;
   G.roundEnding = true;
   if (G.buyOpen) toggleBuy(false);
@@ -8943,7 +9190,10 @@ function endRound(winner, reason, fromNet = false) { // 'ct' | 't' | 'draw'
 
   const myTeam = player.team || 'ct';
   let track = null;
-  if (winner === 'ct') { G.score.ct++; }
+  if (serverScore && typeof serverScore.ct === 'number' && typeof serverScore.t === 'number') {
+    G.score.ct = serverScore.ct; G.score.t = serverScore.t; // authority already counted it
+  }
+  else if (winner === 'ct') { G.score.ct++; }
   else if (winner === 't') { G.score.t++; }
 
   if (winner === 'draw') {
@@ -9070,7 +9320,7 @@ function updatePlayer(dt, t) {
   player.crouch = damp(player.crouch || 0, player.crouching ? 1 : 0, 11, dt);
   const wr = player.wallRun;
   const sprint = !frozen && keys['ShiftLeft'] && !player.aiming && !player.crouching && player.vel.lengthSq() > 0.1;
-  const speed = frozen ? 0 : (player.aiming ? speedBase * 0.55 : speedBase) * (sprint ? 1.45 : 1) * (1 - 0.55 * player.crouch) * (isDualCur() ? DUAL.speedMul : 1);
+  const speed = frozen ? 0 : (player.aiming ? speedBase * 0.55 : speedBase) * (sprint ? 1.45 : 1) * (1 - 0.55 * player.crouch) * (isDualCur() ? DUAL.speedMul : 1) * smokeSlowAt(_smokePt.set(player.pos.x, player.pos.y + 1, player.pos.z));
   let ix = 0, iz = 0;
   if (canAct) {
     if (keys['KeyW']) iz -= 1; if (keys['KeyS']) iz += 1;
@@ -9142,6 +9392,7 @@ function updatePlayer(dt, t) {
   const fallV = player.vel.y;
   const preX = player.pos.x, preZ = player.pos.z;
   moveWithCollision(player.pos, player.vel.x * dt, player.vel.z * dt, player.radius, hull);
+  if (tacticalSmokes.length && (player.vel.x || player.vel.z)) smokePushAt(_smokePt.set(player.pos.x, player.pos.y + 1, player.pos.z), player.vel.x * dt * 8, player.vel.z * dt * 8, 1);
   if (player.wallRun && dt > 0) {
     // ran into something ahead (corner, pillar): stall counter, drop off after a beat
     const w = player.wallRun;
@@ -9511,9 +9762,6 @@ function boot() {
     if (G.phase === 'playing' && !G.buyOpen && !pointerLocked) lockPointer();
   });
 
-  $('opt-quality').addEventListener('change', (e) => {
-    SET.quality = e.target.checked; applySettings(); saveSettings();
-  });
   $('opt-sound').addEventListener('change', (e) => { SET.sound = e.target.checked; applySettings(); saveSettings(); });
   if ($('opt-music')) $('opt-music').addEventListener('change', (e) => { SET.music = e.target.checked; applySettings(); saveSettings(); });
   $('opt-diff').addEventListener('change', (e) => { SET.difficulty = parseFloat(e.target.value); applySettings(); saveSettings(); });

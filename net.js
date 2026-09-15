@@ -153,6 +153,7 @@ export const Net = {
       case 'killed': this.emit('killed', m); break;
       case 'bomb': this.emit('bomb', m); break;
       case 'round': this.emit('round', m); break;
+      case 'round_echo': this.emit('round_echo', m); break;
       case 'nade': this.emit('nade', m); break;
       case 'weapon': this.emit('weapon', m); break;
       case 'chat': this.emit('chat', m); break;
