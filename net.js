@@ -101,7 +101,7 @@ export const Net = {
           this.remotes.set(m.id, {
             id: m.id, name: m.name || `Player${m.id}`, team: m.team || 't',
             x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hp: 100, alive: true,
-            weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(),
+            weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(), ping: 0,
           });
         }
         this.realPlayers = m.realPlayers || (this.remotes.size + 1);
@@ -123,11 +123,15 @@ export const Net = {
           if (p.id === this.id) continue;
           let r = this.remotes.get(p.id);
           if (!r) {
-            r = { id: p.id, name: p.name || `Player${p.id}`, team: p.team || 't', lastSeen: now };
+            r = { id: p.id, name: p.name || `Player${p.id}`, team: p.team || 't', lastSeen: now, ping: 0 };
             this.remotes.set(p.id, r);
             this.emit('player_joined', { id: p.id, name: r.name, team: r.team });
           }
           r.lastSeen = now;
+          if (p.ping !== undefined && p.ping !== null) {
+            const pg = Math.round(+p.ping);
+            if (isFinite(pg) && pg >= 0) r.ping = Math.min(9999, pg);
+          }
           // Same state again (1Hz keepalive) or an out-of-order packet: nothing new.
           const ct = +p.ct || 0;
           if (ct && r.lastCt && ct <= r.lastCt) continue;
@@ -239,7 +243,7 @@ export const Net = {
         this.remotes.set(p.id, {
           id: p.id, name: p.name, team: p.team,
           x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hp: 100, alive: true,
-          weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(),
+          weapon: 'ak', aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false, lastSeen: performance.now(), ping: 0,
         });
         this.emit('player_joined', p);
       } else {
@@ -266,6 +270,7 @@ export const Net = {
     this._send({
       type: 'state', ...s, ct: Math.round(now * 10) / 10,
       x: r3(s.x), y: r3(s.y), z: r3(s.z), yaw: Math.round((+s.yaw || 0) * 1e4) / 1e4, pitch: Math.round((+s.pitch || 0) * 1e4) / 1e4,
+      ping: Math.max(0, Math.min(9999, Math.round(this.rtt) || 0)),
     });
   },
   sendShot(shot) { this._send({ type: 'shot', ...shot }); },

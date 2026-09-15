@@ -37,6 +37,16 @@
     <div id="killfeed"></div>
   </div>
 
+  <div id="scoreboard" class="hidden">
+    <div class="sb-card">
+      <div class="sb-title"><span id="sb-ct">CT 0</span><span class="sb-mid">SCOREBOARD · TAB</span><span id="sb-t">0 T</span></div>
+      <div class="sb-cols">
+        <div class="sb-team"><h4 class="ct">COUNTER-TERRORISTS</h4><table><thead><tr><th>PLAYER</th><th>K</th><th>A</th><th>D</th><th>PING</th></tr></thead><tbody id="sb-ct-rows"></tbody></table></div>
+        <div class="sb-team"><h4 class="t">TERRORISTS</h4><table><thead><tr><th>PLAYER</th><th>K</th><th>A</th><th>D</th><th>PING</th></tr></thead><tbody id="sb-t-rows"></tbody></table></div>
+      </div>
+      <div class="sb-foot" id="sb-foot"></div>
+    </div>
+  </div>
   <div id="bomb-status" class="hidden"><span id="bomb-icon">💣</span><span id="bomb-text">BOMB</span><span id="bomb-timer"></span></div>
   <div id="pickup-hint" class="hidden"></div>
   <div id="interact-bar" class="hidden">
@@ -93,7 +103,7 @@
   </div>
 
   <div id="announce" class="hidden"></div>
-  <div id="hint-bar">WASD move · SHIFT sprint · <b>C</b> crouch · SPACE jump · <b>W+jump at a wall</b> wall run (SPACE to wall-jump) · R reload · <b>X</b> drop gun · <b>E</b> pick up / dual wield · 1 primary · 2 pistol · 4/5/6/7 nades (release to throw: LMB far, RMB short, both medium) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · <b>C</b> crouch · SPACE jump · <b>W+jump at a wall</b> wall run (SPACE to wall-jump) · R reload · <b>X</b> drop gun · <b>E</b> pick up / dual wield · 1 primary · 2 pistol · 4/5/6/7 nades (release to throw: LMB far, RMB short, both medium) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · <b>TAB</b> scores · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
 </div>
 
 <!-- Buy menu (keeps pointer lock — virtual cursor, no mouse yank) -->

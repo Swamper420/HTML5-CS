@@ -178,6 +178,7 @@ wss.on('connection', (ws) => {
           gnd: m.gnd !== false,                    // standing on ground or a box top
           wr: Math.max(-1, Math.min(1, m.wr | 0)), // wall run: -1 wall on left, 1 right, 0 none
           dual: !!m.dual,                          // dual wielding the current weapon
+          ping: Math.max(0, Math.min(9999, Math.round(+m.ping) || 0)),
         };
         if (client.team) {
           const msg = JSON.stringify({ type: 'snapshot', players: [{ ...client.state, name: client.name, team: client.team }] });
