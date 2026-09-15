@@ -60,7 +60,8 @@ const server = http.createServer((req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+// No per-message compression: tiny JSON packets gain nothing and deflate adds latency.
+const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false, maxPayload: 64 * 1024 });
 
 let nextId = 1;
 // Dropped weapons on the floor: wid -> { wid, key, mag, reserve, x, y, z, ry, at }.
@@ -109,7 +110,9 @@ function send(ws, obj) {
 
 wss.on('connection', (ws) => {
   const id = nextId++;
-  const client = { ws, id, name: `Player${id}`, team: null, state: null, lastSeen: Date.now() };
+  const client = { ws, id, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true };
+  try { ws._socket.setNoDelay(true); } catch {} // never let Nagle batch game packets
+  ws.on('pong', () => { client.alive = true; });
   clients.set(id, client);
   console.log(`[+] client ${id} connected (${clients.size} online)`);
 
@@ -155,9 +158,10 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'state': {
-        // 20Hz positional snapshot — stored, rebroadcast in bulk (never echoed back)
+        // ~30Hz positional state — relayed to everyone else IMMEDIATELY (no server tick
+        // holding it back), and kept for the 1Hz full keepalive snapshot.
         client.state = {
-          id,
+          id, ct: +m.ct || 0,
           x: +m.x || 0, y: +m.y || 0, z: +m.z || 0,
           yaw: +m.yaw || 0, pitch: +m.pitch || 0,
           hp: Math.max(0, Math.min(100, +m.hp || 100)),
@@ -170,6 +174,10 @@ wss.on('connection', (ws) => {
           wr: Math.max(-1, Math.min(1, m.wr | 0)), // wall run: -1 wall on left, 1 right, 0 none
           dual: !!m.dual,                          // dual wielding the current weapon
         };
+        if (client.team) {
+          const msg = JSON.stringify({ type: 'snapshot', players: [{ ...client.state, name: client.name, team: client.team }] });
+          for (const c of clients.values()) if (c.id !== id && c.ws.readyState === 1) c.ws.send(msg);
+        }
         break;
       }
       case 'round':
@@ -211,7 +219,17 @@ wss.on('connection', (ws) => {
   ws.on('error', () => { try { ws.close(); } catch {} });
 });
 
-// 15Hz snapshot broadcast — the only per-frame server work.
+// Reap dead connections (laptop lid closed, Wi-Fi dropped) so ghosts don't linger.
+setInterval(() => {
+  for (const c of clients.values()) {
+    if (!c.alive) { try { c.ws.terminate(); } catch {} continue; }
+    c.alive = false;
+    try { c.ws.ping(); } catch {}
+  }
+}, 5000);
+
+// 1Hz full snapshot: keepalive + names/teams + player count. Clients ignore
+// positions they already have (same ct), so this never causes a rubber-band.
 setInterval(() => {
   if (!clients.size) return;
   const players = [];
@@ -224,7 +242,7 @@ setInterval(() => {
   for (const c of clients.values()) {
     if (c.ws.readyState === 1) c.ws.send(msg);
   }
-}, 1000 / 15);
+}, 1000);
 
 // Prevent unhandled 'error' crash from the ws wrapper (it re-emits listen errors).
 wss.on('error', () => {});

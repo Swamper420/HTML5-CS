@@ -138,7 +138,7 @@ const SETTINGS_DEFAULTS = {
   // mouse & aim
   sens: 2.2, adsSens: 100, invertY: false, crouchToggle: false,
   // video
-  fov: 75, quality: true, sway: 100, shake: 100, gore: true, goreLevel: 5, difficulty: 1,
+  fov: 75, fpsCap: 240, vsync: false, quality: true, sway: 100, shake: 100, gore: true, goreLevel: 5, difficulty: 1,
   // audio
   sound: true, music: true, volMaster: 85, volMusic: 85,
   // crosshair & hud
@@ -155,6 +155,8 @@ const SETTINGS_SPEC = {
   ],
   video: [
     { k: 'fov', label: 'Field of view', type: 'range', min: 60, max: 110, step: 1, unit: '°' },
+    { k: 'vsync', label: 'VSync (lock to display refresh, ignores cap)', type: 'bool' },
+    { k: 'fpsCap', label: 'FPS cap', type: 'range', min: 30, max: 500, step: 10, unit: ' fps' },
     { k: 'quality', label: 'Shadows & particles', type: 'bool' },
     { k: 'sway', label: 'View bob & weapon sway', type: 'range', min: 0, max: 150, step: 5, unit: '%' },
     { k: 'shake', label: 'Screen shake', type: 'range', min: 0, max: 150, step: 5, unit: '%' },
@@ -190,6 +192,7 @@ function loadSettings() {
       const d = SETTINGS_DEFAULTS[k];
       if (typeof d === 'boolean') SET[k] = !!saved[k];
       else if (typeof d === 'number') { const n = parseFloat(saved[k]); if (isFinite(n)) SET[k] = n; }
+      if (k === 'fpsCap') SET.fpsCap = Math.max(30, Math.min(500, SET.fpsCap));
       else if (typeof saved[k] === 'string') SET[k] = saved[k];
     }
   } catch (e) { /* private window / storage disabled — defaults are fine */ }
@@ -2107,10 +2110,14 @@ function buildMap() {
     } catch (e) {}
   }
 
-  // Spawns — DEFUSAL CORRECT: T far WEST, CT EAST-CENTRAL between A/B (holds sites).
-  // T must push ~45m across mid/long/tunnels; CT starts ~12-15m from either site.
-  spawns.t = [new THREE.Vector3(-29, 0, -5), new THREE.Vector3(-29, 0, -1.7), new THREE.Vector3(-29, 0, 1.7), new THREE.Vector3(-29, 0, 5)];
-  spawns.ct = [new THREE.Vector3(14.5, 0, -2.5), new THREE.Vector3(14.5, 0, 2.5), new THREE.Vector3(18, 0, -2.5), new THREE.Vector3(18, 0, 2.5)];
+  // Spawns — each team gets two pockets flanking the central corridor.
+  // The old spots sat right in the mid-doorway sightline (T could shoot CT spawn from
+  // their own base, and one CT + two T spots clipped into crates). Every slot below was
+  // checked offline: clear of geometry by 1m and not visible from anywhere in the enemy
+  // half of the map. Slot order alternates sides: even = A / north (z<0), odd = B / south.
+  // CT: ~11-16m from its nearer site (defenders set up fast). T: far west, long push.
+  spawns.ct = [[28.5, -9.5], [28.5, 9.5], [26, -11], [26, 11], [31, -11], [31, 11]].map(([x, z]) => new THREE.Vector3(x, 0, z));
+  spawns.t = [[-30, -9], [-30, 9], [-27.5, -11.5], [-27.5, 11.5], [-24.5, -11], [-24.5, 11]].map(([x, z]) => new THREE.Vector3(x, 0, z));
 
   // Waypoint grid for bots — pruned so none spawn inside the new walls.
   // (Bots steer straight at waypoints; keeping them out of solids avoids stuck spins.)
@@ -3134,28 +3141,29 @@ function refreshBotsForMP() {
 function remoteEye(e) { return new THREE.Vector3(e.pos.x, e.pos.y + 1.55 - CROUCH_EYE_DROP * (e.crouchK || 0), e.pos.z); }
 function remoteChest(e) { return new THREE.Vector3(e.pos.x, e.pos.y + 1.1 - 0.36 * (e.crouchK || 0), e.pos.z); }
 
+const _remSample = {};
 function updateRemoteMeshes(dt, t) {
   syncRemoteMeshes();
+  const nowMs = performance.now();
   for (const [id, e] of remotes) {
     const r = Net.remotes.get(id);
     if (!r) continue;
     e.data = r;
     try { if (WEAPONS[r.weapon]) setSoldierGun(e.mesh, r.weapon); } catch (err) {}
     try { setSoldierDual(e.mesh, r.weapon, !!r.dual && !!r.alive); } catch (err) {}
-    // Lerp position toward snapshot (15Hz -> smooth).
+    // Buffered snapshot interpolation (net.js): exact, jitter-free motion at any frame rate,
+    // rendered a few tens of ms in the past. Hit tests use e.pos, i.e. what you actually see.
+    const smp = Net.sample(r, nowMs, _remSample);
     e.targetPos.set(r.x || 0, r.y || 0, r.z || 0);
-    const k = Math.min(1, dt * 12);
-    e.pos.lerp(e.targetPos, k);
-    let dy = (r.yaw || 0) - e.yaw;
-    while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
-    e.yaw += dy * Math.min(1, dt * 10);
+    if (r.alive || !e.fall) e.pos.set(smp.x, smp.y, smp.z);
+    e.yaw = smp.yaw; e.pitch = smp.pitch;
     e.targetYaw = r.yaw || 0;
     const m = e.mesh;
     m.position.copy(e.pos);
     // Face movement model uses same yaw convention as bots (atan2(dx,dz)).
     m.rotation.y = e.yaw + Math.PI;
     // Walk anim when moving.
-    const moving = !!r.moving || e.targetPos.distanceToSquared(e.pos) > 0.0004;
+    const moving = !!r.moving || Math.hypot(e.vx || 0, e.vz || 0) > 0.4;
     if (moving) e.walkPhase += dt * 9;
     const sw = moving ? Math.sin(e.walkPhase) * 0.5 : 0;
     try {
@@ -3224,7 +3232,7 @@ function updateRemoteMeshes(dt, t) {
           e.crouchK = damp(e.crouchK || 0, r.crouch ? 1 : 0, 11, dt);
           const wallSide = r.wr ? Math.sign(r.wr) : 0;
           animateSoldier(m, {
-            vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: -(r.pitch || 0),
+            vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: -(e.pitch !== undefined ? e.pitch : (r.pitch || 0)),
             grounded: r.gnd !== undefined ? (!!r.gnd || !!wallSide) : (r.y || 0) < 0.06, crouch: !!r.crouch,
             kneel: !!r.planting || !!r.defusing, reloading: !!r.reloading,
           }, dt, t);
@@ -3257,8 +3265,8 @@ function wireMultiplayer() {
     // Re-spawn on our team's side with the new team.
     if (G.phase === 'playing') {
       try {
-        const sp = (player.team === 'ct' ? spawns.ct[0] : spawns.t[0]).clone();
-        player.pos.copy(sp); player.yaw = faceCenterYawPlayer(player.pos);
+        const team = player.team || 'ct';
+        player.pos.copy(spawnPoint(team, mySpawnSlot())); player.yaw = spawnYawPlayer(team, player.pos);
       } catch {}
     }
   });
@@ -3407,13 +3415,14 @@ function applyRemoteNade(m) {
 function updateMPStatus() {
   if (!mpStatusEl) mpStatusEl = document.getElementById('mp-status');
   if (!mpStatusEl) return;
-  if (!Net.active) { mpStatusEl.textContent = 'OFFLINE — SOLO VS BOTS'; mpStatusEl.className = 'offline'; }
+  // Short on purpose: it sits under the minimap.
+  if (!Net.active) { mpStatusEl.textContent = 'OFFLINE · BOTS'; mpStatusEl.className = 'offline'; mpStatusEl.title = 'Solo vs bots'; }
   else if (Net.hasRealOpponents) {
-    mpStatusEl.textContent = `ONLINE · ${Net.realPlayers} PLAYERS · NO BOTS (PURE PVP)`;
-    mpStatusEl.className = 'online pvp';
+    mpStatusEl.textContent = `ONLINE · ${Net.realPlayers}P · PVP`;
+    mpStatusEl.className = 'online pvp'; mpStatusEl.title = 'Real players online — bots disabled';
   } else {
-    mpStatusEl.textContent = `ONLINE · ALONE — BOTS ACTIVE UNTIL PLAYERS JOIN`;
-    mpStatusEl.className = 'online solo';
+    mpStatusEl.textContent = 'ONLINE · WAITING · BOTS';
+    mpStatusEl.className = 'online solo'; mpStatusEl.title = 'Alone on server — bots active until players join';
   }
 }
 function flashDamageRemote(remotePos) {
@@ -4533,7 +4542,7 @@ function updateEffects(dt, t = 0) {
         const back = Math.sin(Math.min(1, bt) * Math.PI); // 0-1-0
         vmBolt.position.z = 0.09 * back;
         vmBolt.rotation.y = 0.5 * back;
-      } else { vmBolt.position.z *= 0.8; vmBolt.rotation.y *= 0.8; }
+      } else { const bk = Math.pow(0.8, dt * 60); vmBolt.position.z *= bk; vmBolt.rotation.y *= bk; }
     }
   }
 }
@@ -5106,14 +5115,35 @@ function updateDeadBots(dt) {
 // ---------------- Bots ----------------
 function faceCenterYaw(pos) { return Math.atan2(-pos.x, -pos.z); } // mesh convention
 function faceCenterYawPlayer(pos) { return Math.atan2(pos.x, pos.z); } // camera convention
+// Spawn helpers: pick a slot, and face the way out of the pocket (toward mid on your side)
+// instead of the map origin, which from most slots is a wall.
+function spawnList(team) { return team === 't' ? spawns.t : spawns.ct; }
+function spawnPoint(team, slot, jitter = 0.4) {
+  const list = spawnList(team), n = list.length;
+  return list[((slot % n) + n) % n].clone().add(new THREE.Vector3(rand(-jitter, jitter), 0, rand(-jitter, jitter)));
+}
+function spawnLookTarget(team, pos) { const sz = pos.z < 0 ? -1 : 1; return team === 't' ? [-18, 4 * sz] : [14, 4 * sz]; }
+function spawnYawPlayer(team, pos) { const [tx, tz] = spawnLookTarget(team, pos); return Math.atan2(pos.x - tx, pos.z - tz); } // camera convention
+function spawnYawMesh(team, pos) { const [tx, tz] = spawnLookTarget(team, pos); return Math.atan2(tx - pos.x, tz - pos.z); }     // mesh convention
+// Online: rank among same-team humans by server id, so every client agrees and nobody stacks.
+function mySpawnSlot() {
+  const team = player.team || 'ct';
+  if (!isOnline() || Net.id == null) return 0;
+  const ids = [Net.id];
+  try { for (const r of Net.remoteList()) if ((r.team || 't') === team) ids.push(r.id); } catch (e) {}
+  ids.sort((a, b) => a - b);
+  return Math.max(0, ids.indexOf(Net.id));
+}
+// Solo default: the player holds slot 0 of their team, so their team's bots start one slot later.
+function botDefaultSlot(bot) { return bot.idx + (bot.team === (player.team || 'ct') ? 1 : 0); }
 function makeBot(team, idx) {
   const mesh = makeSoldier(team);
   try { setSoldierGun(mesh, 'ak'); } catch (e) {}
   scene.add(mesh);
-  const spawn = (team === 'ct' ? spawns.ct : spawns.t)[idx % 4].clone();
+  const spawn = spawnPoint(team, idx + (team === (player.team || 'ct') ? 1 : 0), 0);
   const bot = {
     team, idx, mesh, pos: spawn.clone(), vel: new THREE.Vector3(),
-    yaw: faceCenterYaw(spawn), hp: 100, alive: true,
+    yaw: spawnYawMesh(team, spawn), hp: 100, alive: true,
     respawnAt: 0, speed: rand(3.4, 4.6), state: 'roam',
     wp: waypoints.length ? randPick(waypoints).clone() : spawn.clone(), target: null,
     nextThink: Math.random() * 0.5, nextShot: 0, burstLeft: 0, burstAt: 0,
@@ -5136,9 +5166,8 @@ function makeBot(team, idx) {
   return bot;
 }
 function resetBot(bot) {
-  const spawn = (bot.team === 'ct' ? spawns.ct : spawns.t)[bot.idx % 4];
-  bot.pos.copy(spawn).add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)));
-  bot.yaw = faceCenterYaw(bot.pos);
+  bot.pos.copy(spawnPoint(bot.team, botDefaultSlot(bot)));
+  bot.yaw = spawnYawMesh(bot.team, bot.pos);
   bot.hp = 100; bot.alive = true;
   bot.flinchT = 0; bot.flinchHead = false; bot.deathT = 0; bot._thudded = false; bot.exploded = false;
   bot.ammo = 30; bot.reloadUntil = 0; bot._animPrev = null; bot._vx = 0; bot._vz = 0;
@@ -8397,7 +8426,13 @@ function updateHUD() {
   $('hp-fill').style.width = clamp(player.hp, 0, 100) + '%';
   $('armor-num').textContent = Math.ceil(player.armor);
   $('armor-fill').style.width = clamp(player.armor, 0, 100) + '%';
-  $('money').textContent = '$' + player.money;
+  const moneyEl = $('money');
+  if (updateHUD._money !== undefined && player.money > updateHUD._money) {
+    moneyEl.classList.remove('bump'); void moneyEl.offsetWidth; moneyEl.classList.add('bump');
+  }
+  updateHUD._money = player.money;
+  moneyEl.textContent = '$' + player.money;
+  $('health-panel').classList.toggle('low', player.alive && player.hp <= 25);
   if (isNadeKey(player.cur)) {
     const def = NADE_DEFS[player.cur];
     const n = player.nades[player.cur] || 0;
@@ -8445,9 +8480,9 @@ function updateHUD() {
     }
   } catch {}
   let phase = '';
-  if (isFreeze()) phase = ` · ❄ FREEZE ${G.freezeLeft.toFixed(1)}`;
-  else if (isBuyTime()) phase = ` · BUY ${G.buyLeft.toFixed(1)}s`;
-  $('round-label').textContent = `ROUND ${G.round} / ${ROUNDS_TO_WIN_MATCH * 2 - 1} · CT ${ctAlive} — ${tAlive} T${phase}`;
+  // freeze countdown is already the big clock — don't repeat it here
+  if (!isFreeze() && isBuyTime()) phase = ` · BUY ${G.buyLeft.toFixed(1)}s`;
+  $('round-label').textContent = `R${G.round}/${ROUNDS_TO_WIN_MATCH * 2 - 1} · ${ctAlive} v ${tAlive}${phase}`;
   $('crosshair').style.setProperty('--gap', (crossGap * SET.chGap / 100).toFixed(1) + 'px');
 }
 
@@ -8819,11 +8854,14 @@ function startRound(first = false, fromNet = false) {
   player.hasBomb = false;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
   vmRig.punchP = 0; vmRig.punchY = 0; vmRig.shake = 0; vmRig.fovKick = 0; vmRig.aimK = 0;
+  const spawnTaken = { ct: new Set(), t: new Set() };
   {
-    const mySpawns = (player.team || 'ct') === 't' ? spawns.t : spawns.ct;
-    player.pos.copy(mySpawns[0]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-1, 1)));
+    const team = player.team || 'ct', slot = mySpawnSlot();
+    spawnTaken[team].add(slot % spawnList(team).length);
+    player.pos.copy(spawnPoint(team, slot));
+    player.yaw = spawnYawPlayer(team, player.pos);
   }
-  player.vel.set(0, 0, 0); player.yaw = faceCenterYawPlayer(player.pos); player.pitch = 0;
+  player.vel.set(0, 0, 0); player.pitch = 0;
   player.crouching = false; player.crouch = 0; player.exploded = false;
   player.airTuck = false; player.crouchWant = false; player.wallRun = null; player.wallCd = 0; player.lastWallBox = null; player.wallRoll = 0; player.wallLean = 0;
   player.onGround = true;
@@ -8836,14 +8874,23 @@ function startRound(first = false, fromNet = false) {
   else { clearBotsForMP(); }
   // scatter bots to their spawns (face center) — skipped in pure PvP.
   if (!isMultiplayer()) {
-    bots.filter((b) => b.team === 'ct').forEach((b, i) => {
-      b.pos.copy(spawns.ct[(i + 1) % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
-      b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
-    });
-    bots.filter((b) => b.team === 't').forEach((b, i) => {
-      b.pos.copy(spawns.t[i % 4]).add(new THREE.Vector3(rand(-0.8, 0.8), 0, rand(-0.8, 0.8)));
-      b.yaw = faceCenterYaw(b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
-    });
+    // Free slot per bot; CTs prefer the pocket on the side of the site they guard.
+    const takeSlot = (team, parity) => {
+      const n = spawnList(team).length, taken = spawnTaken[team];
+      for (let pass = 0; pass < 2; pass++)
+        for (let i = 0; i < n; i++) {
+          if (taken.has(i) || (pass === 0 && parity != null && i % 2 !== parity)) continue;
+          taken.add(i); return i;
+        }
+      return taken.size; // more actors than slots: wrap (jitter keeps them apart)
+    };
+    for (const b of bots) {
+      if (!b.alive && !b.mesh.visible) continue;
+      const slot = takeSlot(b.team, b.team === 'ct' ? (b.guardSite === 'B' ? 1 : 0) : null);
+      b.pos.copy(spawnPoint(b.team, slot));
+      b.yaw = spawnYawMesh(b.team, b.pos); b.mesh.rotation.y = b.yaw; b.mesh.position.copy(b.pos);
+      if (b.blob) b.blob.position.set(b.pos.x, 0.02, b.pos.z);
+    }
   }
   try { for (const [, e] of remotes) { if (e.data) { e.data.alive = true; e.data.hp = 100; } } } catch {}
   bombResetRound();
@@ -9298,22 +9345,39 @@ function fpsTick() {
   const now = performance.now();
   if (now - fpsAt > 500) {
     const fps = Math.round(fpsAcc * 1000 / (now - fpsAt));
-    if (isMultiplayer()) {
-      const foes = [...remotes.values()].filter((e) => e.data && e.data.alive && (e.data.team !== (player.team || 'ct'))).length;
-      $('fps-counter').textContent = `${fps} FPS · ${foes} enemies (PVP · NO BOTS) · ${Net.realPlayers} online`;
-    } else if (isOnline()) {
-      $('fps-counter').textContent = `${fps} FPS · ${bots.filter((b) => b.alive).length} bots up · alone online`;
-    } else {
-      $('fps-counter').textContent = `${fps} FPS · ${bots.filter((b) => b.alive).length} hostiles up`;
-    }
+    // alive counts already live in the scoreboard; this line is just machine + link health
+    const ping = isOnline() && Net.rtt ? ` · ${Math.round(Net.rtt)} MS` : '';
+    $('fps-counter').textContent = `${fps} FPS${ping}`;
+    if (isOnline()) updateMPStatus(); // player count can change between roster events
     fpsAcc = 0; fpsAt = now;
   }
 }
 
 // ---------------- Main loop ----------------
 const clock = new THREE.Clock();
+// Frame scheduler. VSync: requestAnimationFrame (display refresh). Otherwise a
+// high-resolution pacer that can run up to 500 fps: coarse setTimeout sleep, then
+// MessageChannel hops (no 4ms timer clamp) for the last couple of milliseconds.
+const _frameMC = new MessageChannel();
+let _frameNext = 0, _frameQueued = false, _hudAt = 0, _mmAt = 0;
+_frameMC.port1.onmessage = () => { _frameQueued = false; pace(); };
+function scheduleFrame() {
+  if (SET.vsync || document.hidden) { requestAnimationFrame(pace); return; }
+  const wait = _frameNext - performance.now();
+  if (wait > 4) setTimeout(pace, wait - 3);
+  else if (!_frameQueued) { _frameQueued = true; _frameMC.port2.postMessage(0); }
+}
+function pace() {
+  if (SET.vsync || document.hidden) { loop(); requestAnimationFrame(pace); return; }
+  const now = performance.now();
+  if (now + 0.25 < _frameNext) { scheduleFrame(); return; }
+  const interval = 1000 / Math.max(30, Math.min(500, SET.fpsCap || 240));
+  // keep a steady cadence; if we fell a whole frame behind, don't try to catch up
+  _frameNext = (now - _frameNext > interval) ? now + interval : _frameNext + interval;
+  loop();
+  scheduleFrame();
+}
 function loop() {
-  requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = performance.now() / 1000;
   if (G.phase === 'playing') {
@@ -9355,10 +9419,11 @@ function loop() {
     try { updateScreenFeel(dt, t); } catch (e) {}
     try { updateGoreScreen(dt); } catch (e) {}
     // HUD: ~4Hz normally, every frame during freeze/buy/bomb countdown for smooth display
-    loop.n = (loop.n || 0) + 1;
-    if (loop.n % 15 === 0 || G.freezeLeft > 0 || BOMB.planted || (G.buyLeft > 0 && loop.n % 4 === 0)) { updateHUD(); updateBuyTimer(); }
+    // HUD is DOM work: time-based so 500 fps doesn't mean 500 layouts/s
+    const hudGap = (G.freezeLeft > 0 || BOMB.planted) ? 1 / 30 : G.buyLeft > 0 ? 1 / 15 : 0.25;
+    if (t - _hudAt >= hudGap) { _hudAt = t; updateHUD(); updateBuyTimer(); }
     else if (G.buyOpen) updateBuyTimer(); // smooth timer bar while shopping
-    drawMinimap(t);
+    if (t - _mmAt >= 1 / 60) { _mmAt = t; drawMinimap(t); }
     if (!player.alive) { /* CS: dead until next round — no respawn */ }
   } else if (G.phase === 'paused' || G.phase === 'over' || G.phase === 'menu') {
     // idle menu camera orbit
@@ -9485,7 +9550,7 @@ function boot() {
   $('again-btn').addEventListener('click', () => { AudioSys.stopMusic(0.2); startMatch(); });
 
   $('loading-note').textContent = 'Ready. Click DEPLOY.';
-  loop();
+  pace();
 }
 
 boot();

@@ -19,7 +19,13 @@
 <!-- HUD -->
 <div id="hud" class="hidden">
   <div id="top-bar">
-    <canvas id="minimap" width="180" height="180"></canvas>
+    <div id="tl-stack">
+      <canvas id="minimap" width="180" height="180"></canvas>
+      <div id="sys">
+        <div id="mp-status" class="offline">OFFLINE</div>
+        <div id="fps-counter">— FPS</div>
+      </div>
+    </div>
     <div id="scoreboard-top">
       <div class="team-score ct"><span id="ct-name">CT</span><span id="ct-score">0</span></div>
       <div id="match-info">
@@ -58,9 +64,9 @@
 
   <div id="bottom-bar">
     <div id="health-panel">
-      <div class="bar-row"><span class="ico">✚</span><div class="bar"><div id="hp-fill" style="width:100%"></div></div><span id="hp-num">100</span></div>
-      <div class="bar-row"><span class="ico">🛡</span><div class="bar armor"><div id="armor-fill" style="width:100%"></div></div><span id="armor-num">100</span></div>
       <div id="money">$800</div>
+      <div class="bar-row hp"><span class="ico">HP</span><span id="hp-num">100</span><div class="bar"><div id="hp-fill" style="width:100%"></div></div></div>
+      <div class="bar-row ar"><span class="ico">AR</span><span id="armor-num">100</span><div class="bar armor"><div id="armor-fill" style="width:100%"></div></div></div>
     </div>
     <div id="weapon-panel">
       <div id="weapon-slots">
@@ -73,8 +79,8 @@
         <div class="nslot" data-nade="smoke"><b>6</b><span>SMOKE</span><i>×0</i></div>
         <div class="nslot" data-nade="molotov"><b>7</b><span>MOLY</span><i>×0</i></div>
       </div>
-      <div id="ammo"><span id="ammo-mag">30</span><span id="ammo-sep">/</span><span id="ammo-reserve">90</span></div>
       <div id="weapon-name">AK-47</div>
+      <div id="ammo"><span id="ammo-mag">30</span><span id="ammo-sep">/</span><span id="ammo-reserve">90</span></div>
       <div id="reload-tip" class="hidden">RELOADING…</div>
     </div>
   </div>
@@ -87,8 +93,6 @@
   </div>
 
   <div id="announce" class="hidden"></div>
-  <div id="fps-counter">60 FPS</div>
-  <div id="mp-status" class="offline">OFFLINE — SOLO VS BOTS</div>
   <div id="hint-bar">WASD move · SHIFT sprint · <b>C</b> crouch · SPACE jump · <b>W+jump at a wall</b> wall run (SPACE to wall-jump) · R reload · <b>X</b> drop gun · <b>E</b> pick up / dual wield · 1 primary · 2 pistol · 4/5/6/7 nades (release to throw: LMB far, RMB short, both medium) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · M mute · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
 </div>
 

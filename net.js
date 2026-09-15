@@ -1,8 +1,12 @@
 // HTML5-CS client net layer — WebSocket relay protocol.
 // No three.js here: main.js owns all meshes and passes snapshots through.
 // Protocol (JSON, see server.js):
-//   c->s: hello{name,wantTeam} | state{...20Hz} | shot | hit | killed | bomb | round | nade | chat | ping
-//   s->c: welcome | roster | player_joined | player_left | snapshot@15Hz | shot|hit|killed|bomb|round|nade|chat
+//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock} | shot | hit | killed | bomb | round | nade | chat | ping
+//   s->c: welcome | roster | player_joined | player_left | snapshot (relayed instantly per state + 1Hz full) | shot|hit|killed|bomb|round|nade|chat
+//
+// Smoothness: every remote keeps a short buffer of timestamped states (stamped with the
+// SENDER's clock, so relay/network jitter never distorts the motion) and is rendered a
+// small, adaptive delay in the past with linear interpolation (Source-engine style).
 
 export const Net = {
   ws: null,
@@ -16,6 +20,10 @@ export const Net = {
   handlers: {},            // event -> [fn]
   _sendAt: 0,
   _pingAt: 0,
+  _lastAlive: null,
+  sendHz: 30,              // outgoing state rate
+  rtt: 0,                  // smoothed round-trip time to server (ms)
+  _pingTimer: null,
 
   on(evt, fn) {
     (this.handlers[evt] = this.handlers[evt] || []).push(fn);
@@ -48,12 +56,18 @@ export const Net = {
 
       ws.onopen = () => {
         this.ws = ws;
+        clearInterval(this._pingTimer);
+        this.rtt = 0;
+        this._ping();
+        this._pingTimer = setInterval(() => this._ping(), 2000);
         ws.send(JSON.stringify({ type: 'hello', name: this.name, wantTeam: wantTeam || 'auto' }));
       };
       ws.onmessage = (ev) => this._onMessage(ev.data, resolve, settled, (v) => { settled = v; }, to);
       ws.onerror = () => { if (!settled) { settled = true; clearTimeout(to); reject(new Error('websocket error')); } this.emit('error'); };
       ws.onclose = () => {
         clearTimeout(to);
+        if (this.ws && this.ws !== ws) return; // an old socket closing after a reconnect
+        clearInterval(this._pingTimer);
         const was = this.connected;
         this.connected = false; this.ws = null; this.id = null;
         this.remotes.clear();
@@ -113,13 +127,19 @@ export const Net = {
             this.remotes.set(p.id, r);
             this.emit('player_joined', { id: p.id, name: r.name, team: r.team });
           }
+          r.lastSeen = now;
+          // Same state again (1Hz keepalive) or an out-of-order packet: nothing new.
+          const ct = +p.ct || 0;
+          if (ct && r.lastCt && ct <= r.lastCt) continue;
+          if (ct) r.lastCt = ct;
           Object.assign(r, {
             name: p.name || r.name, team: p.team || r.team,
             x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
             hp: p.hp, alive: p.alive, weapon: p.weapon,
             aiming: !!p.aiming, moving: !!p.moving,
-            crouch: !!p.crouch, gnd: p.gnd !== false, wr: p.wr | 0, dual: !!p.dual, lastSeen: now,
+            crouch: !!p.crouch, gnd: p.gnd !== false, wr: p.wr | 0, dual: !!p.dual,
           });
+          this._pushSample(r, ct || now, now, p);
         }
         // Prune stale remotes (>4s without snapshot and not in roster)
         for (const [id, r] of this.remotes) {
@@ -136,9 +156,70 @@ export const Net = {
       case 'nade': this.emit('nade', m); break;
       case 'weapon': this.emit('weapon', m); break;
       case 'chat': this.emit('chat', m); break;
-      case 'pong': this.emit('pong', m); break;
+      case 'pong': {
+        const sample = performance.now() - (+m.t || 0);
+        if (sample >= 0 && sample < 5000) this.rtt = this.rtt ? this.rtt + (sample - this.rtt) * 0.3 : sample;
+        this.emit('pong', m);
+        break;
+      }
       default: break;
     }
+  },
+
+  _ping() { this._send({ type: 'ping', t: performance.now() }); },
+
+  // ---- snapshot interpolation ----
+  _pushSample(r, ct, now, p) {
+    if (!r.buf) { r.buf = []; r.off = now - ct; r.jit = 0; }
+    // Clock offset between the sender's clock and ours. Track the fastest arrival
+    // (lowest offset) and let it creep upward slowly so clock drift is absorbed.
+    const off = now - ct;
+    if (off < r.off) r.off = off; else r.off += (off - r.off) * 0.01;
+    r.jit += (Math.min(250, off - r.off) - r.jit) * 0.1; // lateness EWMA = jitter
+    const s = { t: ct, x: +p.x || 0, y: +p.y || 0, z: +p.z || 0, yaw: +p.yaw || 0, pitch: +p.pitch || 0 };
+    const last = r.buf[r.buf.length - 1];
+    // Teleport (respawn / round reset): don't slide across the map.
+    if (last && (Math.abs(s.x - last.x) + Math.abs(s.z - last.z) > 6 || Math.abs(s.y - last.y) > 4)) { r.buf.length = 0; s.snap = true; }
+    r.buf.push(s);
+    if (r.buf.length > 40) r.buf.splice(0, r.buf.length - 40);
+  },
+
+  // Interpolation delay: ~1.5 send intervals plus measured jitter, clamped.
+  interpDelay(r) {
+    const base = 1000 / this.sendHz * 1.5;
+    return Math.max(base, Math.min(250, base + (r && r.jit ? r.jit * 2 : 0)));
+  },
+
+  // Returns {x,y,z,yaw,pitch} for remote r at local time `now` (performance.now()).
+  sample(r, now, out = {}) {
+    const buf = r.buf;
+    if (!buf || !buf.length) {
+      out.x = r.x || 0; out.y = r.y || 0; out.z = r.z || 0; out.yaw = r.yaw || 0; out.pitch = r.pitch || 0;
+      return out;
+    }
+    const rt = now - r.off - this.interpDelay(r); // render time in the sender's clock
+    // drop samples that are fully in the past (keep one before rt)
+    while (buf.length > 2 && buf[1].t <= rt) buf.shift();
+    const a = buf[0], b = buf[1];
+    if (!b || rt <= a.t) { // single sample, or render time before the buffer: hold
+      out.x = a.x; out.y = a.y; out.z = a.z; out.yaw = a.yaw; out.pitch = a.pitch;
+      return out;
+    }
+    if (rt > b.t) {
+      // Buffer ran dry (late packet): extrapolate up to 100ms along the last segment, then hold.
+      const k = 1 + Math.min(rt - b.t, 100) / Math.max(1, b.t - a.t);
+      out.x = a.x + (b.x - a.x) * k; out.y = a.y + (b.y - a.y) * k; out.z = a.z + (b.z - a.z) * k;
+      if (b.snap) { out.x = b.x; out.y = b.y; out.z = b.z; }
+      out.yaw = b.yaw; out.pitch = b.pitch;
+      return out;
+    }
+    const k = Math.max(0, Math.min(1, (rt - a.t) / Math.max(1, b.t - a.t)));
+    out.x = a.x + (b.x - a.x) * k; out.y = a.y + (b.y - a.y) * k; out.z = a.z + (b.z - a.z) * k;
+    let dy = b.yaw - a.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+    out.yaw = a.yaw + dy * k;
+    out.pitch = a.pitch + (b.pitch - a.pitch) * k;
+    return out;
   },
 
   _syncRoster(players) {
@@ -173,12 +254,18 @@ export const Net = {
     }
   },
 
-  // Throttled to ~20Hz by main.js calling each frame; internal gate keeps rate.
+  // main.js calls this every frame; the gate keeps it at sendHz. Life/death changes
+  // go out immediately so nobody sees a corpse still running.
   sendState(s) {
     const now = performance.now();
-    if (now - this._sendAt < 50) return;
-    this._sendAt = now;
-    this._send({ type: 'state', ...s });
+    const aliveChanged = this._lastAlive !== null && this._lastAlive !== !!s.alive;
+    if (!aliveChanged && now - this._sendAt < 1000 / this.sendHz - 1) return;
+    this._sendAt = now; this._lastAlive = !!s.alive;
+    const r3 = (v) => Math.round((+v || 0) * 1000) / 1000;
+    this._send({
+      type: 'state', ...s, ct: Math.round(now * 10) / 10,
+      x: r3(s.x), y: r3(s.y), z: r3(s.z), yaw: Math.round((+s.yaw || 0) * 1e4) / 1e4, pitch: Math.round((+s.pitch || 0) * 1e4) / 1e4,
+    });
   },
   sendShot(shot) { this._send({ type: 'shot', ...shot }); },
   sendHit(hit) { this._send({ type: 'hit', ...hit }); },
@@ -190,6 +277,7 @@ export const Net = {
   sendChat(text) { this._send({ type: 'chat', text: String(text).slice(0, 200) }); },
 
   disconnect() {
+    clearInterval(this._pingTimer); this.rtt = 0; this._lastAlive = null;
     try { if (this.ws) this.ws.close(); } catch {}
     this.ws = null; this.connected = false; this.id = null;
     this.remotes.clear();
