@@ -186,14 +186,14 @@ export function animateSoldier(mesh, inp, dt, t) {
       - A.fire * 0.05;
   }
   // ---- WALL RUN: stagger the gait — wall foot plants high, trail leg drops,
-  //      body tips into the wall, head and gun stay level. Scales with |wall|. ----
+  //      body tips away from the wall (feet toward it), head and gun stay level. ----
   if (wAbs > 0.01) {
     const wk = A.wall, wR = Math.max(0, wk), wL = Math.max(0, -wk); // wall-side weight per leg
-    r.pelvis.rotation.z += wk * 0.16;
+    r.pelvis.rotation.z -= wk * 0.16;
     r.pelvis.position.y += 0.05 * wAbs;
-    r.spine.rotation.z -= wk * 0.12;
-    r.chest.rotation.z -= wk * 0.10;
-    r.neck.rotation.z -= wk * 0.14; // head counter-levels so the eyes stay flat
+    r.spine.rotation.z += wk * 0.12;
+    r.chest.rotation.z += wk * 0.10;
+    r.neck.rotation.z += wk * 0.14; // head counter-levels so the eyes stay flat
     // wall-side hip flexes up + out (foot meets the wall), trail leg extends down/back
     r.hipR.rotation.x += (-0.70 * wR + 0.38 * wL) * 1;
     r.hipL.rotation.x += (-0.70 * wL + 0.38 * wR) * 1;
@@ -206,7 +206,7 @@ export function animateSoldier(mesh, inp, dt, t) {
     r.shoulderL.rotation.z += 0.75 * wL; r.shoulderR.rotation.z -= 0.75 * wR;
     r.shoulderL.rotation.x -= 0.30 * wL; r.shoulderR.rotation.x -= 0.30 * wR;
     r.elbowL.rotation.x -= 0.25 * wL; r.elbowR.rotation.x -= 0.25 * wR;
-    if (r.gun) { r.gun.rotation.z -= wk * 0.12; r.gun.rotation.y -= wk * 0.08; }
+    if (r.gun) { r.gun.rotation.z += wk * 0.12; r.gun.rotation.y -= wk * 0.08; }
   }
   return struck;
 }

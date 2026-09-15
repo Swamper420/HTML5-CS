@@ -19,7 +19,8 @@ grep -ln "\bupdateBot\b" js/*.js main.js         # who uses it
 | `index.html` / `style.css` | | DOM for the HUD and menus, plus styles |
 | `main.js` | 263 | Entry point: `boot()`, the frame loop (`pace`/`loop`), FPS meter, menu buttons |
 | `net.js` | 297 | WebSocket client protocol (`Net`). Has no three.js |
-| `server.js` | 478 | Node static server (allow-list, CSP) and WebSocket relay/team balancer with rate limits. See DEPLOY.md |
+| `server.js` | 463 | Node static server (allow-list, CSP) and WebSocket relay with rate limits. See DEPLOY.md |
+| `server-match.js` | 266 | Server-authoritative online match: round phases/clocks, score, K/D/A, alive, bomb carrier/plant/defuse/explode, team balance |
 | `vendor/three.module.js` | | Vendored three.js 0.160.0 (no CDN) |
 | **Data / infra** | | |
 | `js/config.js` | 98 | Tunable data: WEAPONS, NADE_DEFS, economy, timings, movement constants |
@@ -53,8 +54,9 @@ grep -ln "\bupdateBot\b" js/*.js main.js         # who uses it
 | `js/botnav.js` | 282 | A* nav grid and steering |
 | `js/spawns.js` | 34 | Spawn slots and facing |
 | `js/bomb.js` | 480 | `BOMB` state, plant/defuse, explode, bomb HUD, `updateBomb` |
-| `js/rounds.js` | 304 | Match/round start/end, pause, round host |
+| `js/rounds.js` | 384 | Match/round start/end, round timers, applies server `match` state online, pause (menu overlay online) |
 | `js/spectate.js` | 158 | Spectating after death |
+| `js/dmgreport.js` | 109 | Online damage report: victim acks real damage (`dmg` msg, server sends it only to the attacker); attacker sees hits/damage per player during the next buy time |
 | `js/multiplayer.js` | 465 | Remote players, Net event wiring, PvP bot toggling |
 | **Player / UI** | | |
 | `js/input.js` | 148 | Keyboard/mouse, pointer lock, mouse flags |
@@ -81,3 +83,4 @@ Boot order: `initThree` → `buildMap` → `buildViewmodel` → `makeBot` ×8 �
 - **New setting:** `SETTINGS_DEFAULTS` + `SETTINGS_SPEC` in `js/settings.js`.
 - **Map change:** `buildMap()` in `js/map.js`. The nav grid rebuilds from `colliders`.
 - **Network message:** `net.js` (client), `server.js` (relay), handlers in `wireMultiplayer()` in `js/multiplayer.js`.
+- **Online rules (2+ players):** the server decides rounds, clocks, score, K/D and the bomb (`server-match.js`). Clients only send requests/death reports and render `match`/`bomb` broadcasts; guard local round logic with `isServerMatch()`. Pausing is disabled online (ESC opens an overlay menu, `G.menuOpen`).

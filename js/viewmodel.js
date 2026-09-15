@@ -118,7 +118,7 @@ export function buildGunHands(key, M, root) {
   else if (key === 'awp') { vmGripHand(root, M, 0.03, -0.06, 0.4); vmSupportHand(root, M, 0.42, -0.048, 0.031); }
 }
 
-export function buildViewmodel(key) {
+export function buildViewmodel(key, opts = {}) {
   if (viewmodel) { camera.remove(viewmodel); }
   if (!_flashTex) _flashTex = makeFlashTexture();
   const M = gunMats();
@@ -176,7 +176,8 @@ export function buildViewmodel(key) {
   // ---- dual wield: a second gun in the left hand ----
   vmL = null;
   const wOwn = player && player.weapons && player.weapons[key];
-  if (WEAPONS[key] && wOwn && wOwn.owned && wOwn.dual) {
+  const wantDual = opts.dual !== undefined ? !!opts.dual : !!(wOwn && wOwn.owned && wOwn.dual);
+  if (WEAPONS[key] && wantDual) {
     const base = new THREE.Group(), kick = new THREE.Group(), mag = new THREE.Group();
     base.add(kick); kick.add(mag); viewmodel.add(base);
     const gmL = buildGunModel(key, M, kick, mag, { hands: true });

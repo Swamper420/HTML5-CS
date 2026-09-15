@@ -22,6 +22,7 @@ import { announce, updateHUD, updateScreenFeel } from './js/hud.js';
 import { initInput, pointerLocked } from './js/input.js';
 import { buildMap, waypoints } from './js/map.js';
 import { drawMinimap } from './js/minimap.js';
+import { updateDamageReport } from './js/dmgreport.js';
 import { updatePlayer } from './js/movement.js';
 import {
   isMultiplayer, isOnline, remotes, removeRemoteMesh, updateMPStatus, updateRemoteMeshes,
@@ -29,7 +30,7 @@ import {
 } from './js/multiplayer.js';
 import { updatePlayerBody } from './js/playerbody.js';
 import { camera, initThree, renderer, scene, sunLight } from './js/render.js';
-import { endRound, lockPointer, pauseGame, resumeGame, startMatch } from './js/rounds.js';
+import { lockPointer, pauseGame, resumeGame, startMatch, updateRoundTimers } from './js/rounds.js';
 import { G, bots, player } from './js/state.js';
 import { buildViewmodel, viewmodel } from './js/viewmodel.js';
 export { WEAPONS, NADE_DEFS }; // re-export for agents importing main.js directly
@@ -89,31 +90,7 @@ function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = performance.now() / 1000;
   if (G.phase === 'playing') {
-    // CS timers: freeze first (round clock paused), then live; buy window ticks throughout
-    if (G.freezeLeft > 0) {
-      G.freezeLeft = Math.max(0, G.freezeLeft - dt);
-      if (G.freezeLeft <= 0 && !G.roundEnding) {
-        announce('GO GO GO', 900);
-        AudioSys.stopMusic(1.5);
-        AudioSys.click(880, 0.12, 0.4);
-        setTimeout(() => AudioSys.click(1174, 0.14, 0.4), 130);
-      }
-    } else if (!G.roundEnding) {
-      if (BOMB.planted) {
-        // Bomb live — round clock is irrelevant now; it plays to boom/defuse.
-        G.timeLeft = 0;
-      } else {
-        G.timeLeft -= dt;
-        if (G.timeLeft <= 0) {
-          G.timeLeft = 0;
-          endRound('ct', 'TIME — CT WINS'); // CS: defense wins on time if no plant
-        }
-      }
-    }
-    if (G.buyLeft > 0) {
-      G.buyLeft = Math.max(0, G.buyLeft - dt);
-      if (G.buyLeft <= 0 && G.buyOpen) toggleBuy(false);
-    }
+    updateRoundTimers(dt, t); // solo: local clocks · online: server deadlines
     updatePlayer(dt, t);
     try { updatePlayerBody(dt, t); } catch (e) { console.warn('player body', e); }
     if (!isMultiplayer()) {
@@ -124,6 +101,7 @@ function loop() {
     updateBomb(dt, t);
     try { updateNades(dt, t); } catch (e) { console.warn('nades', e); }
     updateEffects(dt, t);
+    try { updateDamageReport(t); } catch (e) {}
     try { updateScreenFeel(dt, t); } catch (e) {}
     try { updateGoreScreen(dt); } catch (e) {}
     // HUD: ~4Hz normally, every frame during freeze/buy/bomb countdown for smooth display
@@ -252,8 +230,11 @@ function boot() {
   const legacyPlay = $('play-btn');
   if (legacyPlay) legacyPlay.addEventListener('click', () => { AudioSys.init(); startMatch(); });
   $('resume-btn').addEventListener('click', resumeGame);
-  $('restart-btn').addEventListener('click', () => { $('pause-menu').classList.add('hidden'); G.phase = 'playing'; AudioSys.stopMusic(0.2); startMatch(); });
-  $('again-btn').addEventListener('click', () => { AudioSys.stopMusic(0.2); startMatch(); });
+  $('restart-btn').addEventListener('click', () => {
+    if (isOnline()) return; // the server owns the online match
+    $('pause-menu').classList.add('hidden'); G.phase = 'playing'; AudioSys.stopMusic(0.2); startMatch();
+  });
+  $('again-btn').addEventListener('click', () => { if (isOnline()) return; AudioSys.stopMusic(0.2); startMatch(); });
 
   $('loading-note').textContent = 'Ready. Click DEPLOY.';
   pace();

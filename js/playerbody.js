@@ -86,6 +86,7 @@ export function updatePlayerBody(dt, t) {
   const m = playerMesh;
   if (G.phase === 'menu') { m.visible = false; if (player.blob) player.blob.visible = false; return; }
   if (!player.alive) {
+    if (player.spectatorOnly) { m.visible = false; if (player.blob) player.blob.visible = false; return; } // joined mid-round: no body
     if (player.exploded) {
       player.deathT = Math.min(6.0, (player.deathT || 0) + dt);
       m.visible = false;
@@ -120,7 +121,7 @@ export function updatePlayerBody(dt, t) {
   setPlayerBodyFirstPerson(true);
   m.visible = true;
   m.position.copy(player.pos);
-  player.wallLean = damp(player.wallLean || 0, player.wallRun ? player.wallRun.side * WALLRUN.bodyLean : 0, 10, dt);
+  player.wallLean = damp(player.wallLean || 0, player.wallRun ? -player.wallRun.side * WALLRUN.bodyLean : 0, 10, dt);
   m.rotation.set(0, player.yaw + Math.PI, player.wallLean);
   // Body-space gait needs the same forward convention the bots use, and the
   // player's yaw is a half turn off it.

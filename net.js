@@ -1,8 +1,9 @@
 // HTML5-CS client net layer — WebSocket relay protocol.
 // No three.js here: main.js owns all meshes and passes snapshots through.
 // Protocol (JSON, see server.js):
-//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock} | shot | hit | killed | bomb | round | nade | chat | ping
-//   s->c: welcome | roster | player_joined | player_left | snapshot (relayed instantly per state + 1Hz full) | shot|hit|killed|bomb|round|nade|chat
+//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock, rid} | shot | hit | killed{rid} | bomb (requests) | nade | chat | ping
+//   s->c: welcome{match} | roster | player_joined | player_left | snapshot | match (server-authoritative round/score/bomb, see server-match.js)
+//         | team | shot|hit|killed|bomb|nade|chat
 //
 // Smoothness: every remote keeps a short buffer of timestamped states (stamped with the
 // SENDER's clock, so relay/network jitter never distorts the motion) and is rendered a
@@ -16,6 +17,8 @@ export const Net = {
   team: null,
   name: 'YOU',
   realPlayers: 1,          // includes self once connected
+  match: null,             // last server 'match' state (null offline / before welcome)
+  roundId: 0,              // server round id the client is currently playing (stamped on state/killed)
   remotes: new Map(),      // id -> {id,name,team,x,y,z,yaw,pitch,hp,alive,weapon,aiming,moving,crouch,gnd,wr,lastSeen}
   handlers: {},            // event -> [fn]
   _sendAt: 0,
@@ -69,7 +72,7 @@ export const Net = {
         if (this.ws && this.ws !== ws) return; // an old socket closing after a reconnect
         clearInterval(this._pingTimer);
         const was = this.connected;
-        this.connected = false; this.ws = null; this.id = null;
+        this.connected = false; this.ws = null; this.id = null; this.match = null;
         this.remotes.clear();
         this.emit('disconnect');
         if (was) this.emit('roster', { players: [], realPlayers: 0 });
@@ -85,6 +88,7 @@ export const Net = {
       case 'welcome': {
         this.id = m.id; this.team = m.team; this.connected = true;
         this.realPlayers = m.realPlayers || 1;
+        if (m.match && m.match.type === 'match') this._setMatch(m.match);
         if (!settled) { setSettled(true); clearTimeout(to); resolve({ id: m.id, team: m.team }); }
         this.emit('welcome', m);
         this.emit('roster', { players: m.players || [], realPlayers: this.realPlayers });
@@ -158,10 +162,11 @@ export const Net = {
       }
       case 'shot': this.emit('shot', m); break;
       case 'hit': this.emit('hit', m); break;
+      case 'dmg': this.emit('dmg', m); break;
       case 'killed': this.emit('killed', m); break;
       case 'bomb': this.emit('bomb', m); break;
-      case 'round': this.emit('round', m); break;
-      case 'round_echo': this.emit('round_echo', m); break;
+      case 'match': this._setMatch(m); this.emit('match', m); break;
+      case 'team': if (m.team === 'ct' || m.team === 't') { this.team = m.team; this.emit('team', m); } break;
       case 'nade': this.emit('nade', m); break;
       case 'weapon': this.emit('weapon', m); break;
       case 'chat': this.emit('chat', m); break;
@@ -174,6 +179,19 @@ export const Net = {
       default: break;
     }
   },
+
+  // Server times are "ms left at send"; turn them into local performance-seconds deadlines.
+  _setMatch(m) {
+    m.recvAt = performance.now();
+    this.match = m;
+    // Remote teams can change at round start (auto-balance).
+    for (const p of (m.players || [])) {
+      const r = this.remotes.get(p.id);
+      if (r && (p.team === 'ct' || p.team === 't')) r.team = p.team;
+      if (p.id === this.id && (p.team === 'ct' || p.team === 't')) this.team = p.team;
+    }
+  },
+  deadline(ms) { return (performance.now() + Math.max(0, (+ms || 0) - (this.rtt || 0) / 2)) / 1000; },
 
   _ping() { this._send({ type: 'ping', t: performance.now() }); },
 
@@ -274,16 +292,15 @@ export const Net = {
     this._sendAt = now; this._lastAlive = !!s.alive;
     const r3 = (v) => Math.round((+v || 0) * 1000) / 1000;
     this._send({
-      type: 'state', ...s, ct: Math.round(now * 10) / 10,
+      type: 'state', ...s, rid: this.roundId, ct: Math.round(now * 10) / 10,
       x: r3(s.x), y: r3(s.y), z: r3(s.z), yaw: Math.round((+s.yaw || 0) * 1e4) / 1e4, pitch: Math.round((+s.pitch || 0) * 1e4) / 1e4,
       ping: Math.max(0, Math.min(9999, Math.round(this.rtt) || 0)),
     });
   },
   sendShot(shot) { this._send({ type: 'shot', ...shot }); },
   sendHit(hit) { this._send({ type: 'hit', ...hit }); },
-  sendKilled(k) { this._send({ type: 'killed', ...k }); },
+  sendKilled(k) { this._send({ type: 'killed', ...k, rid: this.roundId }); },
   sendBomb(b) { this._send({ type: 'bomb', ...b }); },
-  sendRound(r) { this._send({ type: 'round', ...r }); },
   sendNade(n) { this._send({ type: 'nade', ...n }); },
   sendWeapon(w) { this._send({ type: 'weapon', ...w }); },
   sendChat(text) { this._send({ type: 'chat', text: String(text).slice(0, 200) }); },
@@ -291,7 +308,7 @@ export const Net = {
   disconnect() {
     clearInterval(this._pingTimer); this.rtt = 0; this._lastAlive = null;
     try { if (this.ws) this.ws.close(); } catch {}
-    this.ws = null; this.connected = false; this.id = null;
+    this.ws = null; this.connected = false; this.id = null; this.match = null; this.roundId = 0;
     this.remotes.clear();
   },
 };

@@ -1,6 +1,8 @@
-// js/rounds.js — AGENTS: Match/round flow: start/end round & match, win checks, alive counts, round host (PvP), remote round/score apply, pause/resume.
-// Ownership: startMatch, startRound, checkRoundEnd, endRound, endMatch, pauseGame, resumeGame, lockPointer.
+// js/rounds.js — AGENTS: Match/round flow: start/end round & match, win checks, round timers, server match state apply (online), pause/resume.
+// Ownership: startMatch, startRound, checkRoundEnd, endRound, endMatch, updateRoundTimers, applyMatchState, pauseGame, resumeGame, lockPointer.
+// Online with 2+ players the server (server-match.js) decides everything; this file only renders its 'match' state.
 
+import { beginRoundReport } from './dmgreport.js';
 import { Net } from '../net.js';
 import { AudioSys } from './audio.js';
 import {
@@ -8,7 +10,7 @@ import {
   ROUND_TIME, SLOT_ORDER, isNadeKey,
 } from './config.js';
 import { $ } from './utils.js';
-import { BOMB, bombResetRound, explodeBomb, updateInteractHUD } from './bomb.js';
+import { BOMB, bombResetRound, explodeBomb, syncBombFromServer, updateInteractHUD } from './bomb.js';
 import { resetBot } from './bots.js';
 import { buyCursorSync, toggleBuy, updateBuyTimer } from './buymenu.js';
 import {
@@ -18,13 +20,14 @@ import { clearGibs } from './gibs.js';
 import { clearNades } from './grenades.js';
 import { announce, announceRoundEnd, updateHUD } from './hud.js';
 import { setRmbDown } from './input.js';
-import { clearBotsForMP, isMultiplayer, isOnline, remotes } from './multiplayer.js';
+import { clearBotsForMP, isMultiplayer, isOnline, isServerMatch, remotes } from './multiplayer.js';
 import { clearWorldWeapons, setPickupHint } from './pickups.js';
 import { resetPlayerBody } from './playerbody.js';
 import { renderer, scene } from './render.js';
 import { mySpawnSlot, spawnList, spawnPoint, spawnYawMesh, spawnYawPlayer } from './spawns.js';
-import { G, addMoney, bots, isFreeze, newLoadout, player } from './state.js';
-import { esc, remoteStats } from './stats.js';
+import { G, addMoney, bots, isFreeze, keys, newLoadout, player } from './state.js';
+import { spectateCurrent, updateSpectateOverlay } from './spectate.js';
+import { esc, remoteStats, statsHolder } from './stats.js';
 import { buildViewmodel, viewmodel, vmRig } from './viewmodel.js';
 
 export function applyServerScore(m) {
@@ -34,19 +37,70 @@ export function applyServerScore(m) {
     try { updateHUD(); } catch {}
   }
 }
-export function applyRemoteRound(m) {
-  if (m.action === 'start') {
-    applyServerScore(m);
-    // Guest follows host round numbering.
-    if (typeof m.round === 'number' && m.round !== G.round) G.round = m.round;
-    if (!G.roundEnding) return; // already live — ignore duplicate starts
-    if (isOnline() && m.fromId != null && !remotes.get(m.fromId)) return;
-    startRound(!!m.first, true);
-  } else if (m.action === 'end') {
-    if (G.phase !== 'playing' || G.roundEnding) { applyServerScore(m); return; }
-    const w = m.winner === 'ct' ? 'ct' : m.winner === 'draw' ? 'draw' : 't';
-    endRound(w, String(m.reason || '').slice(0, 80), true, m.score);
+function applyServerStats(m) {
+  for (const p of (m.players || [])) {
+    const h = p.id === Net.id ? player : statsHolder('remote:' + p.id);
+    if (!h) continue;
+    h.kills = p.kills | 0; h.deaths = p.deaths | 0; h.assists = p.assists | 0;
   }
+}
+// Deadlines in local performance-seconds; only re-anchor on real drift so clocks never jitter.
+function anchorTimers(m) {
+  const set = (k, ms) => { const end = Net.deadline(ms); if (!(Math.abs((G.srvT[k] || 0) - end) < 0.25)) G.srvT[k] = end; };
+  set('freeze', m.freezeLeft); set('buy', m.buyLeft); set('round', m.roundLeft);
+}
+// Joined mid-round: no body, no corpse — just spectate until the next round.
+function joinAsSpectator() {
+  player.alive = false; player.hp = 0; player.spectatorOnly = true; player.hasBomb = false;
+  player.cook = null; player.aiming = false; player.specTarget = null;
+  if (viewmodel) viewmodel.visible = false;
+  $('respawn-killer').textContent = 'JOINED MID-ROUND';
+  $('respawn-timer').textContent = 'You spawn next round — spectating for now.';
+  $('respawn-overlay').classList.remove('hidden');
+  try { spectateCurrent(); updateSpectateOverlay(); } catch {}
+}
+// Every server 'match' message lands here (event: round_start | live | death | round_end | match_over | sync | join | leave | stopped).
+export function applyMatchState(m) {
+  if (!m || G.phase === 'menu') return; // not deployed yet — startMatch() reads Net.match
+  if (!m.active) {
+    // Dropped below 2 players: back to solo practice with bots.
+    if (G.srvMatchId) {
+      G.srvMatchId = 0; G.srvRoundId = 0; Net.roundId = 0;
+      if (G.phase === 'playing' || G.phase === 'over') { startMatch(); announce('WAITING FOR PLAYERS — PRACTICE VS BOTS', 2600); }
+    }
+    return;
+  }
+  const me = (m.players || []).find((p) => p.id === Net.id);
+  const newMatch = m.id !== G.srvMatchId;
+  const newRound = newMatch || m.roundId !== G.srvRoundId;
+  if (newMatch) { resetLocalMatch(); G.srvMatchId = m.id; }
+  applyServerScore(m);
+  applyServerStats(m);
+  if (newRound) {
+    G.srvRoundId = m.roundId; Net.roundId = m.roundId;
+    G.round = m.round | 0 || 1;
+    if (me && (me.team === 'ct' || me.team === 't')) player.team = me.team;
+    if (m.phase === 'over') {
+      if (G.phase !== 'over') endMatch();
+      return;
+    }
+    if (G.phase === 'over') resetLocalMatch(); // server started a new round after the end screen
+    startRound(G.round === 1 && newMatch, true);
+    anchorTimers(m);
+    BOMB.targetSite = m.site === 'B' ? 'B' : 'A';
+    syncBombFromServer(m.bomb, true);
+    if (me && !me.alive) joinAsSpectator();
+    if (m.phase === 'post') { G.roundEnding = true; G.buyLeft = 0; }
+  } else {
+    anchorTimers(m);
+    if (!G.roundEnding) syncBombFromServer(m.bomb, false);
+  }
+  if ((m.event === 'round_end' || m.event === 'match_over') && G.phase === 'playing') {
+    const w = m.winner === 'ct' ? 'ct' : m.winner === 't' ? 't' : 'draw';
+    endRound(w, String(m.reason || '').slice(0, 80), true, m.score);
+    if (m.event === 'match_over') endMatch();
+  }
+  try { updateHUD(); } catch {}
 }
 
 function aliveCounts() {
@@ -63,17 +117,6 @@ function aliveCounts() {
   } catch {}
   return { ct, t };
 }
-// Exactly one T holds the C4 online: the T client with the lowest net id.
-function isBombCarrierOnline() {
-  try {
-    if (!isOnline() || Net.id == null) return true;
-    for (const r of Net.remoteList()) {
-      if ((r.team || 't') !== 't') continue;
-      if (r.id < Net.id) return false;
-    }
-    return true;
-  } catch { return true; }
-}
 export function isRoundHost() {
   // Lowest net id hosts round flow + bomb timer to keep clients in sync.
   try {
@@ -82,7 +125,8 @@ export function isRoundHost() {
     return true;
   } catch { return true; }
 }
-export function startMatch() {
+// Local match reset (money, loadout, stats, menus). Online the server then supplies round/score.
+function resetLocalMatch() {
   AudioSys.stopMusic(0.2);
   G.phase = 'playing'; G.round = 1; G.score = { ct: 0, t: 0 };
   G.kills = 0; G.deaths = 0; G.headshots = 0; G.shots = 0; G.hits = 0;
@@ -94,10 +138,16 @@ export function startMatch() {
   player.armor = 0;
   player.weapons = newLoadout();
   player.cur = 'deagle'; player.last = 'ak';
-  startRound(true);
   $('main-menu').classList.add('hidden');
   $('end-screen').classList.add('hidden');
+  $('pause-menu').classList.add('hidden'); G.menuOpen = false;
   $('hud').classList.remove('hidden');
+}
+export function startMatch() {
+  resetLocalMatch();
+  G.srvMatchId = 0; G.srvRoundId = 0;
+  if (isServerMatch()) applyMatchState(Net.match);
+  else startRound(true);
   lockPointer();
 }
 function startRound(first = false, fromNet = false) {
@@ -105,6 +155,7 @@ function startRound(first = false, fromNet = false) {
   G.roundKills = { ct: 0, t: 0 };
   G.timeLeft = ROUND_TIME; G.buyOpen = false; G.roundEnding = false;
   G.freezeLeft = FREEZE_TIME; G.buyLeft = BUY_TIME;
+  try { beginRoundReport(); } catch (e) {}
   $('buy-menu').classList.remove('open'); buyCursorSync();
   $('killfeed').innerHTML = '';
   // fresh battlefield: fade out tracers/smoke/debris, wipe decals (blood, holes, scorch)
@@ -135,7 +186,7 @@ function startRound(first = false, fromNet = false) {
   }
   // reset actors — team-aware spawns (CT east-central, T west far).
   player.hp = 100;
-  player.alive = true; player.reloading = 0;
+  player.alive = true; player.reloading = 0; player.spectatorOnly = false;
   player.specTarget = null;
   player.hasBomb = false;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
@@ -181,9 +232,7 @@ function startRound(first = false, fromNet = false) {
   try { for (const [, e] of remotes) { if (e.data) { e.data.alive = true; e.data.hp = 100; } } } catch {}
   try { player._lastId = null; player._assistId = null; for (const b of bots) { b._lastId = null; b._assistId = null; } } catch {}
   try { const sb = $('scoreboard'); if (sb) sb.classList.add('hidden'); } catch {}
-  bombResetRound();
-  // Was: every T client set hasBomb = true, i.e. one C4 per T. Exactly one carrier now.
-  try { if (isOnline() && (player.team || 'ct') === 't') player.hasBomb = isBombCarrierOnline(); } catch {}
+  bombResetRound(); // online: the server names the single carrier (syncBombFromServer)
   const tSite = BOMB.targetSite || 'A';
   const carrierName = BOMB.carrier ? BOMB.carrier.short : ((player.team === 't' && player.hasBomb) ? (player.name || 'YOU') : 'T');
   $('respawn-overlay').classList.add('hidden');
@@ -193,11 +242,11 @@ function startRound(first = false, fromNet = false) {
   } else {
     announce(first ? `ROUND 1 — PISTOL - T PUSH ${tSite} (${carrierName} HAS BOMB)` : `ROUND ${G.round} — T PUSH ${tSite} - HOLD THE SITES`, 2200);
   }
-  try { if (isOnline() && isRoundHost() && !fromNet) Net.sendRound({ action: 'start', round: G.round, first: !!first }); } catch {}
   updateBuyTimer();
   updateHUD();
 }
 export function checkRoundEnd() {
+  if (isServerMatch()) return; // server decides
   if (G.phase !== 'playing' || G.roundEnding || isFreeze()) return;
   const { ct, t } = aliveCounts();
   // Bomb planted changes everything (CS rules):
@@ -225,12 +274,13 @@ export function checkRoundEnd() {
 }
 export function endRound(winner, reason, fromNet = false, serverScore = null) { // 'ct' | 't' | 'draw'
   if (G.phase !== 'playing' || G.roundEnding) return;
+  const srv = isServerMatch();
+  if (srv && !fromNet) return; // only the server ends rounds online
   G.roundEnding = true;
   if (G.buyOpen) toggleBuy(false);
   player.cook = null;
   updateInteractHUD(null);
   for (const b of bots) { b.planting = false; b.defusing = false; }
-  try { if (isOnline() && !fromNet) Net.sendRound({ action: 'end', winner, reason: reason || '', round: G.round }); } catch {}
 
   const myTeam = player.team || 'ct';
   let track = null;
@@ -255,16 +305,37 @@ export function endRound(winner, reason, fromNet = false, serverScore = null) { 
   }
   // bot economy irrelevant
   updateHUD();
+  if (srv) return; // next round / match end arrive from the server
   if (G.score.ct >= ROUNDS_TO_WIN_MATCH || G.score.t >= ROUNDS_TO_WIN_MATCH) { endMatch(); return; }
   G.round++;
-  // Online: host drives the next round; guests wait for 'round/start' (plus fallback timer).
-  try {
-    if (isOnline() && !isRoundHost()) {
-      setTimeout(() => { if (G.phase === 'playing' && G.roundEnding) startRound(false, true); }, 4000);
-      return;
+  setTimeout(() => { if (G.phase === 'playing' && G.roundEnding && !isServerMatch()) startRound(); }, 3800);
+}
+// CS timers: freeze first (round clock paused), then live; buy window ticks throughout.
+// Solo counts down locally; a server match reads the server's deadlines.
+export function updateRoundTimers(dt, t) {
+  const prevFreeze = G.freezeLeft;
+  if (isServerMatch()) {
+    G.freezeLeft = Math.max(0, (G.srvT.freeze || 0) - t);
+    G.buyLeft = Math.max(0, (G.srvT.buy || 0) - t);
+    if (!G.roundEnding) G.timeLeft = BOMB.planted ? 0 : Math.max(0, Math.min(ROUND_TIME, (G.srvT.round || 0) - t));
+  } else {
+    if (G.freezeLeft > 0) G.freezeLeft = Math.max(0, G.freezeLeft - dt);
+    else if (!G.roundEnding) {
+      if (BOMB.planted) G.timeLeft = 0; // bomb live — plays to boom/defuse
+      else {
+        G.timeLeft -= dt;
+        if (G.timeLeft <= 0) { G.timeLeft = 0; endRound('ct', 'TIME — CT WINS'); } // defense wins on time
+      }
     }
-  } catch {}
-  setTimeout(() => { if (G.phase === 'playing') startRound(); }, 3800);
+    if (G.buyLeft > 0) G.buyLeft = Math.max(0, G.buyLeft - dt);
+  }
+  if (prevFreeze > 0 && G.freezeLeft <= 0 && !G.roundEnding) {
+    announce('GO GO GO', 900);
+    AudioSys.stopMusic(1.5);
+    AudioSys.click(880, 0.12, 0.4);
+    setTimeout(() => AudioSys.click(1174, 0.14, 0.4), 130);
+  }
+  if (G.buyLeft <= 0 && G.buyOpen) toggleBuy(false);
 }
 function endMatch() {
   G.phase = 'over';
@@ -278,18 +349,29 @@ function endMatch() {
   $('end-title').style.color = win ? '#7dff9a' : '#ff6b6b';
   const acc = G.shots ? Math.round((G.hits / G.shots) * 100) : 0;
   const mins = ((performance.now() - G.startTime) / 60000).toFixed(1);
-  $('end-sub').textContent = `Final: CT ${G.score.ct} — ${G.score.t} T · ${mins} min`;
+  $('end-sub').textContent = `Final: CT ${G.score.ct} — ${G.score.t} T · ${mins} min` + (isServerMatch() ? ' · next match starts automatically' : '');
+  if ($('again-btn')) $('again-btn').classList.toggle('hidden', isServerMatch());
   const track = win ? AudioSys.roundWin('MATCH_WIN') : AudioSys.roundLose('MATCH_LOSS');
   const trackInfo = track ? `<br><span style="color:#ffd76d;font-size:14px;letter-spacing:1px;font-weight:700;">🎵 ${esc(track.title)}</span>` : '';
   $('end-stats').innerHTML = `Kills <b>${G.kills | 0}</b> · Deaths <b>${player.deaths | 0}</b> · Headshots <b>${G.headshots | 0}</b><br>Accuracy <b>${acc | 0}%</b> (${G.hits | 0}/${G.shots | 0}) · Cash <b>$${player.money | 0}</b>${trackInfo}`;
   $('end-screen').classList.remove('hidden');
 }
+// Online the world can't stop for one player: the menu is an overlay and the game keeps running.
 export function pauseGame() {
   if (G.phase !== 'playing') return;
-  G.phase = 'paused';
+  const online = isOnline();
+  const title = document.querySelector('#pause-menu h2'), note = document.querySelector('#pause-menu p');
+  if (title) title.textContent = online ? 'MENU' : 'PAUSED';
+  if (note) note.textContent = online ? 'Online match is still running — you can be shot. Click resume to re-lock pointer.' : 'Mouse released. Click resume to re-lock pointer.';
+  if ($('restart-btn')) $('restart-btn').classList.toggle('hidden', online);
+  if (online) {
+    G.menuOpen = true;
+    for (const k in keys) keys[k] = false; // don't keep running forward with the menu open
+  } else G.phase = 'paused';
   $('pause-menu').classList.remove('hidden');
 }
 export function resumeGame() {
+  if (G.menuOpen) { G.menuOpen = false; $('pause-menu').classList.add('hidden'); lockPointer(); return; }
   if (G.phase !== 'paused') return;
   G.phase = 'playing';
   $('pause-menu').classList.add('hidden');

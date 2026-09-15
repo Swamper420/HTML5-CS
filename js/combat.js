@@ -2,6 +2,7 @@
 // Ownership: fireHitscan, damageBot, damagePlayer. Player trigger/recoil is in shooting.js.
 
 import * as THREE from 'three';
+import { noteDamageTaken } from './dmgreport.js';
 import { Net } from '../net.js';
 import { AudioSys } from './audio.js';
 import { CROUCH_EYE_DROP, MONEY_KILL, NADE_DEFS, SITES, WEAPONS, isNadeKey } from './config.js';
@@ -22,7 +23,7 @@ import {
 } from './gore.js';
 import { tacticalSmokes } from './grenades.js';
 import { addKillfeed, announce, flashDamage, playerHitmark, updateHUD } from './hud.js';
-import { flashDamageRemote, isOnline, remotes } from './multiplayer.js';
+import { flashDamageRemote, isOnline, isServerMatch, remotes } from './multiplayer.js';
 import { dropAllOnDeath, newWid, spawnWorldWeapon } from './pickups.js';
 import { playerMesh, setPlayerBodyFirstPerson } from './playerbody.js';
 import { camera, muzzleLight, scene } from './render.js';
@@ -398,7 +399,9 @@ export function damagePlayer(dmg, shooter, head) {
     player.armor -= useArmor;
     dmg -= useArmor * 0.8;
   }
+  const hpBefore = player.hp;
   player.hp -= dmg;
+  try { noteDamageTaken(shooter, hpBefore - Math.max(0, player.hp), player.hp <= 0); } catch {}
   AudioSys.hurt();
   try { noteDamage(player, shooter); } catch {}
   try { screenGore(clamp(dmg / 55, 0.15, 1) * (head ? 1.3 : 1)); } catch (e) {}
@@ -437,11 +440,12 @@ export function damagePlayer(dmg, shooter, head) {
     } catch (e) {}
     try { updateInteractHUD(null); } catch (e) {}
     if (BOMB.defuser === 'player') BOMB.defuser = null;
-    // PvP T death drops the bomb where we died so teammates can recover it.
+    // T death drops the bomb where we died so teammates (or T bots) can recover it.
+    // Solo used to just delete it. Online the server drops it when it hears about the death.
     try {
-      if (isOnline() && player.hasBomb && !BOMB.planted) {
+      if (player.hasBomb && !BOMB.planted) {
         player.hasBomb = false;
-        bombDropAt(player.pos, false);
+        if (!isServerMatch()) bombDropAt(player.pos, false);
       }
     } catch {}
     const kn = shooter.isPlayer ? (player.name || 'YOU') : (shooter.bot ? shooter.bot.short : (shooter.remoteName || shooter.remote?.data?.name || 'Enemy'));
@@ -462,13 +466,17 @@ export function damagePlayer(dmg, shooter, head) {
     const victimTeam = player.team || 'ct';
     G.roundKills[killerTeam]++;
     addKillfeed(kn, killerTeam, player.name || 'YOU', victimTeam, currentWeaponName(shooter), head);
-    // Broadcast victim-authoritative kill so remotes get killfeed + round check.
+    // Victim-authoritative death report — sent exactly once per death, for every cause
+    // (bullets, nades, C4, suicide), so the server's alive counts and K/D stay exact.
     try {
-      if (isOnline() && (shooter.remote || shooter.remoteName)) {
+      if (isOnline()) {
+        const now = performance.now() / 1000;
+        const aid = String(player._assistId || '');
+        const assistId = aid.startsWith('remote:') && (now - (player._assistT || 0)) < 5 ? +aid.slice(7) : null;
         Net.sendKilled({
-          killerId: shooter.remote?.data?.id ?? null, killerName: kn, killerTeam,
+          killerId: shooter.remote?.data?.id ?? shooter.remoteId ?? null, killerName: kn, killerTeam,
           victimId: Net.id, victimName: player.name || 'YOU', victimTeam,
-          weapon: currentWeaponName(shooter), head: !!head,
+          weapon: currentWeaponName(shooter), head: !!head, assistId,
         });
       }
     } catch {}

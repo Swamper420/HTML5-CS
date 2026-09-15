@@ -492,19 +492,12 @@ function explodeDamage(pos, radius, baseDmg, owner, weaponLabel) {
         if (dmg >= 4) {
           const shooter = owner.isPlayer
             ? { team: oTeam, isPlayer: true, weaponName: weaponLabel }
-            : { team: oTeam, isPlayer: false, bot: owner.bot || null, remoteName: owner.remoteName || null, remote: null, weaponName: weaponLabel };
+            : { team: oTeam, isPlayer: false, bot: owner.bot || null, remoteName: owner.remoteName || null, remoteId: owner.remoteId ?? null, remote: null, weaponName: weaponLabel };
           // resolve remote ref for direction arrow when killed by a real player
           try {
             if (owner.remoteId != null && remotes.has(owner.remoteId)) shooter.remote = remotes.get(owner.remoteId);
           } catch (e) {}
-          damagePlayer(dmg, shooter, false);
-          if (!player.alive) {
-            try {
-              if (isOnline() && owner.remoteId != null) {
-                Net.sendKilled({ killerId: owner.remoteId, killerName: oName, killerTeam: oTeam, victimId: Net.id, victimName: player.name || 'YOU', victimTeam: player.team || 'ct', weapon: weaponLabel, head: false });
-              }
-            } catch (e) {}
-          }
+          damagePlayer(dmg, shooter, false); // reports the death to the server itself
         }
       }
     }

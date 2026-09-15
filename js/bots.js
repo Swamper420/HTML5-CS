@@ -227,6 +227,7 @@ export function animateBotMesh(bot, dt, t) {
       pitch = clamp(Math.atan2((tp.y + 1.2) - (bot.pos.y + 1.55), Math.max(0.4, dh)), -1.1, 1.1);
     }
   } catch (e) {}
+  bot.aimPitch = damp(bot.aimPitch || 0, pitch, 10, dt); // spectator first-person view
   animateSoldier(m, {
     vx: bot._vx, vz: bot._vz, yaw: m.rotation.y, pitch,
     grounded: true,

@@ -1,8 +1,8 @@
 // HTML5-CS — Strike Zone multiplayer server.
 // Serves the static game + relays snapshots/events over WebSocket.
 // Rule: when 2+ real players are online, clients disable bots (pure PvP).
-// Server is a dumb relay + team balancer; simulation (hitscan, bomb, rounds)
-// runs on clients with host (lowest id) authoritative for round flow.
+// Hitscan/movement are client-side and relayed; match flow (rounds, clocks, score,
+// K/D/A, bomb) is server-authoritative in server-match.js.
 
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { createMatch } from './server-match.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function parsePort() {
@@ -199,11 +200,6 @@ const WEAPON_KEYS = new Set(['ak', 'deagle', 'awp', 'p90']);
 // id -> { ws, id, name, team, state, lastSeen }
 const clients = new Map();
 
-// Authoritative match score — server level, so PvP clients can never diverge
-// (packet order / simultaneous round-end detection used to split scores).
-const match = { ct: 0, t: 0, round: 1, scoredRound: 0 };
-const matchScore = () => ({ ct: match.ct, t: match.t });
-
 function teamCounts() {
   let ct = 0, t = 0;
   for (const c of clients.values()) {
@@ -238,14 +234,19 @@ function broadcast(obj, exceptId = null) {
 }
 
 function send(ws, obj) {
-  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
+
+const match = createMatch({
+  clients, broadcast, send,
+  onRoundStart: () => { const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k); },
+});
 
 wss.on('connection', (ws, req) => {
   const ip = clientIp(req);
   ipCounts.set(ip, (ipCounts.get(ip) || 0) + 1);
   const id = nextId++;
-  const client = { ws, id, ip, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true, lastStateAt: 0, lastChatAt: 0, lastRoundAt: 0,
+  const client = { ws, id, ip, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true, lastStateAt: 0, lastChatAt: 0, lastPos: null, kills: 0, deaths: 0, assists: 0, mAlive: false,
     tokens: RATE_BURST, lastRefill: Date.now(), strikes: 0 };
   try { ws._socket.setNoDelay(true); } catch {} // never let Nagle batch game packets
   ws.on('pong', () => { client.alive = true; });
@@ -272,12 +273,15 @@ wss.on('connection', (ws, req) => {
         const cleanName = cleanText(m.name || `Player${id}`, 64).replace(/[<>&"'`\\]/g, '').trim().slice(0, 16) || `Player${id}`;
         client.name = cleanName;
         const name = cleanName;
-        if (!client.team) client.team = pickTeam(m.wantTeam); // once-guard — no mid-match team flips
+        if (client.team) break; // once-guard — hello is only processed once per connection
+        client.team = pickTeam(m.wantTeam);
         console.log(`[+] #${id} "${name}" joined as ${client.team.toUpperCase()} (${clients.size} online)`);
-        send(ws, { type: 'welcome', id, team: client.team, name, players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
+        // Decide alive/match activation first so the welcome carries the real state.
+        match.join(client);
+        send(ws, { type: 'welcome', id, team: client.team, name, players: roster(), realPlayers: clients.size, match: match.state('welcome') });
         broadcast({ type: 'player_joined', id, name, team: client.team, realPlayers: clients.size }, id);
         // Immediately push a roster snapshot so everyone can apply the no-bots rule
-        broadcast({ type: 'roster', players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
+        broadcast({ type: 'roster', players: roster(), realPlayers: clients.size });
         if (drops.size) send(ws, { type: 'weapon', action: 'sync', drops: [...drops.values()] });
         break;
       }
@@ -318,12 +322,14 @@ wss.on('connection', (ws, req) => {
         const sx = +m.x || 0, sy = +m.y || 0, sz = +m.z || 0;
         if (!Number.isFinite(sx + sy + sz + (+m.yaw || 0) + (+m.pitch || 0))) break;
         if (Math.abs(sx) > 45 || Math.abs(sz) > 45 || sy < -2 || sy > 15) break;
+        if (!client.team) break;
+        client.lastPos = { x: sx, y: sy, z: sz };
         client.state = {
           id, ct: +m.ct || 0,
           x: sx, y: sy, z: sz,
           yaw: +m.yaw || 0, pitch: +m.pitch || 0,
           hp: Math.max(0, Math.min(100, +m.hp || 100)),
-          alive: !!m.alive,
+          alive: match.onState(client, !!m.alive, m.rid),
           weapon: String(m.weapon || 'deagle').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12),
           aiming: !!m.aiming,
           moving: !!m.moving,
@@ -339,42 +345,12 @@ wss.on('connection', (ws, req) => {
         }
         break;
       }
-      case 'round':
-        // Server-authoritative score: first 'end' per round number wins, duplicates
-        // (simultaneous detection on two clients, retransmits) are idempotent.
-        // 'start' with first/round 1 resets the match (fresh startMatch on host).
-        // Rate-limited: 1 round msg / 2s per client to stop fake-win spam.
-        if (Date.now() - client.lastRoundAt < 2000 && m.action === 'end') break;
-        client.lastRoundAt = Date.now();
-        if (m.action !== 'start' && m.action !== 'end') break;
-        if (m.action === 'start') {
-          // Only the round host (lowest connected id) may start/reset rounds.
-          if (id !== Math.min(...clients.keys())) break;
-          const now = Date.now(); for (const [k, d] of drops) if (now - d.at > 2000) drops.delete(k);
-          if (m.first || (typeof m.round === 'number' && m.round <= 1)) { match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
-          else if (typeof m.round === 'number' && m.round > 0) match.round = m.round;
-          m.score = matchScore(); m.round = match.round;
-        } else if (m.action === 'end') {
-          const r = typeof m.round === 'number' && Number.isFinite(m.round) ? Math.max(1, Math.min(30, Math.floor(m.round))) : match.round;
-          if (m.winner !== 'ct' && m.winner !== 't' && m.winner !== 'draw') break;
-          if (typeof m.reason === 'string') m.reason = cleanText(m.reason, 80); else delete m.reason;
-          if (r !== match.scoredRound && r >= match.round) {
-            if (m.winner === 'ct') match.ct++;
-            else if (m.winner === 't') match.t++;
-            match.scoredRound = r;
-            match.round = r + 1;
-          }
-          m.score = matchScore(); m.round = r;
-        }
-        m.fromId = id; m.fromName = client.name; m.fromTeam = client.team;
-        broadcast(m, id);
-        // Echo authoritative score back to the sender too (sender skips its own broadcast).
-        send(ws, { type: 'round_echo', score: matchScore(), round: match.round });
+      case 'bomb':
+        match.handleBomb(client, m);
         break;
       case 'shot':
       case 'hit':
       case 'killed':
-      case 'bomb':
       case 'nade':
       case 'chat': {
         // Relay gameplay events to everyone else; stamp sender id.
@@ -383,12 +359,19 @@ wss.on('connection', (ws, req) => {
           client.lastChatAt = Date.now();
           m.text = cleanText(m.text || '', 200);
         }
+        if (m.type === 'killed') {
+          if (m.victimId !== id) break; // only the victim reports its own death
+          m.killerName = cleanText(m.killerName, 16); m.victimName = client.name;
+          m.weapon = cleanText(m.weapon, 24); m.victimTeam = client.team;
+          if (m.killerTeam !== 'ct' && m.killerTeam !== 't') delete m.killerTeam;
+          match.onKilled(client, m);
+        }
         if (m.type === 'hit' && m.dmg !== undefined) {
           const d = +m.dmg;
           if (!Number.isFinite(d)) break;
           m.dmg = Math.max(0, Math.min(100, d));
         }
-        if ((m.type === 'bomb' || m.type === 'nade' || m.type === 'shot') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
+        if ((m.type === 'nade' || m.type === 'shot') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
           if (!Number.isFinite(+m.x + +m.y + +m.z)) break;
           if (Math.abs(+m.x) > 45 || Math.abs(+m.z) > 45) break;
         }
@@ -396,6 +379,20 @@ wss.on('connection', (ws, req) => {
         m.fromName = client.name;
         m.fromTeam = client.team;
         broadcast(m, id);
+        break;
+      }
+      case 'dmg': {
+        // Damage ack: the victim tells its attacker how much HP a hit really took
+        // (armor, remaining HP). Sent only to that attacker, never broadcast.
+        const to = clients.get(+m.toId);
+        if (!to || to.id === id || !client.team) break;
+        const d = +m.dmg;
+        if (!Number.isFinite(d)) break;
+        send(to.ws, {
+          type: 'dmg', toId: to.id, fromId: id, fromName: client.name, fromTeam: client.team,
+          dmg: Math.max(0, Math.min(100, d)), hits: Math.max(0, Math.min(30, m.hits | 0)),
+          killed: !!m.killed, rid: m.rid | 0,
+        });
         break;
       }
       case 'ping': {
@@ -411,10 +408,11 @@ wss.on('connection', (ws, req) => {
     clients.delete(id);
     const left = (ipCounts.get(ip) || 1) - 1;
     if (left > 0) ipCounts.set(ip, left); else ipCounts.delete(ip);
-    if (!clients.size) { drops.clear(); match.ct = 0; match.t = 0; match.round = 1; match.scoredRound = 0; }
+    if (!clients.size) drops.clear();
     console.log(`[-] client ${id} left (${clients.size} online)`);
     broadcast({ type: 'player_left', id, realPlayers: clients.size });
-    broadcast({ type: 'roster', players: roster(), realPlayers: clients.size, score: matchScore(), round: match.round });
+    broadcast({ type: 'roster', players: roster(), realPlayers: clients.size });
+    if (client.team) match.leave(client);
   });
 
   ws.on('error', () => { try { ws.close(); } catch {} });
@@ -438,8 +436,9 @@ setInterval(() => {
     if (!c.state) continue;
     players.push({ ...c.state, name: c.name, team: c.team });
   }
+  match.sync(); // keeps late joiners and drifting clocks honest
   if (!players.length) return;
-  const msg = JSON.stringify({ type: 'snapshot', players, realPlayers: clients.size, t: Date.now(), score: matchScore(), round: match.round });
+  const msg = JSON.stringify({ type: 'snapshot', players, realPlayers: clients.size, t: Date.now() });
   for (const c of clients.values()) {
     if (c.ws.readyState === 1) c.ws.send(msg);
   }

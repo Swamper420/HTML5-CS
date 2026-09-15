@@ -1,5 +1,7 @@
-// js/bomb.js — AGENTS: Defusal bomb: BOMB round state, sites, single-owner plant/defuse progress, mesh, explode/defuse, remote sync, bomb HUD, per-frame updateBomb.
+// js/bomb.js — AGENTS: Defusal bomb: BOMB round state, sites, single-owner plant/defuse progress, mesh, explode/defuse, server bomb sync, bomb HUD, per-frame updateBomb.
 // Ownership: BOMB object + everything bomb-related. Timings in config.js.
+// Online server match: the server owns carrier/plant/defuse/explode. Clients run the hold-E bars, send
+// requests (plant_start/plant, defuse_start/defuse, pickup) and apply the server's 'bomb' broadcasts.
 
 import * as THREE from 'three';
 import { Net } from '../net.js';
@@ -11,7 +13,7 @@ import { botChest, objectiveWaypoint } from './bots.js';
 import { damageBot, damagePlayer } from './combat.js';
 import { spawnBurst, spawnDebris, spawnDecal, spawnFireball, spawnShockwave, spawnSmoke } from './effects.js';
 import { addKillfeed, announce, flashExplosionOverlay } from './hud.js';
-import { isMultiplayer, isOnline, remotes } from './multiplayer.js';
+import { isMultiplayer, isServerMatch } from './multiplayer.js';
 import { camera, muzzleLight, scene } from './render.js';
 import { checkRoundEnd, endRound } from './rounds.js';
 import { G, bots, isFreeze, keys, player } from './state.js';
@@ -38,7 +40,22 @@ export const BOMB = {
   light: null,
   beepAt: 0,
   exploded: false,
+  carrierId: null,      // online: net id of the T carrying it (server-owned)
+  _netHold: null,       // online: 'plant' | 'defuse' while we've told the server we're holding E
+  _reqAt: -9,           // online: last plant/defuse/pickup completion request (perf seconds)
 };
+// ---- Online request helpers ----
+function netHold(kind) { // kind: 'plant' | 'defuse' | null
+  if (BOMB._netHold === kind) return;
+  if (BOMB._netHold) Net.sendBomb({ action: BOMB._netHold + '_stop' });
+  BOMB._netHold = kind;
+  if (kind) Net.sendBomb({ action: kind + '_start' });
+}
+function netRequest(msg, t) {
+  if (t - BOMB._reqAt < 0.6) return; // one request per ~RTT; the server's answer resolves it
+  BOMB._reqAt = t;
+  Net.sendBomb(msg);
+}
 export function siteByName(n) { return SITES.find((s) => s.name === n); }
 export function isInSite(pos, site) {
   const dx = pos.x - site.x, dz = pos.z - site.z;
@@ -92,9 +109,11 @@ export function bombResetRound() {
   BOMB.defuseProgress = 0; BOMB.defuser = null;
   BOMB._plantAdvT = -1; BOMB._defuseAdvT = -1;
   BOMB.explodeAt = 0; BOMB.exploded = false; BOMB.beepAt = 0; BOMB._tenSecWarned = false; BOMB._fastFused = false;
+  BOMB.carrierId = null; BOMB._netHold = null; BOMB._reqAt = -9;
   if (isMultiplayer()) {
-    // Pure PvP: no bot carrier — T players carry (player.hasBomb set in startRound).
+    // Pure PvP: no bot carrier — the server names one T player (syncBombFromServer).
     for (const b of bots) b.hasBomb = false;
+    player.hasBomb = false;
     updateBombHUD(0);
     return;
   }
@@ -120,7 +139,6 @@ export function bombDropAt(pos, fromNet = false) {
   spawnBombMesh(BOMB.droppedPos, false);
   announce('BOMB DROPPED', 1400);
   updateBombHUD(performance.now() / 1000);
-  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'drop', x: BOMB.droppedPos.x, z: BOMB.droppedPos.z }); } catch {}
 }
 export function spawnBombMesh(pos, planted) {
   bombClearMesh();
@@ -158,7 +176,6 @@ export function plantBomb(bot, site, t, fromNet = false) {
   const planterName = isPlayerPlanter ? (player.name || 'YOU') : (bot.short || 'T');
   addKillfeed(planterName, 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
   updateBombHUD(t);
-  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'plant', site: site.name, x: BOMB.pos.x, z: BOMB.pos.z }); } catch {}
 }
 function plantBombByPlayer(site, t) {
   plantBomb({ isPlayerPlanter: true, pos: player.pos, hasBomb: player.hasBomb }, site, t, false);
@@ -166,7 +183,8 @@ function plantBombByPlayer(site, t) {
 export function bombDroppedHit(origin, dir, maxT) {
   // Ray vs dropped C4 only — planted C4 is bulletproof by design.
   // Returns distance or null. Small ground target: sphere at y~0.3, r~0.55.
-  if (BOMB.planted || !BOMB.droppedPos || G.roundEnding || G.phase !== 'playing') return null;
+  // Online the dropped C4 is a server object — shooting it would desync every client.
+  if (BOMB.planted || !BOMB.droppedPos || G.roundEnding || G.phase !== 'playing' || isServerMatch()) return null;
   const cx = BOMB.droppedPos.x, cy = 0.3, cz = BOMB.droppedPos.z;
   const r = 0.55;
   const ox = origin.x - cx, oy = origin.y - cy, oz = origin.z - cz;
@@ -180,7 +198,7 @@ export function bombDroppedHit(origin, dir, maxT) {
 }
 export function explodeBomb(t, reason, fromNet = false) {
   if (BOMB.exploded || G.roundEnding) return;
-  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'explode', reason: reason || '' }); } catch {}
+  if (isServerMatch() && !fromNet) return; // only the server detonates online
   BOMB.exploded = true;
   const groundZero = BOMB.planted && BOMB.pos ? BOMB.pos : BOMB.droppedPos;
   const p = groundZero ? groundZero.clone().add(new THREE.Vector3(0, 1, 0)) : new THREE.Vector3(24, 1, 0);
@@ -221,7 +239,7 @@ export function explodeBomb(t, reason, fromNet = false) {
   // Resolve the round BEFORE applying damage, so blast kills can't make
   // checkRoundEnd() hand the round to the wrong team mid-explosion.
   if (wasPlanted) {
-    endRound('t', reason || '💥 BOMB DETONATED');
+    if (!isServerMatch()) endRound('t', reason || '💥 BOMB DETONATED'); // online: server's round_end follows
   } else {
     // A dropped C4 shot on the ground is not a T objective win — it destroys the
     // objective. Shooting it used to literally hand T the round.
@@ -249,60 +267,105 @@ export function explodeBomb(t, reason, fromNet = false) {
   if (!wasPlanted) { try { checkRoundEnd(); } catch (e) {} }
 }
 export function defuseBomb(byPlayer, t, fromNet = false) {
-  if (G.roundEnding) return;
-  try { if (isOnline() && !fromNet) Net.sendBomb({ action: 'defuse', by: player.name || 'CT' }); } catch {}
+  if (G.roundEnding || isServerMatch()) return;
   bombClearMesh();
   BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
   BOMB.defuseProgress = 0; BOMB.defuser = null;
   endRound('ct', byPlayer ? 'BOMB DEFUSED — YOU SAVED THE SITE!' : 'BOMB DEFUSED — CT WINS');
 }
-// ---- Remote bomb/round application (PvP sync, last-write-wins for bomb) ----
-export function applyRemoteBomb(m) {
+// ---- Server bomb state (online) ----
+function setPlanted(siteName, x, z, explodeIn, t, quiet) {
+  const site = siteByName(siteName) || SITES[0];
+  BOMB.planted = true; BOMB.site = site.name; BOMB.exploded = false;
+  BOMB.pos = new THREE.Vector3(+x || site.x, 0, +z || site.z);
+  BOMB.carrier = null; BOMB.carrierId = null; BOMB.droppedPos = null;
+  BOMB.plantProgress = 0; BOMB.plantingBot = null; BOMB.planter = null; BOMB.plantSite = null;
+  BOMB.explodeAt = Net.deadline(explodeIn); BOMB.beepAt = t;
+  BOMB.defuseProgress = 0; BOMB.defuser = null;
+  player.hasBomb = false;
+  if (BOMB._netHold === 'plant') BOMB._netHold = null;
+  spawnBombMesh(BOMB.pos, true);
+  if (!quiet) AudioSys.plantedConfirm();
+}
+function setDropped(x, z) {
+  BOMB.droppedPos = new THREE.Vector3(+x || 0, 0, +z || 0);
+  BOMB.carrier = null; BOMB.carrierId = null; BOMB.plantProgress = 0; BOMB.planter = null; BOMB.plantSite = null;
+  spawnBombMesh(BOMB.droppedPos, false);
+}
+// Full-state reconcile from a 'match' message (late join, new round, missed packet).
+export function syncBombFromServer(b, fresh) {
+  if (!b || G.roundEnding) return;
   const t = performance.now() / 1000;
-  const act = m.action;
-  if (m.fromId != null && !remotes.get(m.fromId)) return; // unknown sender
-  if (act === 'plant') {
-    if (BOMB.planted) return;
-    const site = siteByName(m.site || 'A') || SITES[0];
-    const px = isFinite(+m.x) ? +m.x : site.x, pz = isFinite(+m.z) ? +m.z : site.z;
-    // plant must be inside the site radius — no cross-map plants
-    if (Math.hypot(px - site.x, pz - site.z) > site.r + 1.5) return;
-    BOMB.planted = true; BOMB.site = site.name;
-    BOMB.pos = new THREE.Vector3(px, 0, pz);
-    BOMB.carrier = null; BOMB.droppedPos = null;
-    BOMB.plantProgress = 0; BOMB.plantingBot = null; BOMB.planter = null; BOMB.plantSite = null;
-    BOMB.explodeAt = t + BOMB_TIMER; BOMB.beepAt = t; BOMB._fastFused = false;
-    BOMB.defuseProgress = 0; BOMB.defuser = null;
-    player.hasBomb = false;
-    spawnBombMesh(BOMB.pos, true);
-    AudioSys.plantedConfirm();
-    announce(`BOMB PLANTED ON ${site.name} — DEFUSE IT!`, 2600);
-    addKillfeed(m.fromName || 'T', m.fromTeam || 't', 'SITE ' + site.name, 'ct', '💣 C4', false);
-    updateBombHUD(t);
-  } else if (act === 'defuse') {
-    if (G.roundEnding) return;
-    bombClearMesh();
-    BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
-    BOMB.defuseProgress = 0; BOMB.defuser = null;
-    endRound('ct', `BOMB DEFUSED BY ${m.by || m.fromName || 'CT'}`);
-  } else if (act === 'drop') {
-    if (BOMB.planted) return;
-    const dx = +m.x || 0, dz = +m.z || 0;
-    if (!isFinite(dx + dz) || Math.abs(dx) > MAP_HALF + 6 || Math.abs(dz) > MAP_HALF + 6) return;
-    BOMB.droppedPos = new THREE.Vector3(dx, 0, dz);
-    BOMB.carrier = null; BOMB.plantProgress = 0; BOMB.plantingBot = null; BOMB.planter = null; BOMB.plantSite = null;
-    spawnBombMesh(BOMB.droppedPos, false);
-    announce('BOMB DROPPED', 1400);
-    updateBombHUD(t);
-  } else if (act === 'pickup') {
-    if (BOMB.planted) return;
-    BOMB.droppedPos = null; bombClearMesh();
-    announce(`${m.fromName || 'T'} PICKED UP THE BOMB`, 1200);
-    updateBombHUD(t);
-  } else if (act === 'explode') {
-    if (BOMB.exploded || G.roundEnding) return;
-    explodeBomb(t, m.reason || '💥 BOMB DETONATED', true);
+  BOMB.carrierId = b.carrierId ?? null;
+  const mine = b.carrierId != null && b.carrierId === Net.id;
+  if (mine !== !!player.hasBomb) {
+    player.hasBomb = mine;
+    if (mine && fresh) announce('YOU HAVE THE BOMB — PLANT ON A OR B (HOLD E)', 2200);
   }
+  if (b.planted && !b.exploded) {
+    if (!BOMB.planted) setPlanted(b.site, b.x, b.z, b.explodeIn, t, !fresh);
+    const end = Net.deadline(b.explodeIn);
+    if (Math.abs(BOMB.explodeAt - end) > 0.25) BOMB.explodeAt = end;
+  } else if (b.dropped) {
+    if (!BOMB.droppedPos || Math.hypot(BOMB.droppedPos.x - b.dropped.x, BOMB.droppedPos.z - b.dropped.z) > 0.5) setDropped(b.dropped.x, b.dropped.z);
+  } else if (!BOMB.planted && BOMB.droppedPos) {
+    BOMB.droppedPos = null; bombClearMesh();
+  }
+  updateBombHUD(t);
+}
+// Server 'bomb' broadcasts (srv:1). Client-to-client bomb messages no longer exist.
+export function applyRemoteBomb(m) {
+  if (!m || !m.srv || !isServerMatch()) return;
+  const t = performance.now() / 1000;
+  const mine = m.byId != null && m.byId === Net.id;
+  const who = mine ? 'YOU' : String(m.byName || (m.action === 'defuse' ? 'CT' : 'T')).slice(0, 16);
+  switch (m.action) {
+    case 'plant':
+      if (G.roundEnding) return;
+      setPlanted(m.site, m.x, m.z, m.explodeIn, t, false);
+      announce(`BOMB PLANTED ON ${BOMB.site} — DEFUSE IT!`, 2600);
+      addKillfeed(who, 't', 'SITE ' + BOMB.site, 'ct', '💣 C4', false);
+      break;
+    case 'defuse':
+      bombClearMesh();
+      BOMB.planted = false; BOMB.pos = null; BOMB.site = null;
+      BOMB.defuseProgress = 0; BOMB.defuser = null; BOMB._netHold = null;
+      updateInteractHUD(null);
+      break; // the server's round_end carries the banner
+    case 'drop':
+      if (BOMB.planted) return;
+      if (mine) player.hasBomb = false;
+      setDropped(m.x, m.z);
+      if ((player.team || 'ct') === 't') announce(mine ? 'YOU DROPPED THE BOMB' : 'BOMB DROPPED — PICK IT UP', 1400);
+      break;
+    case 'pickup':
+      BOMB.droppedPos = null; bombClearMesh();
+      BOMB.carrierId = m.byId ?? null;
+      player.hasBomb = mine;
+      if (mine) { announce('YOU PICKED UP THE BOMB — PLANT ON A OR B (HOLD E)', 1800); AudioSys.plantBeep(); }
+      else if ((player.team || 'ct') === 't') announce(`${who} PICKED UP THE BOMB`, 1200);
+      break;
+    case 'fuse': {
+      BOMB.explodeAt = Math.min(BOMB.explodeAt || Infinity, Net.deadline(m.explodeIn));
+      announce('ALL CT DOWN — BOMB WILL DETONATE', 1800);
+      break;
+    }
+    case 'explode':
+      if (BOMB.exploded) return;
+      if (!BOMB.planted) { // missed the plant somehow — still blow up in the right place
+        BOMB.planted = true; BOMB.pos = new THREE.Vector3(+m.x || 0, 0, +m.z || 0);
+      }
+      explodeBomb(t, '💥 BOMB DETONATED', true);
+      break;
+    case 'deny':
+      // Server refused (timing/position/someone else got it): reset our bar.
+      if (m.what === 'plant') { BOMB.plantProgress = 0; BOMB.planter = null; }
+      if (m.what === 'defuse') { BOMB.defuseProgress = 0; BOMB.defuser = null; }
+      BOMB._netHold = null; BOMB._reqAt = -9;
+      break;
+    default: break;
+  }
+  updateBombHUD(t);
 }
 export function updateBombHUD(t) {
   const bar = $('bomb-status'), txt = $('bomb-text'), tmr = $('bomb-timer');
@@ -336,6 +399,9 @@ export function updateBombHUD(t) {
     bar.classList.add('ct');
     txt.textContent = `💣 YOU — PLANT ON A / B`;
     tmr.textContent = 'HOLD E IN SITE';
+  } else if (BOMB.carrierId != null && (player.team || 'ct') === 't' && Net.remotes.get(BOMB.carrierId)) {
+    txt.textContent = `💣 ${String(Net.remotes.get(BOMB.carrierId).name || 'T').slice(0, 16)} HAS THE BOMB`;
+    tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
   } else {
     txt.textContent = 'BOMB IN PLAY';
     tmr.textContent = 'SITE ' + (BOMB.targetSite || 'A');
@@ -353,12 +419,24 @@ export function updateInteractHUD(label, frac, isDefuse) {
 }
 
 // Per-frame bomb tick: beeps, LED pulse, explosion, player defuse, HUD.
+let _held = null; // 'plant' | 'defuse' when the local player held E on the bomb this frame
 export function updateBomb(dt, t) {
+  _held = null;
+  updateBombInner(dt, t);
+  // Online: let go of E / walked off / died → tell the server and restart the bar (CS rule).
+  if (BOMB._netHold && BOMB._netHold !== _held) {
+    if (BOMB._netHold === 'plant' && BOMB.planter === 'player') { BOMB.plantProgress = 0; BOMB.planter = null; BOMB.plantSite = null; }
+    if (BOMB._netHold === 'defuse' && BOMB.defuser === 'player') { BOMB.defuseProgress = 0; BOMB.defuser = null; }
+    try { netHold(null); } catch {}
+  }
+}
+function updateBombInner(dt, t) {
+  const srv = isServerMatch();
   if (G.phase !== 'playing') { updateInteractHUD(null); return; }
   // Planted: beeping accelerates + LED pulse + explosion on timer.
   if (BOMB.planted && BOMB.pos && !G.roundEnding) {
     const left = BOMB.explodeAt - t;
-    if (left <= 0) { explodeBomb(t); updateInteractHUD(null); return; }
+    if (left <= 0 && !srv) { explodeBomb(t); updateInteractHUD(null); return; } // online: wait for the server's 'explode'
     // Beep interval shrinks as detonation nears (CS-like urgency).
     const interval = left > 20 ? 1.0 : left > 10 ? 0.55 : 0.28;
     if (t - BOMB.beepAt > interval) {
@@ -379,10 +457,17 @@ export function updateBomb(dt, t) {
           // One defuser at a time. Taking over from a bot restarts the bar (CS rule),
           // and the frame stamp stops player + bot both advancing the same bar.
           bombAdvanceDefuse('player', dt, t);
-          showDefuse = true;
+          showDefuse = true; _held = 'defuse';
+          if (srv) netHold('defuse');
           if (Math.floor(t * 2) !== Math.floor((t - dt) * 2)) AudioSys.defuseTick(BOMB.pos);
           updateInteractHUD('DEFUSING…', BOMB.defuseProgress / BOMB_DEFUSE_TIME, true);
           if (BOMB.defuseProgress >= BOMB_DEFUSE_TIME) {
+            if (srv) { // server confirms (or denies) — keep the full bar while we wait
+              BOMB.defuseProgress = BOMB_DEFUSE_TIME;
+              netRequest({ action: 'defuse' }, t);
+              updateBombHUD(t);
+              return;
+            }
             updateInteractHUD(null);
             defuseBomb(true, t);
             return;
@@ -422,12 +507,12 @@ export function updateBomb(dt, t) {
   if (!BOMB.planted && !G.roundEnding && player.alive && (player.team || 'ct') === 't') {
     // Pickup dropped bomb by walking over it.
     if (BOMB.droppedPos && !player.hasBomb) {
-      if (player.pos.distanceTo(BOMB.droppedPos) < 1.8) {
+      if (srv) { if (player.pos.distanceTo(BOMB.droppedPos) < 1.8) netRequest({ action: 'pickup' }, t); }
+      else if (player.pos.distanceTo(BOMB.droppedPos) < 1.8) {
         player.hasBomb = true; BOMB.droppedPos = null;
         bombClearMesh();
         announce('YOU PICKED UP THE BOMB — PLANT ON A OR B (HOLD E)', 1800);
         AudioSys.plantBeep();
-        try { if (isOnline()) Net.sendBomb({ action: 'pickup' }); } catch {}
         updateBombHUD(t);
       }
     }
@@ -447,9 +532,17 @@ export function updateBomb(dt, t) {
         }
         if (keys['KeyE']) {
           const prog = bombAdvancePlant('player', inSite, dt, t);
+          _held = 'plant';
+          if (srv) netHold('plant');
           updateInteractHUD(`PLANTING ON ${inSite.name}…`, prog / BOMB_PLANT_TIME, false);
           if (Math.floor(t * 4) !== Math.floor((t - dt) * 4)) AudioSys.defuseTick(inSite.pos);
           if (prog >= BOMB_PLANT_TIME) {
+            if (srv) {
+              BOMB.plantProgress = BOMB_PLANT_TIME;
+              netRequest({ action: 'plant', site: inSite.name, x: player.pos.x, z: player.pos.z }, t);
+              updateBombHUD(t);
+              return;
+            }
             updateInteractHUD(null);
             plantBombByPlayer(inSite, t);
             return;
@@ -473,7 +566,7 @@ export function updateBomb(dt, t) {
     updateInteractHUD(`BOMB PLANTING ON ${BOMB.targetSite} — STOP THEM!`, BOMB.plantProgress / BOMB_PLANT_TIME, false);
   } else {
     // Player near dropped bomb? Just informational (CT can't pick up).
-    if (!(isOnline() && (player.team || 'ct') === 't' && player.hasBomb)) updateInteractHUD(null);
+    if (!(isMultiplayer() && (player.team || 'ct') === 't' && player.hasBomb)) updateInteractHUD(null);
   }
   updateBombHUD(t);
 }

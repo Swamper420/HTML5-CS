@@ -5,7 +5,7 @@
 - **Allow-list static serving.** Only `index.html`, `style.css`, `main.js`, `net.js`, `js/*.js`, `vendor/*`, `sounds/*` are served. `server.js`, `package*.json`, `*.md`, `node_modules/`, `.git/` all return 404. Symlinks pointing outside the folder are blocked. Only GET/HEAD are accepted.
 - **Security headers.** Strict CSP (no third-party hosts; the inline importmap is hashed automatically at startup), `nosniff`, `frame-ancestors 'none'`, `no-referrer`, COOP/CORP, Permissions-Policy. HSTS is optional.
 - **No CDN.** three.js 0.160.0 is vendored in `vendor/` (npm integrity verified), so players' browsers make no third-party requests.
-- **WebSocket limits.** Origin check (same host only by default), max players, max connections per IP, 16 KB message cap, per-client token-bucket rate limit (floods get kicked), control/bidi characters stripped from names and chat. Only the round host (lowest id) can start or reset a match.
+- **WebSocket limits.** Origin check (same host only by default), max players, max connections per IP, 16 KB message cap, per-client token-bucket rate limit (floods get kicked), control/bidi characters stripped from names and chat. Match flow is server-authoritative (`server-match.js`): clients can't start/end rounds, change the score, or plant/defuse without passing the server's team, position and hold-time checks. `server-match.js` is never served (and must be deployed next to `server.js`).
 - **HTTP timeouts** against slowloris.
 
 ## Environment variables

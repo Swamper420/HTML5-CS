@@ -17,6 +17,9 @@ export const G = {
   freezeLeft: 0, buyLeft: 0,
   kills: 0, deaths: 0, headshots: 0, shots: 0, hits: 0,
   startTime: 0,
+  // online (server match): local deadlines for freeze/buy/round clocks + which server match/round we're showing
+  srvT: { freeze: 0, buy: 0, round: 0 }, srvMatchId: 0, srvRoundId: 0,
+  menuOpen: false, // online ESC menu: an overlay, the match keeps running
 };
 export const isFreeze = () => G.freezeLeft > 0;
 export const isBuyTime = () => G.buyLeft > 0 && !G.roundEnding;

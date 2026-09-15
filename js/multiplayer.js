@@ -1,5 +1,5 @@
 // js/multiplayer.js — AGENTS: Client multiplayer glue: remote player meshes + interpolation, Net event wiring, bots on/off for PvP.
-// Ownership: remotes Map, isOnline/isMultiplayer, wireMultiplayer, updateRemoteMeshes. Protocol lives in ../net.js.
+// Ownership: remotes Map, isOnline/isMultiplayer/isServerMatch, wireMultiplayer, updateRemoteMeshes. Protocol lives in ../net.js.
 
 import * as THREE from 'three';
 import { Net } from '../net.js';
@@ -10,6 +10,7 @@ import { animateSoldier, damp, soldierFireKick } from './anim.js';
 import { BOMB, applyRemoteBomb, bombResetRound, spawnBombMesh, updateBombHUD } from './bomb.js';
 import { resetBot } from './bots.js';
 import { damagePlayer } from './combat.js';
+import { onDamageAck } from './dmgreport.js';
 import { spawnBloodPool, spawnBurst, spawnSmoke, spawnTracer, spawnWorldFlash } from './effects.js';
 import { restoreSoldierMesh } from './gibs.js';
 import {
@@ -21,7 +22,7 @@ import { addKillfeed, announce, playerHitmark, updateHUD } from './hud.js';
 import { igniteMolotov } from './molotov.js';
 import { applyRemoteWeapon } from './pickups.js';
 import { camera, scene } from './render.js';
-import { applyRemoteRound, applyServerScore, checkRoundEnd } from './rounds.js';
+import { applyMatchState, checkRoundEnd } from './rounds.js';
 import { renderScoreboard, scoreboardVisible } from './scoreboard.js';
 import { deploySmoke } from './smoke.js';
 import { makeSoldier, updateBlob } from './soldier.js';
@@ -32,44 +33,26 @@ import { statsHolder } from './stats.js';
 
 // Rule: Net.hasRealOpponents === true  =>  pure PvP, bots hidden & skipped.
 // Solo / alone-on-server => bots stay exactly as before.
-export const remotes = new Map(); // netId -> { data, mesh, nameTag, pos:Vector3, yaw, targetPos, walkPhase, flashAt }
+export const remotes = new Map(); // netId -> { data, mesh, pos:Vector3, yaw, targetPos, walkPhase, flashAt }
 let mpStatusEl = null;
-export function isMultiplayer() { try { return Net.active && Net.hasRealOpponents; } catch { return false; } }
 export function isOnline() { try { return Net.active; } catch { return false; } }
-
-function makeNameTag(name, team) {
-  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
-  const g = c.getContext('2d');
-  g.font = 'bold 30px Arial';
-  g.fillStyle = 'rgba(0,0,0,0.55)';
-  const tw = Math.min(240, g.measureText(name).width + 28);
-  g.beginPath();
-  if (g.roundRect) g.roundRect(128 - tw / 2, 6, tw, 44, 10); else g.rect(128 - tw / 2, 6, tw, 44);
-  g.fill();
-  g.fillStyle = team === 'ct' ? '#6db3ff' : '#ffb020';
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(name.slice(0, 14), 128, 30);
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sp.scale.set(2.2, 0.55, 1);
-  return sp;
-}
+// Server owns rounds/score/bomb (2+ players on the server). See server-match.js.
+export function isServerMatch() { try { return Net.active && !!(Net.match && Net.match.active); } catch { return false; } }
+export function isMultiplayer() { try { return Net.active && (isServerMatch() || Net.hasRealOpponents); } catch { return false; } }
 
 function addRemoteMesh(r) {
   if (remotes.has(r.id) || typeof scene === 'undefined' || !scene) return;
   const mesh = makeSoldier(r.team === 'ct' ? 'ct' : 't');
   try { setSoldierGun(mesh, WEAPONS[r.weapon] ? r.weapon : 'ak'); } catch (e) {}
-  const tag = makeNameTag(r.name || ('Player' + r.id), r.team);
-  tag.position.y = 2.25;
-  mesh.add(tag);
+  // No floating name tags: they render through walls and give away positions.
   mesh.position.set(r.x || 0, r.y || 0, r.z || 0);
   scene.add(mesh);
   remotes.set(r.id, {
-    data: { ...r }, mesh, nameTag: tag,
+    data: { ...r }, mesh,
     pos: new THREE.Vector3(r.x || 0, r.y || 0, r.z || 0),
     targetPos: new THREE.Vector3(r.x || 0, r.y || 0, r.z || 0),
     yaw: r.yaw || 0, targetYaw: r.yaw || 0,
-    walkPhase: Math.random() * 6, flashAt: 0, lastShotAt: 0,
+    walkPhase: Math.random() * 6, flashAt: 0, lastShotAt: 0, team: r.team === 'ct' ? 'ct' : 't',
   });
 }
 
@@ -89,6 +72,9 @@ function syncRemoteMeshes() {
   // Create meshes for newcomers, drop leavers.
   try {
     for (const r of Net.remoteList()) {
+      const e = remotes.get(r.id);
+      // Auto-balance moved them: rebuild with the right uniform.
+      if (e && e.team !== (r.team === 'ct' ? 'ct' : 't')) removeRemoteMesh(r.id);
       if (!remotes.has(r.id)) addRemoteMesh(r);
     }
     for (const id of [...remotes.keys()]) {
@@ -231,14 +217,14 @@ export function updateRemoteMeshes(dt, t) {
           e.crouchK = damp(e.crouchK || 0, r.crouch ? 1 : 0, 11, dt);
           const wallSide = r.wr ? Math.sign(r.wr) : 0;
           animateSoldier(m, {
-            vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: -(e.pitch !== undefined ? e.pitch : (r.pitch || 0)),
+            vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: (e.pitch !== undefined ? e.pitch : (r.pitch || 0)),
             grounded: r.gnd !== undefined ? (!!r.gnd || !!wallSide) : (r.y || 0) < 0.06, crouch: !!r.crouch,
             kneel: !!r.planting || !!r.defusing, reloading: !!r.reloading, wall: wallSide,
           }, dt, t);
         } catch (err) {}
         if (Math.abs(m.rotation.x) > 0.01) m.rotation.x *= Math.max(0, 1 - dt * 6);
-        // wall run: lean the body into the wall (tip recovery decays the same channel otherwise)
-        e.wallLean = damp(e.wallLean || 0, (r.wr ? Math.sign(r.wr) : 0) * WALLRUN.bodyLean, 10, dt);
+        // wall run: lean the body away from the wall, feet toward it (tip recovery decays the same channel otherwise)
+        e.wallLean = damp(e.wallLean || 0, -(r.wr ? Math.sign(r.wr) : 0) * WALLRUN.bodyLean, 10, dt);
         e.wallRoll = damp(e.wallRoll || 0, (r.wr ? Math.sign(r.wr) : 0) * WALLRUN.camRoll, 10, dt);
         if (Math.abs(e.wallLean) > 0.005) m.rotation.z = e.wallLean;
         else if (Math.abs(m.rotation.z || 0) > 0.01) m.rotation.z *= Math.max(0, 1 - dt * 6);
@@ -258,17 +244,27 @@ export function wireMultiplayer() {
   Net.on('welcome', (m) => {
     player.team = (m.team === 't') ? 't' : 'ct';
     player.name = Net.name || 'YOU';
-    try { applyServerScore(m); if (typeof m.round === 'number' && m.round > 0 && G.phase !== 'playing') G.round = m.round; } catch {}
     announce(`ONLINE AS ${player.team.toUpperCase()} — ${player.name}`, 1800);
     refreshBotsForMP();
     updateMPStatus();
-    // Re-spawn on our team's side with the new team.
-    if (G.phase === 'playing') {
-      try {
-        const team = player.team || 'ct';
-        player.pos.copy(spawnPoint(team, mySpawnSlot())); player.yaw = spawnYawPlayer(team, player.pos);
-      } catch {}
+    if (G.phase === 'playing' || G.phase === 'over') {
+      if (isServerMatch()) { try { applyMatchState(Net.match); } catch (e) { console.warn('welcome match', e); } }
+      else {
+        // Re-spawn on our team's side with the new team.
+        try {
+          const team = player.team || 'ct';
+          player.pos.copy(spawnPoint(team, mySpawnSlot())); player.yaw = spawnYawPlayer(team, player.pos);
+        } catch {}
+      }
     }
+  });
+  Net.on('match', (m) => {
+    try { applyMatchState(m); } catch (e) { console.warn('match msg', e); }
+    refreshBotsForMP(); updateMPStatus();
+  });
+  Net.on('team', (m) => {
+    // Takes effect at the round start that follows (server balances right before it).
+    announce(`AUTO-BALANCE: YOU ARE NOW ${String(m.team).toUpperCase()}`, 2200);
   });
   Net.on('player_joined', () => { refreshBotsForMP(); updateMPStatus(); try { updateHUD(); } catch {} });
   Net.on('player_left', (m) => {
@@ -280,6 +276,7 @@ export function wireMultiplayer() {
   });
   Net.on('disconnect', () => {
     for (const id of [...remotes.keys()]) try { removeRemoteMesh(id); } catch {}
+    try { applyMatchState({ active: false }); } catch {} // server gone mid-match: back to solo
     try { restoreBotsForSolo(); } catch {}
     updateMPStatus();
   });
@@ -328,21 +325,14 @@ export function wireMultiplayer() {
       let dmg = Number(m.dmg);
       if (!isFinite(dmg)) return;
       dmg = clamp(dmg, 0, 100); // per-hit cap — no remote one-shots via spoofed dmg
+      // damagePlayer reports our death (once) to the server; don't send a second 'killed' here.
       damagePlayer(dmg, shooter, !!m.head);
-      if (player.alive === false) {
-        // Tell everyone who killed us (victim-authoritative killfeed).
-        Net.sendKilled({
-          killerId: m.fromId, killerName: shooter.remoteName, killerTeam: shooter.team,
-          victimId: Net.id, victimName: player.name, victimTeam: player.team,
-          weapon: m.weapon || 'AK-47', head: !!m.head,
-        });
-      } else {
-        playerHitmark?.(false, false);
-      }
       // Hit direction arrow from remote position.
       if (e && typeof flashDamageRemote === 'function') flashDamageRemote(e.pos);
     } catch {}
   });
+
+  Net.on('dmg', (m) => { onDamageAck(m); });
 
   Net.on('killed', (m) => {
     try {
@@ -373,6 +363,7 @@ export function wireMultiplayer() {
       } catch {}
       if (m.killerId === Net.id) {
         if (!wasAlive) return;
+        // K/D is server-owned in a server match (applied from 'match'); money + feedback stay local.
         G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(m.head, true);
         AudioSys.kill();
         if (m.head) announce('HEADSHOT +$' + MONEY_KILL, 700);
@@ -385,12 +376,6 @@ export function wireMultiplayer() {
 
   Net.on('bomb', (m) => {
     try { applyRemoteBomb(m); } catch (e) { console.warn('bomb msg', e); }
-  });
-  Net.on('round', (m) => {
-    try { applyRemoteRound(m); } catch (e) { console.warn('round msg', e); }
-  });
-  Net.on('round_echo', (m) => {
-    try { applyServerScore(m); } catch (e) { console.warn('round echo', e); }
   });
   Net.on('nade', (m) => {
     try { applyRemoteNade(m); } catch (e) { console.warn('nade msg', e); }

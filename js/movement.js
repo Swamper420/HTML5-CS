@@ -27,7 +27,7 @@ import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
 import { updateSpectate, updateSpectateOverlay } from './spectate.js';
 import { G, isFreeze, keys, player } from './state.js';
 import {
-  VM_AIM, VM_AIM_SOLVED, VM_HIP, viewmodel, vmBase, vmBolt, vmL, vmMag, vmRig, vmStockParts,
+  VM_AIM, VM_AIM_SOLVED, VM_HIP, buildViewmodel, viewmodel, vmBase, vmBolt, vmL, vmMag, vmRig, vmStockParts,
 } from './viewmodel.js';
 
 let stepAt = 0;
@@ -53,6 +53,7 @@ export function updatePlayer(dt, t) {
     } catch {}
     return;
   }
+  if (viewmodel && viewmodel.userData.spec) buildViewmodel(player.cur); // back from spectating
   const frozen = isFreeze();
   const speedBase = player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
   // Crouch: hold C (or toggle it, per settings). Blocks sprint, cuts speed, and
@@ -324,7 +325,7 @@ export function updatePlayer(dt, t) {
       const ws = player.wallRun.side;
       px -= ws * 0.045 * (1 - aimE * 0.5);
       py += 0.012;
-      rz += ws * 0.16;
+      rz -= ws * WALLRUN.camRoll * 0.85;
       ry += ws * 0.10;
     }
     if (vmL) {

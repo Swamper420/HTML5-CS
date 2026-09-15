@@ -25,8 +25,9 @@ export let mouseDown = false, mouseJustDown = false, crossGap = 8;
 export let rmbDown = false, rmbJustDown = false; // left-hand trigger when dual wielding
 export function initInput() {
   addEventListener('keydown', (e) => {
-    keys[e.code] = true;
     if (['Space', 'Tab'].includes(e.code)) e.preventDefault();
+    if (G.menuOpen && !settingsOpen()) return; // online menu overlay: game runs on, you don't
+    keys[e.code] = true;
     if (settingsOpen()) { if (e.code === 'Escape') { e.preventDefault(); closeSettings(); } return; }
     if (G.phase !== 'playing') return;
     if (e.code === 'Tab') { if (!e.repeat) setScoreboard(true); return; }
@@ -125,6 +126,7 @@ export function initInput() {
   });
   document.addEventListener('pointerlockchange', () => {
     pointerLocked = document.pointerLockElement === renderer.domElement;
+    if (pointerLocked && G.menuOpen) { G.menuOpen = false; const pm = document.getElementById('pause-menu'); if (pm) pm.classList.add('hidden'); }
     if (!pointerLocked && G.buyOpen) {
       // ESC (browser-forced unlock) while shopping: close the menu and pause, like any other ESC.
       toggleBuy(false, false);
