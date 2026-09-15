@@ -3039,6 +3039,7 @@ let pointerLocked = false;
 
 // ---------------- Scoreboard stats (K/A/D per match) ----------------
 // ponytail: assists = previous damager within 5s of kill, no per-hit ledger.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const remoteStats = new Map(); // netId -> {kills,deaths,assists,name,team}
 function shooterId(s) {
   if (!s) return 'unknown';
@@ -3046,7 +3047,6 @@ function shooterId(s) {
   if (s.bot) return 'bot:' + s.bot.team + ':' + s.bot.idx;
   const rid = (s.remote && s.remote.data && s.remote.data.id) ?? s.remoteId ?? null;
   if (rid !== null && rid !== undefined) return 'remote:' + rid;
-  if (s.remoteName) return 'rname:' + s.remoteName;
   return 'unknown';
 }
 function statsHolder(id) {
@@ -3082,18 +3082,14 @@ function awardAssist(victim, killerId) {
     if (h) h.assists = (h.assists | 0) + 1;
   } catch {}
 }
-function creditKill(shooter, victim) {
+// ponytail: shared get-or-create lives in statsHolder, no local copies.
+function creditKill(shooter) {
   // kills++ for killer bot/remote, deaths++ handled by caller victim.
   try {
     if (!shooter || shooter.isPlayer || shooter.suicide) return;
-    if (shooter.bot) shooter.bot.kills = (shooter.bot.kills | 0) + 1;
-    else {
-      const rid = (shooter.remote && shooter.remote.data && shooter.remote.data.id) ?? shooter.remoteId ?? null;
-      if (rid !== null && rid !== undefined) {
-        if (!remoteStats.has(rid)) remoteStats.set(rid, { kills: 0, deaths: 0, assists: 0, name: '', team: '' });
-        remoteStats.get(rid).kills++;
-      }
-    }
+    if (shooter.bot) { shooter.bot.kills = (shooter.bot.kills | 0) + 1; return; }
+    const h = statsHolder(shooterId(shooter));
+    if (h) h.kills = (h.kills | 0) + 1;
   } catch {}
 }
 
@@ -3433,18 +3429,8 @@ function wireMultiplayer() {
       }
       addKillfeed(m.killerName || '???', m.killerTeam || 't', m.victimName || '???', m.victimTeam || 'ct', m.weapon || 'AK-47', !!m.head);
       try {
-        if (m.killerId !== null && m.killerId !== undefined && m.killerId !== Net.id) {
-          if (!remoteStats.has(m.killerId)) remoteStats.set(m.killerId, { kills: 0, deaths: 0, assists: 0, name: '', team: '' });
-          remoteStats.get(m.killerId).kills++;
-        }
-        if (m.victimId !== null && m.victimId !== undefined && m.victimId !== Net.id) {
-          if (!remoteStats.has(m.victimId)) remoteStats.set(m.victimId, { kills: 0, deaths: 0, assists: 0, name: '', team: '' });
-          remoteStats.get(m.victimId).deaths++;
-        }
-        for (const [rid, st] of remoteStats) {
-          const r = Net.remotes.get(rid);
-          if (r) { st.name = r.name; st.team = r.team; }
-        }
+        if (m.killerId !== null && m.killerId !== undefined && m.killerId !== Net.id) statsHolder('remote:' + m.killerId).kills++;
+        if (m.victimId !== null && m.victimId !== undefined && m.victimId !== Net.id) statsHolder('remote:' + m.victimId).deaths++;
       } catch {}
       if (m.killerId === Net.id) {
         G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(m.head, true);
@@ -8804,7 +8790,7 @@ function renderScoreboard() {
     }
     try {
       for (const r of Net.remoteList()) {
-        const st = remoteStats.get(r.id) || { kills: 0, deaths: 0, assists: 0 };
+        const st = statsHolder('remote:' + r.id);
         st.name = r.name; st.team = r.team;
         const rp = (r.ping > 0) ? Math.min(9999, Math.round(r.ping)) : '—';
         push(r.team, r.name || ('Player' + r.id), st.kills, st.assists, st.deaths, rp, false, r.alive);
@@ -8814,7 +8800,7 @@ function renderScoreboard() {
       rows[k].sort((a, b) => (b.k - a.k) || (b.a - a.a) || (a.d - b.d));
       const body = k === 'ct' ? ctBody : tBody;
       body.innerHTML = rows[k].map((r) =>
-        `<tr class="${r.me ? 'me' : ''}${r.alive ? '' : ' dead'}"><td>${String(r.name).slice(0, 14)}</td><td>${r.k}</td><td>${r.a}</td><td>${r.d}</td><td>${r.ping}</td></tr>`
+        `<tr class="${r.me ? 'me' : ''}${r.alive ? '' : ' dead'}"><td>${esc(String(r.name).slice(0, 14))}</td><td>${r.k}</td><td>${r.a}</td><td>${r.d}</td><td>${r.ping}</td></tr>`
       ).join('') || `<tr><td>—</td><td>0</td><td>0</td><td>0</td><td>—</td></tr>`;
     }
     $('sb-ct').textContent = 'CT ' + G.score.ct;
@@ -8828,7 +8814,7 @@ function addKillfeed(killer, kTeam, victim, vTeam, wpn, head) {
   const kf = $('killfeed');
   const div = document.createElement('div');
   div.className = 'feed-item' + (head ? ' headshot' : '');
-  div.innerHTML = `<span class="killer ${kTeam}">${killer}</span><span class="wpn">[${wpn}${head ? ' 💀' : ''}]</span><span class="victim ${vTeam}">${victim}</span>`;
+  div.innerHTML = `<span class="killer ${kTeam === 'ct' ? 'ct' : 't'}">${esc(killer)}</span><span class="wpn">[${esc(wpn)}${head ? ' 💀' : ''}]</span><span class="victim ${vTeam === 'ct' ? 'ct' : 't'}">${esc(victim)}</span>`;
   kf.prepend(div);
   while (kf.children.length > 5) kf.lastChild.remove();
   setTimeout(() => div.remove(), 6000);
