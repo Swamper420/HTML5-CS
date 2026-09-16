@@ -411,6 +411,17 @@ export const AudioSys = {
     const firstPerson = !pos;
     const dry = firstPerson ? 0.035 : null; // FP stays dry, world uses distance verb
     const lv = legacyVol;
+    if (kind === 'helix') {
+      // HELIX ARC: pure synth — coil whine snap, plasma crack, sub slam, shimmer tail. No samples.
+      this._tone({ type: 'sine', f0: 1400, f1: 2200, dur: 0.09, peak: 0.30 * lv, decay: 0.08, pos, kind: 'gun', verb: dry });
+      this._noise({ dur: 0.05, type: 'highpass', freq: 4200, peak: 0.5 * lv, decay: 0.04, rate: 1.6, pos, kind: 'gun', verb: dry });
+      this._noise({ dur: 0.3, type: 'bandpass', freq: 2400, Q: 0.8, peak: 0.55 * lv, decay: 0.22, rate: 1.1, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0.05 : 0.12 });
+      this._tone({ type: 'sine', f0: 220, f1: 28, dur: 0.7, peak: 0.65 * lv, decay: 0.6, pos, kind: 'gun', verb: dry });
+      this._tone({ type: 'sine', f0: 1750, dur: 0.5, peak: 0.14 * lv, decay: 0.45, pos, kind: 'gun', verb: 0.2 });
+      this._tone({ type: 'sine', f0: 2620, dur: 0.7, peak: 0.10 * lv, decay: 0.6, pos, kind: 'gun', verb: 0.25, at: 0.05 });
+      this._noise({ dur: 0.9, type: 'lowpass', freq: 600, sweepTo: 70, peak: 0.4 * lv, decay: 0.8, rate: 0.7, pos, kind: 'gun', verb: 0.3, echo: 0.3, at: 0.08, brown: true });
+      return;
+    }
     if (kind === 'smg') {
       // P90: the rifle recording sped up + lighter thump reads as a small-calibre bullpup
       const ok = this._sample({ name: 'rifle', peak: 0.6 * lv, dur: 0.2, rate: 1.42, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.06 });
@@ -456,13 +467,27 @@ export const AudioSys = {
       this._noise({ dur: 0.55, type: 'lowpass', freq: 800, sweepTo: 110, peak: 0.7 * lv, decay: 0.42, rate: 0.85, pos, kind: 'gun', verb: firstPerson ? 0.1 : null, echo: 0.25, brown: true });
     }
   },
-  mech(pos = null) {
-    if (!this.ctx || !opts.sound || this.muted) return;
+  mech(pos = null) {    if (!this.ctx || !opts.sound || this.muted) return;
     // bolt clack: two dry metal snaps, no pitched ring — staged on the ctx clock
     this._noise({ dur: 0.03, type: 'bandpass', freq: 3200, Q: 2.2, peak: 0.16, decay: 0.028, rate: 1.5, pos, kind: 'sfx' });
     this._noise({ dur: 0.025, type: 'highpass', freq: 5200, peak: 0.08, decay: 0.02, rate: 1.7, pos, kind: 'sfx' });
     this._noise({ dur: 0.04, type: 'bandpass', freq: 2000, Q: 1.8, peak: 0.15, decay: 0.035, rate: 1.2, pos, kind: 'sfx', at: 0.055 });
     this._noise({ dur: 0.025, type: 'highpass', freq: 4600, peak: 0.07, decay: 0.02, rate: 1.6, pos, kind: 'sfx', at: 0.055 });
+  },
+  helixSpin() {
+    // 1s coil spin-up riser: staged whines climbing into the shot. First-person only.
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._tone({ type: 'sine', f0: 90, f1: 320, dur: 0.32, peak: 0.20, decay: 0.3, verb: 0.05 });
+    this._tone({ type: 'sine', f0: 320, f1: 750, dur: 0.32, peak: 0.22, decay: 0.3, verb: 0.05, at: 0.3 });
+    this._tone({ type: 'sine', f0: 750, f1: 1500, dur: 0.34, peak: 0.24, decay: 0.32, verb: 0.06, at: 0.6 });
+    this._noise({ dur: 0.9, type: 'bandpass', freq: 1200, Q: 2.5, peak: 0.10, decay: 0.85, rate: 1.2, verb: 0.08 });
+  },
+  helixReady() {
+    // cell recharged: bright double-chime + soft thunk.
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._tone({ type: 'sine', f0: 880, dur: 0.12, peak: 0.22, decay: 0.11, verb: 0.08 });
+    this._tone({ type: 'sine', f0: 1320, dur: 0.18, peak: 0.20, decay: 0.16, verb: 0.08, at: 0.09 });
+    this._noise({ dur: 0.05, type: 'lowpass', freq: 700, peak: 0.18, decay: 0.045, rate: 0.9 });
   },
   click(freq = 2000, dur = 0.05, vol = 0.25, pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;

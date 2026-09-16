@@ -8,7 +8,7 @@ import { buildGunModel, gunMats } from './gunmodels.js';
 import { camera, scene } from './render.js';
 import { player } from './state.js';
 
-export let viewmodel = null, vmMuzzle = null, vmBase = null, vmKickG = null, vmFlashGroup = null, vmBolt = null, vmMag = null;
+export let viewmodel = null, vmMuzzle = null, vmBase = null, vmKickG = null, vmFlashGroup = null, vmBolt = null, vmMag = null, vmSpinner = null;
 export let vmL = null; // left-hand gun when dual wielding: { base, kick, mag, muzzle, flash }
 // Iron-sight reference points: the top of the rear notch and the tip of the front
 // post. The eye sits at the camera origin, so a correct sight picture means both of
@@ -30,6 +30,7 @@ export const VM_AIM = {
   deagle: new THREE.Vector3(0.0, -0.084, -0.30),
   awp: new THREE.Vector3(0.0, -0.107, -0.34),
   p90: new THREE.Vector3(0.0, -0.100, -0.30),
+  helix: new THREE.Vector3(0.0, -0.095, -0.34),
   he: new THREE.Vector3(0.0, -0.10, -0.32),
   flash: new THREE.Vector3(0.0, -0.10, -0.32),
   smoke: new THREE.Vector3(0.0, -0.10, -0.32),
@@ -116,6 +117,7 @@ export function buildGunHands(key, M, root) {
   else if (key === 'p90') { vmGripHand(root, M, 0.005, -0.075, 0.2); vmSupportHand(root, M, 0.2, -0.13, 0.033); }
   else if (key === 'deagle') { vmGripHand(root, M, -0.02, -0.055, 0.3); const s = vmSupportHand(root, M, 0.0, -0.14, 0.03); s.rotation.set(0.3, 0, -0.35); s.position.x = -0.02; }
   else if (key === 'awp') { vmGripHand(root, M, 0.03, -0.06, 0.4); vmSupportHand(root, M, 0.42, -0.048, 0.031); }
+  else if (key === 'helix') { vmGripHand(root, M, 0.01, -0.07, 0.25); vmSupportHand(root, M, 0.30, -0.075, 0.038); }
 }
 
 export function buildViewmodel(key, opts = {}) {
@@ -126,6 +128,7 @@ export function buildViewmodel(key, opts = {}) {
   vmBase = new THREE.Group();
   vmKickG = new THREE.Group();
   vmBolt = null;
+  vmSpinner = null;
   vmSightRear = vmSightFront = null; vmStockParts = [];
   viewmodel.add(vmBase); vmBase.add(vmKickG);
   vmMag = new THREE.Group(); vmKickG.add(vmMag); // magazine rides its own group so it can drop
@@ -141,7 +144,7 @@ export function buildViewmodel(key, opts = {}) {
 
   if (WEAPONS[key]) {
     const gm = buildGunModel(key, M, vmKickG, vmMag, { hands: true });
-    vmMuzzle = gm.muzzle; vmBolt = gm.bolt;
+    vmMuzzle = gm.muzzle; vmBolt = gm.bolt; vmSpinner = gm.spinner || null;
     vmSightRear = gm.rear; vmSightFront = gm.front; vmStockParts = gm.stock;
     vmMag.userData.top = key === 'p90'; // P90 mag lifts off the top instead of dropping
   } else if (isNadeKey(key)) {

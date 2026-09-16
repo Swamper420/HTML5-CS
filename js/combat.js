@@ -303,12 +303,14 @@ export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
       const isFire = wName.includes('MOLOTOV') || wName.includes('FIRE') || wName.includes('BURN');
       const explosive = !isFire && (!!(gore && gore.explosive) || wName.includes('HE') || wName.includes('C4'));
       const isAWP = wName.includes('AWP');
+      const isHelix = wName.includes('HELIX');
       const isDeagle = wName.includes('DESERT') || wName.includes('DEAGLE') || wName.includes('EAGLE');
       const sdir = _sdir ? _sdir.clone() : null;
       // knock power scales the fall + slide: AWP/HE hurl bodies, rifles shove
       let power = (gore && gore.power) || 1;
       if (power === 1) {
         if (explosive) power = 2.1;
+        else if (isHelix) power = 3.0;
         else if (isAWP) power = 2.0;
         else if (isDeagle) power = 1.4;
         else power = 1.0;
@@ -316,7 +318,7 @@ export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
       if (head) power += 0.15;
       bot.fall = pickFallParams(bot.pos, sdir, power);
       bot.deathPos = bot.pos.clone();
-      const slideDist = explosive ? rand(0.9, 1.6) : (isAWP ? rand(0.7, 1.2) : isDeagle ? rand(0.45, 0.8) : rand(0.3, 0.65));
+      const slideDist = explosive ? rand(0.9, 1.6) : isHelix ? rand(1.2, 2.0) : (isAWP ? rand(0.7, 1.2) : isDeagle ? rand(0.45, 0.8) : rand(0.3, 0.65));
       const flat = sdir ? sdir.clone().setY(0) : new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1));
       if (flat.lengthSq() < 0.01) flat.set(rand(-1, 1), 0, rand(-1, 1));
       flat.normalize();
@@ -334,8 +336,8 @@ export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
         if (isAWP || dmg >= 90) { pop = true; popPower = 1.7; }
         else if (isDeagle) { pop = Math.random() < 0.65; popPower = 1.3; }
         else { pop = dmg >= 60 ? Math.random() < 0.5 : Math.random() < 0.22; popPower = 1.0; }
-      } else if (isAWP && Math.random() < 0.3) {
-        // close-range AWP body shots can still tear the hit part off
+      } else if ((isAWP || isHelix) && Math.random() < (isHelix ? 0.6 : 0.3)) {
+        // close-range AWP body shots can still tear the hit part off (the HELIX usually does)
         tearLimbGib(bot.mesh, bot.pos, sdir, bot.team, false, part);
         bot.gibbed = true;
       } else if ((isDeagle || dmg >= 55) && part === 'leg' && Math.random() < 0.25) {

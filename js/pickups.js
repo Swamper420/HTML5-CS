@@ -152,6 +152,7 @@ function pickupAction(e) {
     if (PRIMARIES.includes(e.key)) { const pk = primaryKey(); return pk ? { kind: 'swap', auto: false, label: `E — SWAP ${WEAPONS[pk].name} FOR ${WEAPONS[e.key].name}` } : { kind: 'take', auto: true }; }
     return { kind: 'take', auto: true };
   }
+  if (e.key === 'helix') return null; // single cell — spares are useless
   if (!w.dual) return { kind: 'dual', auto: false, label: `E — DUAL WIELD ${WEAPONS[e.key].name}` };
   if (w.reserve < reserveCap(e.key, true) && (e.mag + e.reserve) > 0) return { kind: 'ammo', auto: false, label: `E — TAKE AMMO (${WEAPONS[e.key].name})` };
   return null;
@@ -188,6 +189,7 @@ function applyPickup(d) {
       if (player.cur === key) buildViewmodel(key); else switchWeapon(key);
     }
   } else if (!w.dual) {
+    if (key === 'helix') return; // single cell — never duals
     w.dual = true; w.mag2 = mag;
     w.reserve = Math.min(reserveCap(key, true), w.reserve + reserve);
     announce(`DUAL ${def.name.toUpperCase()}S — LMB RIGHT · RMB LEFT`, 1400);

@@ -128,6 +128,11 @@ export function updateHUD() {
     const n = player.nades[player.cur] || 0;
     $('ammo-mag').textContent = '×' + n; $('ammo-reserve').textContent = def.max;
     $('weapon-name').textContent = def.name;
+  } else if (player.cur === 'helix') {
+    const w = player.weapons.helix, def = WEAPONS.helix;
+    $('ammo-mag').textContent = w.mag > 0 ? '⚡' : '○';
+    $('ammo-reserve').textContent = w.mag > 0 ? 'CELL' : (player.reloading > 0 ? player.reloading.toFixed(1) + 's' : '…');
+    $('weapon-name').textContent = def.name.toUpperCase();
   } else {
     const w = player.weapons[player.cur] || player.weapons.deagle;
     const def = WEAPONS[player.cur] || WEAPONS.deagle;

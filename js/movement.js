@@ -27,7 +27,7 @@ import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
 import { updateSpectate, updateSpectateOverlay } from './spectate.js';
 import { G, isFreeze, keys, player } from './state.js';
 import {
-  VM_AIM, VM_AIM_SOLVED, VM_HIP, buildViewmodel, viewmodel, vmBase, vmBolt, vmL, vmMag, vmRig, vmStockParts,
+  VM_AIM, VM_AIM_SOLVED, VM_HIP, buildViewmodel, viewmodel, vmBase, vmBolt, vmL, vmMag, vmRig, vmSpinner, vmStockParts,
 } from './viewmodel.js';
 
 let stepAt = 0;
@@ -55,7 +55,7 @@ export function updatePlayer(dt, t) {
   }
   if (viewmodel && viewmodel.userData.spec) buildViewmodel(player.cur); // back from spectating
   const frozen = isFreeze();
-  const speedBase = player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
+  const speedBase = player.cur === 'helix' ? 4.0 : player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
   // Crouch: hold C (or toggle it, per settings). Blocks sprint, cuts speed, and
   // tightens the spread — the CS trade of mobility for accuracy.
   // The hull shrinks while crouched; you can't stand back up under an overhang.
@@ -236,6 +236,8 @@ export function updatePlayer(dt, t) {
   }
   // firing (also catch fast semi-auto clicks that release within one frame; blocked in freeze)
   // nades throw via mousedown/mouseup prime-release — never via the hitscan path
+  // HELIX spin-up needs a fresh trigger hold: releasing resets the wind.
+  if (player.cur === 'helix' && !mouseDown) { player._helixSpin = 0; player._helixHummed = false; }
   if (!isNade && (mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze()) {
     if (def.auto) playerTryFire(t);
     else if (mouseJustDown) { playerTryFire(t); }
@@ -337,6 +339,15 @@ export function updatePlayer(dt, t) {
     }
     vmBase.position.set(px, py, pz);
     vmBase.rotation.set(rx, ry, rz);
+    // HELIX rotor: idle crawl, screaming spin while the trigger is held, slow churn while recharging
+    try {
+      if (vmSpinner && player.cur === 'helix') {
+        let rate = 2;
+        if (player.reloading > 0) rate = 6;
+        else if (mouseDown && player._helixSpin) rate = 2 + clamp((t - player._helixSpin) / 1, 0, 1) * 46;
+        vmSpinner.rotation.z += rate * dt;
+      }
+    } catch {}
   }
 
   // aim / FOV (with punch kick that springs back)

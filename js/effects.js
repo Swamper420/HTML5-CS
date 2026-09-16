@@ -175,7 +175,7 @@ export function clearDecals() {
   decals.length = 0;
 }
 
-export function spawnTracer(a, b, color) {
+export function spawnTracer(a, b, color, wide = 1) {
   const len = a.distanceTo(b);
   if (len < 0.5) return;
   if (!opts.quality && tracers.length > 6) return;
@@ -188,7 +188,7 @@ export function spawnTracer(a, b, color) {
   const dir = b.clone().sub(a);
   const mid = a.clone().addScaledVector(dir, 0.5);
   const beamLen = Math.min(len, 26);
-  const rad = 0.012 + Math.min(0.02, len * 0.0006);
+  const rad = (0.012 + Math.min(0.02, len * 0.0006)) * wide;
   const beamGeo = new THREE.CylinderGeometry(rad, rad * 1.6, beamLen, 5, 1, true);
   const beamMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
   const beam = new THREE.Mesh(beamGeo, beamMat);
@@ -214,12 +214,13 @@ export function spawnTracer(a, b, color) {
     const T = decalTextures();
     head = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
     head.position.copy(b);
-    head.scale.setScalar(0.55);
+    head.scale.setScalar(0.55 * wide);
     g.add(head);
   } catch (e) {}
   g.frustumCulled = false;
   scene.add(g);
-  tracers.push({ mesh: g, beam, core, head, life: 0.09, max: 0.09 });
+  const life = wide > 1 ? 0.35 : 0.09;
+  tracers.push({ mesh: g, beam, core, head, life, max: life });
 }
 
 // world-space muzzle flash for bots / remotes / planted-bomb glow pulses

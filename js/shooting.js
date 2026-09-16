@@ -9,13 +9,13 @@ import { $, clamp, rand } from './utils.js';
 import { soldierFireKick } from './anim.js';
 import { updateInteractHUD } from './bomb.js';
 import { fireHitscan, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
-import { spawnShell, spawnSmoke, spawnTracer } from './effects.js';
-import { announce, updateHUD } from './hud.js';
+import { spawnBurst, spawnDecal, spawnFireball, spawnShell, spawnShockwave, spawnSmoke, spawnTracer } from './effects.js';
+import { announce, flashExplosionOverlay, updateHUD } from './hud.js';
 import { mouseJustDown, rmbJustDown, setCrossGap, setMouseJustDown, setRmbJustDown } from './input.js';
 import { isOnline } from './multiplayer.js';
 import { DUAL } from './pickups.js';
 import { playerMesh } from './playerbody.js';
-import { camera } from './render.js';
+import { camera, muzzleLight } from './render.js';
 import { G, isFreeze, keys, player } from './state.js';
 import { buildViewmodel, vmFlashGroup, vmL, vmMuzzle, vmRig } from './viewmodel.js';
 
@@ -33,6 +33,23 @@ export function playerTryFire(t, hand = 'R') {
   if (isFreeze()) return; // CS freeze: no shooting (post-round stays live)
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
   if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
+  if (wkey === 'helix') {
+    // HELIX ARC: battery cell (mag 1, no reserve — recharges via reload clock).
+    if (w[magKey] <= 0) {
+      AudioSys.click(300, 0.06, 0.3); player[nextKey] = t + 0.3;
+      startReload();
+      return;
+    }
+    // Spin-up gate: trigger must be held (spinUp)s while the rotor winds.
+    const need = def.spinUp || 1.0;
+    if (!player._helixSpin || t - player._helixSpin < 0) player._helixSpin = t;
+    if (t - player._helixSpin < need) {
+      if (!player._helixHummed) { player._helixHummed = true; try { AudioSys.helixSpin(); } catch {} }
+      player[nextKey] = t + 0.05; // stay trigger-hot; fires once wound
+      return;
+    }
+    player._helixHummed = false;
+  } else
   if (w[magKey] <= 0) {
     AudioSys.click(300, 0.06, 0.3); player[nextKey] = t + 0.3;
     if (!dual || (w.mag <= 0 && (w.mag2 | 0) <= 0)) startReload();
@@ -65,8 +82,29 @@ export function playerTryFire(t, hand = 'R') {
   const muzzleWorld = new THREE.Vector3();
   if (muzzleObj) muzzleObj.getWorldPosition(muzzleWorld);
   else muzzleWorld.copy(origin);
-  spawnTracer(muzzleWorld, origin.clone().add(dir.clone().multiplyScalar(2.2)), def.tracer);
-  fireHitscan({ team: player.team || 'ct', isPlayer: true }, origin, dir, def, t);
+  spawnTracer(muzzleWorld, origin.clone().add(dir.clone().multiplyScalar(2.2)), def.tracer, wkey === 'helix' ? 4 : 1);
+  const helixShot = wkey === 'helix';
+  const hitRet = fireHitscan({ team: player.team || 'ct', isPlayer: true }, origin, dir, def, t);
+  if (helixShot) {
+    // Over-the-top beam: fat lingering beam + muzzle star + impact storm + scorch.
+    try {
+      const hx = (hitRet && isFinite(hitRet.d)) ? hitRet.d : def.range;
+      const end = origin.clone().add(dir.clone().multiplyScalar(hx));
+      spawnTracer(origin.clone(), end.clone(), 0xd8fbff, 4);
+      spawnTracer(muzzleWorld.clone(), end.clone(), 0x66f6ff, 2.5);
+      spawnFireball(muzzleWorld.clone(), 3.2, 0.35);
+      spawnShockwave(muzzleWorld.clone(), 4, 0.4, 0x66f6ff);
+      spawnShockwave(end.clone(), 7, 0.5, 0x9ff3ff);
+      spawnBurst(muzzleWorld.clone(), 0x9ff3ff, 24, 9, 0.5, 0.12);
+      spawnBurst(end.clone(), 0xd8fbff, 30, 11, 0.6, 0.12);
+      spawnBurst(end.clone(), 0x66f6ff, 20, 7, 0.7, 0.14);
+      try { spawnDecal('scorch', end, dir.clone().negate(), 1.6 + Math.random() * 0.8); } catch {}
+      muzzleLight.position.copy(muzzleWorld);
+      muzzleLight.intensity = 14; muzzleLight.distance = 34;
+      try { flashExplosionOverlay(); } catch {}
+      player._helixSpin = 0; // next cell needs a fresh spin-up
+    } catch {}
+  }
   // Relay tracer to remotes so they see/hear our shot.
   try {
     if (isOnline()) Net.sendShot({
@@ -99,6 +137,7 @@ export function playerTryFire(t, hand = 'R') {
   player.yaw += (rand(-def.kickSide, def.kickSide) + patX * def.kickSide * 0.9) * aimMul;
   }
   player.pitch = clamp(player.pitch, -1.45, 1.45);
+  if (wkey === 'helix') vmRig.roll += rand(-0.09, 0.09); // coil discharge slams the view sideways
   player.sprayIdx++;
   // --- recoverable punch / shake / fov (game feel, springs back) ---
   vmRig.punchP += def.punch * (player.aiming ? 0.6 : 1);
@@ -113,19 +152,22 @@ export function playerTryFire(t, hand = 'R') {
     for (const f of flashObj.children) {
       f.material.opacity = 1;
       f.rotation.z = Math.random() * Math.PI * 2;
-      const s = (wkey === 'awp' ? 1.9 : wkey === 'deagle' ? 1.35 : wkey === 'p90' ? 0.75 : 1.0) * rand(0.9, 1.15);
+      const s = (wkey === 'helix' ? 3.4 : wkey === 'awp' ? 1.9 : wkey === 'deagle' ? 1.35 : wkey === 'p90' ? 0.75 : 1.0) * rand(0.9, 1.15);
       f.scale.set(s, s, 1);
     }
   }
   if (muzzleObj) {
     const mp = new THREE.Vector3(); muzzleObj.getWorldPosition(mp);
-    if (wkey !== 'awp' || !player.aiming) spawnSmoke(mp, wkey === 'awp' ? 0.3 : 0.18, 0.55);
-    // eject brass to the right
+    if (wkey === 'helix') { try { spawnBurst(mp, 0x9ff3ff, 8, 4, 0.4, 0.1); } catch {} } // plasma wisps, no powder smoke
+    else if (wkey !== 'awp' || !player.aiming) spawnSmoke(mp, wkey === 'awp' ? 0.3 : 0.18, 0.55);
+    // eject brass to the right (coilgun: no brass)
+    if (wkey !== 'helix') {
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const ejectP = mp.addScaledVector(right, -0.06).addScaledVector(up, -0.03);
     spawnShell(ejectP, right, up, fwd);
+    }
   }
   if (wkey === 'awp') {
     vmRig.boltT = 0.45;
@@ -139,6 +181,15 @@ export function startReload() {
   if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) return;
+  if (wkey === 'helix') {
+    // Battery recharge: no reserve, 5s cell cycle. Manual R restarts it.
+    if (player.reloading > 0 || w.mag >= def.magSize || !player.alive) return;
+    player.reloading = def.reloadTime; player.reloadDur = def.reloadTime;
+    player.sprayIdx = 0; player._helixSpin = 0; player._helixHummed = false;
+    AudioSys.click(500, 0.15, 0.3);
+    const tip = $('reload-tip'); tip.textContent = 'RECHARGING…'; tip.classList.remove('hidden');
+    return;
+  }
   const needMag = (def.magSize - w.mag) + (w.dual ? def.magSize - (w.mag2 | 0) : 0);
   if (player.reloading > 0 || needMag <= 0 || w.reserve <= 0 || !player.alive) return;
   const rt = def.reloadTime * (w.dual ? DUAL.reloadMul : 1);
@@ -151,6 +202,15 @@ export function finishReload() {
   if (isNadeKey(player.cur)) { player.reloading = 0; return; }
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) { player.reloading = 0; return; }
+  if (wkey === 'helix') {
+    w.mag = def.magSize; w.reserve = 0;
+    player.reloading = 0; player.bloom = 0; player._helixSpin = 0; player._helixHummed = false;
+    const tip = $('reload-tip'); tip.textContent = 'RELOADING…'; tip.classList.add('hidden');
+    try { AudioSys.helixReady(); } catch {}
+    try { announce('HELIX CHARGED ⚡', 800); } catch {}
+    updateHUD();
+    return;
+  }
   const need = def.magSize - w.mag, take = Math.min(need, w.reserve);
   w.mag += take; w.reserve -= take;
   if (w.dual) { const t2 = Math.min(def.magSize - (w.mag2 | 0), w.reserve); w.mag2 = (w.mag2 | 0) + t2; w.reserve -= t2; }
@@ -179,6 +239,7 @@ export function switchWeapon(key) {
   try { updateInteractHUD(null); } catch (e) {}
   player.reloading = 0; $('reload-tip').classList.add('hidden');
   player.bloom = 0; player.sprayIdx = 0;
+  player._helixSpin = 0; player._helixHummed = false; // fresh trigger for the coilgun
   // You cannot carry a sight picture through a weapon swap — dropping ADS also
   // stops the new gun snapping straight to its aim pose with no raise animation.
   player.aiming = false;

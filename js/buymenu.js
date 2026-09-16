@@ -18,7 +18,7 @@ function buyPrice(kind) {
   const w = player.weapons;
   if (isNadeKey(kind)) return NADE_DEFS[kind].price;
   // deagle: 1st $700, 2nd copy (dual) $700, then ammo $200
-  return ({ ak: 2500, awp: 4750, p90: WEAPONS.p90.price, deagle: (w.deagle && w.deagle.owned && w.deagle.dual) ? 200 : 700, ammo: 200, armor: 1000, hp: 500 })[kind] || 0;
+  return ({ ak: 2500, awp: 4750, p90: WEAPONS.p90.price, helix: WEAPONS.helix.price, deagle: (w.deagle && w.deagle.owned && w.deagle.dual) ? 200 : 700, ammo: 200, armor: 1000, hp: 500 })[kind] || 0;
 }
 // ---- virtual cursor: menu works while pointer stays locked (no unlock/relock yank, no browser relock cooldown)
 const buyCur = { x: 0, y: 0, hover: null };
@@ -84,7 +84,7 @@ let buyMenuKey = '';
 export function refreshBuyMenu(force) {
   if (!force && !G.buyOpen) return;
   const w = player.weapons, money = player.money;
-  const key = [money, player.hp, player.armor, w.ak.owned, w.awp.owned, w.p90.owned, w.deagle.owned, !!w.ak.dual, !!w.awp.dual, !!w.p90.dual, !!w.deagle.dual, ...NADE_ORDER.map((k) => player.nades[k] || 0)].join('|');
+  const key = [money, player.hp, player.armor, w.ak.owned, w.awp.owned, w.p90.owned, w.helix.owned, w.deagle.owned, !!w.ak.dual, !!w.awp.dual, !!w.p90.dual, !!w.deagle.dual, ...NADE_ORDER.map((k) => player.nades[k] || 0)].join('|');
   if (!force && key === buyMenuKey) return;
   const prevMoney = +(buyMenuKey.split('|')[0] || money);
   buyMenuKey = key;
@@ -94,7 +94,7 @@ export function refreshBuyMenu(force) {
   document.querySelectorAll('#buy-menu .buy-item').forEach((el) => {
     const k = el.dataset.buy, price = buyPrice(k);
     let owned = false, maxed = false, state = '';
-    if (PRIMARIES.includes(k)) { owned = !!w[k].owned; maxed = owned && !!w[k].dual; if (maxed) state = 'DUAL'; else if (owned) state = '+2ND'; else if (primaryKey()) state = 'SWAP'; }
+    if (PRIMARIES.includes(k)) { owned = !!w[k].owned; maxed = owned && (!!w[k].dual || k === 'helix'); if (maxed) state = k === 'helix' ? 'CELL' : 'DUAL'; else if (owned) state = '+2ND'; else if (primaryKey()) state = 'SWAP'; }
     else if (k === 'deagle') { owned = !!w.deagle.owned; if (owned) state = w.deagle.dual ? 'AMMO' : '+2ND'; }
     else if (k === 'armor') { maxed = player.armor >= 100; if (maxed) state = 'FULL'; }
     else if (k === 'hp') { maxed = player.hp >= 100; if (maxed) state = 'FULL'; }
@@ -145,6 +145,7 @@ export function buyItem(kind) {
   };
   if (PRIMARIES.includes(kind)) {
     const def = WEAPONS[kind];
+    if (kind === 'helix' && w.helix.owned) return no('SINGLE CELL ONLY');
     if (w[kind].owned && w[kind].dual) return no(`ALREADY DUAL ${def.name.toUpperCase()}`);
     if (w[kind].owned) return buySecond(kind);
     if (player.money < def.price) return no('NOT ENOUGH $');

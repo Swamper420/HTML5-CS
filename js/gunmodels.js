@@ -187,6 +187,38 @@ export function buildGunModel(key, M, root, magG, opts = {}) {
     P(root, [[0.115, -0.047], [0.125, -0.047], [0.12, -0.08], [0.11, -0.078]], 0.008, M.steel, 0, null, 0.001);
     if (hi) for (const sx of [-0.036, 0.036]) Bx(root, 0.012, 0.012, 0.36, M.dark, 0.72, -0.05, sx);
     out.muzzle = mark(1.04, 0.018);
+  } else if (key === 'helix') {
+    // HELIX ARC: fictional coilgun. Fat shroud, 3 accelerator rings, glowing core,
+    // and a spinning tri-blade rotor (out.spinner) that winds up before each shot.
+    P(root, [[-0.16, -0.05], [0.42, -0.05], [0.44, 0.05], [-0.16, 0.055]], 0.075, M.polymer);
+    P(root, [[-0.16, 0.02], [-0.34, 0.03], [-0.345, -0.10], [-0.16, -0.09]], 0.055, M.rubber, 0, null, 0.002);
+    out.stock.push(P(root, [[-0.345, 0.03], [-0.46, 0.02], [-0.46, -0.08], [-0.345, -0.09]], 0.06, M.rubber, 0, null, 0.003));
+    P(root, [[0.0, -0.05], [0.07, -0.05], [0.045, -0.16], [-0.01, -0.15]], 0.045, M.bakelite);
+    for (let i = 0; i < 3; i++) {
+      const f = 0.52 + i * 0.17;
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.014, 10, 22), M.steel);
+      ring.position.set(0, 0.01, -f); root.add(ring);
+      const core = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.10, 12),
+        new THREE.MeshBasicMaterial({ color: 0x66f6ff }));
+      core.rotation.x = Math.PI / 2; core.position.set(0, 0.01, -f); root.add(core);
+    }
+    Cy(root, 0.012, 0.22, M.blued, 1.12, 0.01);
+    Bx(root, 0.05, 0.03, 0.16, M.dark, 0.10, 0.075); // top cell housing
+    { const cell = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.07, 4, 10),
+        new THREE.MeshBasicMaterial({ color: 0x9ff3ff }));
+      cell.rotation.x = Math.PI / 2; cell.position.set(0, 0.078, -0.10); root.add(cell); }
+    if (hi) { const d = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 6), M.glowR); d.position.set(0, 0.078, -0.19); root.add(d); }
+    const spinG = new THREE.Group(); spinG.position.set(0, 0.01, -0.44); spinG.name = 'helix-spinner'; root.add(spinG);
+    for (let i = 0; i < 3; i++) {
+      const holder = new THREE.Group(); holder.rotation.z = (i / 3) * Math.PI * 2;
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.085, 0.03), M.chrome || M.steel);
+      blade.position.set(0, 0.045, 0); holder.add(blade); spinG.add(holder);
+    }
+    { const hub = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0xd8fbff })); spinG.add(hub); }
+    out.spinner = spinG;
+    out.rear = mark(0.10, 0.09); out.front = mark(0.86, 0.065);
+    out.muzzle = mark(1.24, 0.01);
   }
   if (opts.hands) buildGunHands(key, M, root);
   return out;

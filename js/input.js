@@ -45,9 +45,14 @@ export function initInput() {
       const m = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
       if (m) { if (!e.repeat) buyByKey(m[1]); return; }
       if (e.code === 'KeyR') { if (!e.repeat) buyByKey('R'); return; }
+      if (e.code === 'KeyH') { if (!e.repeat) buyItem('helix'); return; }
     }
     if (e.code === 'Digit1') { const pk = primaryKey(); if (pk) switchWeapon(pk); else announce('NO PRIMARY — PRESS B', 1100); }
     if (e.code === 'Digit2') switchWeapon('deagle');
+    if (e.code === 'Digit3') {
+      if (player.weapons.helix && player.weapons.helix.owned) switchWeapon('helix');
+      else announce('HELIX ARC — PRESS B · $6000', 1100);
+    }
     if (e.code === 'Digit4') switchWeapon('he');
     if (e.code === 'Digit5') switchWeapon('flash');
     if (e.code === 'Digit6') switchWeapon('smoke');
