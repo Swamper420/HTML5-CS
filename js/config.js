@@ -93,6 +93,6 @@ export const SITES = [
   { name: 'A', pos: null, x: 24, z: -20, r: 4.2, color: 0x2e9bff }, // pos filled with Vector3 in buildMap
   { name: 'B', pos: null, x: 24, z: 20, r: 4.2, color: 0xffb020 },
 ];
-export const BOMB_PLANT_TIME = 3.2;
-export const BOMB_DEFUSE_TIME = 5.0;
+export const BOMB_PLANT_TIME = 2.0;
+export const BOMB_DEFUSE_TIME = 3.5;
 export const BOMB_TIMER = 35;

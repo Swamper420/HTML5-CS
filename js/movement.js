@@ -364,6 +364,8 @@ export function updatePlayer(dt, t) {
       alive: player.alive, weapon: player.cur, aiming: !!player.aiming, moving: hSpeed > 0.8,
       crouch: !!player.crouching, gnd: !!player.onGround, dual: isDualCur(),
       wr: player.wallRun ? player.wallRun.side : 0,
+      planting: !!(player.alive && keys['KeyE'] && playerInPlantSite()),
+      defusing: !!(player.alive && keys['KeyE'] && playerNearPlantedBomb()),
     });
   } catch {}
 }

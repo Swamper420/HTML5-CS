@@ -68,7 +68,7 @@ export function siteAt(pos) { for (const s of SITES) { if (isInSite(pos, s)) ret
 // CS rule: one actor works the bomb at a time, and a hand-off restarts the bar.
 // updateBot() and updateBomb() both run inside the same frame, so without the
 // time stamp a bot and the player could each add dt to the *same* bar and finish
-// a 3.2s plant in 1.6s. The stamp also tells us when nobody is working it, which
+// a 2s plant in 1s. The stamp also tells us when nobody is working it, which
 // is what drives decay.
 export function bombAdvancePlant(owner, site, dt, t) {
   const siteName = site ? site.name : null;

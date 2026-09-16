@@ -130,10 +130,16 @@ export function dropWeapon(key, { both = false, fromDeath = false } = {}) {
   return true;
 }
 export function dropAllOnDeath() {
-  // CS: your best gun hits the floor where you fall (both, if you were dual wielding)
+  // CS: your best gun hits the floor where you fall (both, if you were dual wielding).
+  // A dual-wielded sidearm isn't the primary, so drop the pair too — else it vanishes with the corpse.
   const pk = primaryKey();
   const key = pk || (player.weapons.deagle && player.weapons.deagle.owned ? 'deagle' : null);
   if (key) dropWeapon(key, { both: true, fromDeath: true });
+  for (const k of SLOT_ORDER) {
+    if (k === key) continue;
+    const w = player.weapons[k];
+    if (w && w.owned && w.dual) dropWeapon(k, { both: true, fromDeath: true });
+  }
 }
 
 // What pressing E on this weapon would do (null = nothing useful).
