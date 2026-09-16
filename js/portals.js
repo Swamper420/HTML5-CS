@@ -56,11 +56,47 @@ function makePortalMesh(color) {
     new THREE.TorusGeometry(DISC_R + 0.1, 0.12, 10, 32),
     new THREE.MeshBasicMaterial({ color })
   );
+  // Window-style viewport: the exit-side render is sampled by main-camera
+  // screen position, so the portal acts as a window — pixels line up with the
+  // real bullet path from any angle. Aim at what you see and you hit it.
   const disc = new THREE.Mesh(
     new THREE.CircleGeometry(DISC_R, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })
+    new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        map: { value: null },
+        baseColor: { value: new THREE.Color(color) },
+        opacity: { value: 0.45 },
+        mapped: { value: 0 },
+      },
+      vertexShader: `
+        varying vec4 vClip;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vClip = projectionMatrix * viewMatrix * wp;
+          gl_Position = vClip;
+        }`,
+      fragmentShader: `
+        uniform sampler2D map;
+        uniform vec3 baseColor;
+        uniform float opacity;
+        uniform float mapped;
+        varying vec4 vClip;
+        void main() {
+          if (mapped < 0.5) {
+            gl_FragColor = vec4(baseColor, opacity);
+          } else {
+            if (vClip.w <= 0.0) discard;
+            vec2 uv = vClip.xy / vClip.w * 0.5 + 0.5;
+            if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
+            gl_FragColor = vec4(texture2D(map, uv).rgb, 1.0);
+          }
+          #include <colorspace_fragment>
+        }`,
+    })
   );
-  disc.material.toneMapped = false; // shows a render-target view without double tonemapping
   g.add(ring); g.add(disc);
   g.userData.disc = disc;
   g.userData.baseColor = color;
@@ -94,7 +130,6 @@ function pairRT(ownerKey, slot) {
   _rtPool.set(k, rt);
   return rt;
 }
-const _virtCam = new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 300);
 const _m1 = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _m3 = new THREE.Matrix4();
 const _sv = new THREE.Vector3(), _v = new THREE.Vector3(), _d = new THREE.Vector3(), _p = new THREE.Vector3();
 const _pq1 = new THREE.Quaternion(), _pq2 = new THREE.Quaternion();
@@ -154,16 +189,13 @@ function setMapped(end, on) {
     const m = end.mesh.userData.disc.material;
     if (on) {
       // Opaque viewport: only exit view shows, wall behind hidden.
-      m.map = end.rt.texture;
-      m.color.set(0xffffff);
-      m.transparent = false;
-      m.opacity = 1;
+      m.uniforms.map.value = end.rt.texture;
+      m.uniforms.mapped.value = 1;
       m.depthWrite = true;
     } else {
-      m.map = null;
-      m.color.set(end.mesh.userData.baseColor ?? 0xffffff);
-      m.transparent = true;
-      m.opacity = 0.45;
+      m.uniforms.map.value = null;
+      m.uniforms.mapped.value = 0;
+      m.uniforms.opacity.value = 0.45;
       m.depthWrite = false;
     }
     m.needsUpdate = true;
@@ -171,25 +203,40 @@ function setMapped(end, on) {
 }
 
 // Render exit side O's view onto entry end E's disc.
+// Each end owns its virtual camera: one shared cam meant the second render
+// overwrote the first, so far-apart ends showed stale/wrong views.
+function endCam(E) {
+  if (!E._cam) E._cam = new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 300);
+  return E._cam;
+}
 function renderPortalView(E, O) {
-  const fm = E.mesh, om = O.mesh;
+  const cam = endCam(E);
   try {
-    fm.updateMatrixWorld(); om.updateMatrixWorld(); camera.updateMatrixWorld();
+    E.mesh.updateMatrixWorld(); O.mesh.updateMatrixWorld(); camera.updateMatrixWorld();
     // virtual cam = exit frame * 180°-about-Y * entry frame^-1 * main cam
-    _m1.copy(fm.matrixWorld).invert();
+    _m1.copy(E.mesh.matrixWorld).invert();
     _m2.makeRotationY(Math.PI);
-    _m3.multiplyMatrices(_m2, _m1).premultiply(om.matrixWorld).multiply(camera.matrixWorld);
-    _m3.decompose(_virtCam.position, _virtCam.quaternion, _sv);
-    _virtCam.fov = camera.fov; _virtCam.aspect = camera.aspect;
-    _virtCam.near = 0.1; _virtCam.far = camera.far;
-    _virtCam.updateProjectionMatrix();
-    fm.visible = false; om.visible = false; // no feedback loop
+    _m3.multiplyMatrices(_m2, _m1).premultiply(O.mesh.matrixWorld).multiply(camera.matrixWorld);
+    _m3.decompose(cam.position, cam.quaternion, _sv);
+    cam.fov = camera.fov; cam.aspect = camera.aspect;
+    cam.near = 0.1; cam.far = camera.far;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    // hide every portal disc: the rest sample by screen pos, which belongs to
+    // the main camera — under the virtual cam they'd sample garbage.
+    const hidden = [];
+    for (const [, pair] of PORTALS) {
+      for (const s of ['A', 'B']) {
+        const m = pair[s] && pair[s].mesh;
+        if (m && m.visible) { m.visible = false; hidden.push(m); }
+      }
+    }
     renderer.setRenderTarget(E.rt);
-    renderer.render(scene, _virtCam);
+    renderer.render(scene, cam);
     renderer.setRenderTarget(null);
-    fm.visible = true; om.visible = true;
+    for (const m of hidden) m.visible = true;
     setMapped(E, true);
-  } catch { try { renderer.setRenderTarget(null); } catch {} try { fm.visible = true; om.visible = true; } catch {} }
+  } catch { try { renderer.setRenderTarget(null); } catch {} for (const [, pair] of PORTALS) { for (const s of ['A', 'B']) { try { if (pair[s]) pair[s].mesh.visible = true; } catch {} } } }
 }
 
 function endVisible(end) {
@@ -215,7 +262,8 @@ function updatePortalViews() {
     for (const [E, O] of [[pair.A, pair.B], [pair.B, pair.A]]) {
       const dist = endVisible(E);
       if (dist < 0) continue;
-      const rate = key === 'local' ? 1 / 30 : 1 / 10;
+      // Local pair re-renders every frame: a stale view breaks aim-through parallax.
+      const rate = key === 'local' ? 0 : 1 / 10;
       if (now - (E._viewT || 0) < rate) continue; // keep last frame (or shimmer until first render)
       cands.push({ E, O, dist, local: key === 'local' ? 0 : 1 });
     }
@@ -320,7 +368,7 @@ export function updatePortals(dt, t) {
     for (const s of ['A', 'B']) {
       const e = pair[s];
       if (e && e.mesh && e.mesh.userData.disc && !e._mapped) {
-        try { e.mesh.userData.disc.material.opacity = 0.35 + 0.15 * Math.sin(t * 5 + (s === 'A' ? 0 : 2)); } catch {}
+        try { e.mesh.userData.disc.material.uniforms.opacity.value = 0.35 + 0.15 * Math.sin(t * 5 + (s === 'A' ? 0 : 2)); } catch {}
       }
     }
   }
