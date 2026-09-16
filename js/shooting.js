@@ -8,17 +8,87 @@ import { CROUCH_EYE_DROP, EYE, NADE_DEFS, SPRAY_AK, WEAPONS, isNadeKey } from '.
 import { $, clamp, rand } from './utils.js';
 import { soldierFireKick } from './anim.js';
 import { updateInteractHUD } from './bomb.js';
-import { fireHitscan, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
+import { rayWallDist } from './collision.js';
+import { fireHitscan, damageBot, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
 import { spawnBurst, spawnDecal, spawnFireball, spawnShell, spawnShockwave, spawnSmoke, spawnTracer } from './effects.js';
 import { announce, flashExplosionOverlay, updateHUD } from './hud.js';
 import { mouseJustDown, rmbJustDown, setCrossGap, setMouseJustDown, setRmbJustDown } from './input.js';
-import { isOnline } from './multiplayer.js';
+import { isOnline, remotes } from './multiplayer.js';
 import { DUAL } from './pickups.js';
 import { playerMesh } from './playerbody.js';
 import { camera, muzzleLight } from './render.js';
-import { G, isFreeze, keys, player } from './state.js';
+import { G, isFreeze, bots, keys, player } from './state.js';
 import { buildViewmodel, vmFlashGroup, vmL, vmMuzzle, vmRig } from './viewmodel.js';
 
+// MACHETE: no ammo, no spread, no tracer — a wide diagonal cleave that hits
+// everything in front within range. Kills bisect (see combat.js).
+export function meleeSlash(t, wkey, def) {
+  if (!def.auto && !mouseJustDown) return;
+  player.nextShot = t + def.fireInterval;
+  player.lastShotT = t;
+  player.sprayIdx = 0;
+  G.shots++;
+  AudioSys.shoot(def.sound);
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE - CROUCH_EYE_DROP * (player.crouch || 0), player.pos.z);
+  const range = def.range || 3.4;
+  const wallD = rayWallDist(eye, dir, range);
+  // heavy diagonal swing feel: big viewmodel sweep + sideways roll
+  vmRig.kickV += def.vmKick * 15;
+  vmRig.punchP += def.punch;
+  vmRig.roll += rand(-0.06, 0.06);
+  vmRig.fovKick += def.fovPunch;
+  vmRig.shake += def.shake;
+  soldierFireKick(playerMesh, 0.6);
+  setMouseJustDown(false);
+  setCrossGap(clamp(6 + Math.hypot(player.vel.x, player.vel.z) * 1.3, 6, 46));
+  const myTeam = player.team || 'ct';
+  const inArc = (cx, cy, cz) => {
+    const tx = cx - eye.x, ty = cy - eye.y, tz = cz - eye.z;
+    const along = tx * dir.x + ty * dir.y + tz * dir.z;
+    if (along < 0.1 || along > range + 0.7 || along > wallD - 0.15) return -1;
+    const px = tx - dir.x * along, py = ty - dir.y * along, pz = tz - dir.z * along;
+    if (Math.sqrt(px * px + py * py + pz * pz) > 1.25) return -1;
+    return along;
+  };
+  let hitAny = false;
+  for (const b of bots) {
+    if (!b.alive || b.team === myTeam) continue;
+    const along = inArc(b.pos.x, b.pos.y + 1.0, b.pos.z);
+    if (along < 0) continue;
+    hitAny = true;
+    const hitPos = eye.clone().addScaledVector(dir, along);
+    try {
+      damageBot(b, def.damage * rand(0.95, 1.05), { team: myTeam, isPlayer: true }, false, hitPos, { dir: dir.clone(), weapon: 'MACHETE' });
+    } catch (e) {}
+  }
+  try {
+    for (const [rid, e] of remotes) {
+      const rd = e.data; if (!rd || !rd.alive) continue;
+      if ((rd.team || 't') === myTeam) continue;
+      const along = inArc(e.pos.x, e.pos.y + 1.0, e.pos.z);
+      if (along < 0) continue;
+      hitAny = true;
+      const dmg = Math.round(def.damage * rand(0.95, 1.05) * 10) / 10;
+      G.hits++; playerHitmark(false, false); AudioSys.hit(false);
+      spawnBurst(eye.clone().addScaledVector(dir, along), 0xb00000, 10, 4, 0.5);
+      try { Net.sendHit({ targetId: rid, dmg, head: false, weapon: 'MACHETE' }); } catch {}
+    }
+  } catch {}
+  try {
+    if (isOnline()) Net.sendShot({
+      ox: eye.x, oy: eye.y, oz: eye.z,
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      weapon: 'MACHETE', tracer: def.tracer, sound: def.sound,
+    });
+  } catch {}
+  if (!hitAny && wallD < range - 0.01) {
+    const end = eye.clone().addScaledVector(dir, wallD);
+    spawnBurst(end, 0xffd27a, 8, 5, 0.3, 0.07);
+    AudioSys.impact(end, false);
+  }
+  updateHUD();
+}
 export function playerTryFire(t, hand = 'R') {
   // nades never reach the hitscan path — they prime/throw instead
   if (isNadeKey(player.cur)) return;
@@ -33,6 +103,7 @@ export function playerTryFire(t, hand = 'R') {
   if (isFreeze()) return; // CS freeze: no shooting (post-round stays live)
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
   if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
+  if (def.melee) { meleeSlash(t, wkey, def); return; }
   if (wkey === 'helix') {
     // HELIX ARC: battery cell (mag 1, no reserve — recharges via reload clock).
     if (w[magKey] <= 0) {
@@ -180,6 +251,7 @@ export function startReload() {
   if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) return;
+  if (def.melee) return; // nothing to reload — the blade is always ready
   if (wkey === 'helix') {
     // Battery recharge: no reserve, 5s cell cycle. Manual R restarts it.
     if (player.reloading > 0 || w.mag >= def.magSize || !player.alive) return;
@@ -205,6 +277,7 @@ export function finishReload() {
   if (isNadeKey(player.cur)) { player.reloading = 0; return; }
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) { player.reloading = 0; return; }
+  if (def.melee) { player.reloading = 0; return; }
   if (wkey === 'helix') {
     w.mag = def.magSize; w.reserve = 0;
     player.reloading = 0; player.bloom = 0; player._helixSpin = 0;

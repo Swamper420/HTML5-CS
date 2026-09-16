@@ -51,8 +51,10 @@ export function initInput() {
     if (e.code === 'Digit1') { const pk = primaryKey(); if (pk) switchWeapon(pk); else announce('NO PRIMARY — PRESS B', 1100); }
     if (e.code === 'Digit2') switchWeapon('deagle');
     if (e.code === 'Digit3') {
-      if (player.weapons.helix && player.weapons.helix.owned) switchWeapon('helix');
-      else announce('HELIX ARC — PRESS B · $6000', 1100);
+      // MACHETE lives on 3 (free, always owned); HELIX shares the slot behind it.
+      if (player.cur !== 'machete') switchWeapon('machete');
+      else if (player.weapons.helix && player.weapons.helix.owned) switchWeapon('helix');
+      else announce('MACHETE — FREE FOREVER', 1100);
     }
     if (e.code === 'Digit4') switchWeapon('he');
     if (e.code === 'Digit5') switchWeapon('flash');

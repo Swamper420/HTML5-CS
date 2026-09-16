@@ -158,7 +158,7 @@ export function updateRemoteMeshes(dt, t) {
       // revive: round reset — restore head/helmet/limbs cleared by goreRemoteDeath
       if (r.alive && (e.fall || e.headless)) {
         try { restoreSoldierMesh(m); } catch (err) {}
-        e.fall = null; e.knock = null; e.deathPos = null; e.deathT = 0; e.headless = false; e._thudded = false;
+        e.fall = null; e.knock = null; e.deathPos = null; e.deathT = 0; e.headless = false; e._thudded = false; e._bisected = false;
         m.rotation.set(0, e.yaw + Math.PI, 0);
       }
       // Dead => momentum ragdoll like bots (fall away from killer, limbs sprawl).
@@ -209,6 +209,7 @@ export function updateRemoteMeshes(dt, t) {
           try { if (e.nukeMesh) e.nukeMesh.visible = false; } catch {}
         } catch (err) {}
         m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
+        if (e._bisected) m.visible = false; // machete halves on the ground instead of a corpse
       } else {
         // alive: walk swing + gun pitch + ease back upright from any old tip
         try {

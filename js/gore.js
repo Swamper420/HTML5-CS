@@ -6,7 +6,7 @@ import { AudioSys } from './audio.js';
 import { SET, opts } from './settings.js';
 import { $, clamp, rand } from './utils.js';
 import { spawnBloodPool, spawnBurst, spawnDecal, spawnSmoke } from './effects.js';
-import { explodeHead, gibCollide, gibMats, spawnBloodSpray, spawnGibMesh, tearLimbGib } from './gibs.js';
+import { bisectDiagonal, explodeHead, gibCollide, gibMats, spawnBloodSpray, spawnGibMesh, tearLimbGib } from './gibs.js';
 import { colliders } from './map.js';
 import { camera } from './render.js';
 import { bots } from './state.js';
@@ -297,7 +297,8 @@ export function goreRemoteDeath(entry, head, weaponLabel, shotDir) {
     const explosive = !isFire && (wName.includes('HE') || wName.includes('C4'));
     const isAWP = wName.includes('AWP');
     const isDeagle = wName.includes('DESERT') || wName.includes('DEAGLE') || wName.includes('EAGLE');
-    let power = explosive ? 2.1 : isAWP ? 2.0 : isDeagle ? 1.4 : 1.0;
+    const isMachete = wName.includes('MACHETE');
+    let power = explosive ? 2.1 : isMachete ? 2.5 : isAWP ? 2.0 : isDeagle ? 1.4 : 1.0;
     if (head) power += 0.15;
     const sdir = shotDir ? shotDir.clone() : null;
     entry.fall = pickFallParams(entry.pos, sdir, power);
@@ -311,7 +312,10 @@ export function goreRemoteDeath(entry, head, weaponLabel, shotDir) {
     const team = (entry.data && entry.data.team) || 't';
     const headPos = new THREE.Vector3(entry.pos.x, entry.pos.y + 1.76, entry.pos.z);
     let pop = false, popPower = 1;
-    if (explosive) {
+    if (isMachete) {
+      try { bisectDiagonal(entry.mesh, entry.pos, sdir, team); } catch (e) {}
+      entry.exploded = true; entry.headless = true; entry._bisected = true;
+    } else if (explosive) {
       pop = Math.random() < 0.75; popPower = 1.7;
       tearLimbGib(entry.mesh, entry.pos, sdir, team, true, 'torso');
     } else if (head) {
@@ -342,7 +346,7 @@ export function goreRemoteDeath(entry, head, weaponLabel, shotDir) {
         poseCorpseLimbs(entry.mesh, entry.fall.sprawl, entry.fall.power);
       }
     } catch (e) {}
-    entry.mesh.visible = true;
+    entry.mesh.visible = !entry._bisected; // bisected: halves only, no whole corpse
   } catch (e) {}
 }
 // staged death fall: fast tip-over -> ground thud dust -> settle (corpses persist to round end)

@@ -61,7 +61,7 @@ export function updatePlayer(dt, t) {
   }
   if (viewmodel && viewmodel.userData.spec) buildViewmodel(player.cur); // back from spectating
   const frozen = isFreeze();
-  const speedBase = player.cur === 'helix' ? 4.0 : player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
+  const speedBase = player.cur === 'helix' ? 4.0 : player.cur === 'machete' ? 6.0 : player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
   // Crouch: hold C (or toggle it, per settings). Blocks sprint, cuts speed, and
   // tightens the spread — the CS trade of mobility for accuracy.
   // The hull shrinks while crouched; you can't stand back up under an overhang.

@@ -133,6 +133,9 @@ export function updateHUD() {
     $('ammo-mag').textContent = w.mag > 0 ? '⚡' : '○';
     $('ammo-reserve').textContent = w.mag > 0 ? 'CELL' : (player.reloading > 0 ? player.reloading.toFixed(1) + 's' : '…');
     $('weapon-name').textContent = def.name.toUpperCase();
+  } else if (WEAPONS[player.cur] && WEAPONS[player.cur].melee) {
+    $('ammo-mag').textContent = '—'; $('ammo-reserve').textContent = '∞';
+    $('weapon-name').textContent = WEAPONS[player.cur].name;
   } else {
     const w = player.weapons[player.cur] || player.weapons.deagle;
     const def = WEAPONS[player.cur] || WEAPONS.deagle;

@@ -297,6 +297,59 @@ export function tearLimbGib(mesh, pos, shotDir, team, big = false, part = null) 
     try { AudioSys.gib(origin, big); } catch (e) {}
   } catch (e) {}
 }
+// Diagonal bisection (MACHETE): the body comes apart shoulder-to-opposite-hip
+// into two big halves that tumble away from the cut. The corpse mesh is gone —
+// halves + mess are physical gibs, so no ragdoll runs afterwards.
+export function bisectDiagonal(mesh, pos, shotDir, team) {
+  if (!pos) return;
+  try {
+    const M = gibMats();
+    const cloth = team === 'ct' ? M.clothCT : M.clothT;
+    const dir = shotDir ? shotDir.clone().setY(0) : new THREE.Vector3(1, 0, 0);
+    if (dir.lengthSq() < 0.01) dir.set(1, 0, 0);
+    dir.normalize();
+    const side = new THREE.Vector3(-dir.z, 0, dir.x); // across the cut
+    const oy = pos.y || 0;
+    // upper half (shoulder side) flies up + along the swing, lower half drops + back
+    const upper = new THREE.Group();
+    {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.55, 0.30), cloth);
+      m.position.y = 0.28; upper.add(m);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), M.bone);
+      head.position.y = 0.68; upper.add(head);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.5, 0.16), cloth);
+      arm.position.set(0.28, 0.25, 0); upper.add(arm);
+      const cut = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.08, 0.32), M.flesh);
+      cut.position.y = -0.02; cut.rotation.z = 0.6; upper.add(cut);
+    }
+    const lower = new THREE.Group();
+    {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.6, 0.28), cloth);
+      m.position.y = -0.3; lower.add(m);
+      for (const sx of [-0.12, 0.12]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.55, 0.19), cloth);
+        leg.position.set(sx, -0.85, 0); lower.add(leg);
+      }
+      const cut = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.08, 0.30), M.flesh);
+      cut.position.y = 0.02; cut.rotation.z = 0.6; lower.add(cut);
+    }
+    const uv = dir.clone().multiplyScalar(rand(1.5, 3)).addScaledVector(side, rand(0.5, 1.5)); uv.y = rand(2.5, 4.5);
+    const lv = dir.clone().multiplyScalar(rand(-2.5, -1)).addScaledVector(side, rand(-1.5, -0.5)); lv.y = rand(0.5, 1.5);
+    spawnGibMesh(upper, new THREE.Vector3(pos.x, oy + 1.2, pos.z), uv, { flesh: true, restY: 0.25, radius: 0.35, rest: 0.3, fric: 0.75 });
+    spawnGibMesh(lower, new THREE.Vector3(pos.x, oy + 0.6, pos.z), lv, { flesh: true, restY: 0.3, radius: 0.35, rest: 0.25, fric: 0.8 });
+    const mid = new THREE.Vector3(pos.x, oy + 1.0, pos.z);
+    spawnBloodSpray(mid, dir, 2.2);
+    spawnBurst(mid, 0xa00d10, opts.quality ? 22 : 10, 7, 0.8, 0.14);
+    try { bloodPoolBig(pos); } catch {}
+    try { AudioSys.gib(mid, true); } catch (e) {}
+    try { AudioSys.headpop(mid); } catch (e) {}
+    try { if (mesh) mesh.visible = false; } catch (e) {}
+  } catch (e) {}
+}
+function bloodPoolBig(pos) {
+  spawnBloodPool(pos.x, pos.z, true);
+  for (let i = 0; i < 3; i++) spawnBloodPool(pos.x + rand(-1.2, 1.2), pos.z + rand(-1.2, 1.2), Math.random() < 0.6);
+}
 export function restoreSoldierMesh(mesh) {
   try {
     const ud = mesh.userData || {};

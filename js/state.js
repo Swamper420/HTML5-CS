@@ -6,7 +6,7 @@ import { MONEY_MAX, MONEY_START, PRIMARIES, ROUND_TIME } from './config.js';
 import { clamp } from './utils.js';
 
 // player-dependent helpers stay here (need live player object)
-export const newLoadout = () => ({ ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 0, reserve: 0 }, p90: { owned: false, mag: 0, reserve: 0 }, helix: { owned: false, mag: 0, reserve: 0 } });
+export const newLoadout = () => ({ ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 0, reserve: 0 }, p90: { owned: false, mag: 0, reserve: 0 }, helix: { owned: false, mag: 0, reserve: 0 }, machete: { owned: true, mag: 0, reserve: 0 } });
 export const primaryKey = () => PRIMARIES.find((k) => player.weapons[k] && player.weapons[k].owned) || null;
 export const addMoney = (n) => { player.money = clamp(player.money + n, 0, MONEY_MAX); };
 
@@ -29,7 +29,7 @@ export const player = {
   pos: new THREE.Vector3(-29, 0, 0), vel: new THREE.Vector3(),
   yaw: -Math.PI / 2, pitch: 0, onGround: true,
   hp: 100, armor: 0, money: MONEY_START, alive: true,
-  weapons: { ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 5, reserve: 0 }, p90: { owned: false, mag: 0, reserve: 0 }, helix: { owned: false, mag: 0, reserve: 0 } },
+  weapons: { ak: { owned: false, mag: 0, reserve: 0 }, deagle: { owned: true, mag: 7, reserve: 35 }, awp: { owned: false, mag: 5, reserve: 0 }, p90: { owned: false, mag: 0, reserve: 0 }, helix: { owned: false, mag: 0, reserve: 0 }, machete: { owned: true, mag: 0, reserve: 0 } },
   cur: 'deagle', last: 'ak', reloading: 0, reloadDur: 1, nextShot: 0,
   aiming: false, respawnAt: 0, radius: 0.45, lastDmgDir: 0,
   crouching: false, crouch: 0, // held (or toggled) with C; crouch is the 0..1 blend

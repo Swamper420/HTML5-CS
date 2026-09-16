@@ -187,6 +187,18 @@ export function buildGunModel(key, M, root, magG, opts = {}) {
     P(root, [[0.115, -0.047], [0.125, -0.047], [0.12, -0.08], [0.11, -0.078]], 0.008, M.steel, 0, null, 0.001);
     if (hi) for (const sx of [-0.036, 0.036]) Bx(root, 0.012, 0.012, 0.36, M.dark, 0.72, -0.05, sx);
     out.muzzle = mark(1.04, 0.018);
+  } else if (key === 'machete') {
+    // MACHETE: insanely massive. Wrapped grip, brass guard, then a slab of a
+    // blade ~1.5m long — reads huge in first person and on soldiers alike.
+    P(root, [[-0.22, -0.035], [-0.02, -0.035], [-0.02, 0.035], [-0.22, 0.035]], 0.055, M.rubber);
+    if (hi) for (let i = 0; i < 4; i++) Bx(root, 0.057, 0.008, 0.02, M.dark, -0.19 + i * 0.045, 0.0);
+    P(root, [[-0.02, -0.045], [0.03, -0.045], [0.03, 0.07], [-0.02, 0.07]], 0.09, M.brass);
+    // the slab: clipped point, swedge, fuller groove
+    P(root, [[0.03, -0.10], [1.28, -0.10], [1.52, 0.02], [1.50, 0.10], [0.03, 0.10]], 0.022, M.steel);
+    if (hi) Bx(root, 0.024, 0.018, 1.05, M.dark, 0.62, 0.045);
+    if (hi) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.012, 1.30), M.chrome || M.steel); e.position.set(0, -0.095, -0.75); root.add(e); }
+    out.muzzle = mark(1.52, 0.02);
+    out.rear = mark(0.03, 0.10); out.front = mark(1.50, 0.10);
   } else if (key === 'helix') {
     // HELIX ARC: fictional coilgun. Fat shroud, 3 accelerator rings, glowing core,
     // and a spinning tri-blade rotor (out.spinner) that winds up before each shot.

@@ -472,6 +472,12 @@ export const AudioSys = {
     const firstPerson = !pos;
     const dry = firstPerson ? 0.035 : null; // FP stays dry, world uses distance verb
     const lv = legacyVol;
+    if (kind === 'machete') {
+      // massive blade swing: air whoosh + faint edge ring. Flesh impact comes from gib()/headpop() on hit.
+      this._noise({ dur: 0.22, type: 'bandpass', freq: 2600, sweepTo: 500, Q: 1.1, peak: 0.5 * lv, decay: 0.18, rate: 1.0, pos, kind: 'sfx', verb: dry });
+      this._noise({ dur: 0.1, type: 'highpass', freq: 4800, peak: 0.16 * lv, decay: 0.07, rate: 1.3, pos, kind: 'sfx', verb: dry });
+      return;
+    }
     if (kind === 'helix') {
       // HELIX ARC: pure synth — coil whine snap, plasma crack, sub slam, shimmer tail. No samples.
       // kind 'helix' carries map-wide so the release reads at long distance.

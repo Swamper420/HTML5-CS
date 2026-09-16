@@ -97,6 +97,7 @@ function throwWeaponEntry(key, mag, reserve, fromDeath) {
 export function dropWeapon(key, { both = false, fromDeath = false } = {}) {
   const w = player.weapons[key], def = WEAPONS[key];
   if (!w || !w.owned || !def) return false;
+  if (def.melee) { announce('MACHETE STAYS ON YOUR BACK', 900); return false; } // free blade: never dropped
   if (!fromDeath && !w.dual) {
     const others = SLOT_ORDER.filter((k) => k !== key && player.weapons[k] && player.weapons[k].owned);
     if (!others.length) { announce("CAN'T DROP YOUR LAST GUN", 900); AudioSys.click(250, 0.08, 0.3); return false; }

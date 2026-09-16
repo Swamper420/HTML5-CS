@@ -28,6 +28,12 @@ export const WEAPONS = {
              kickUp: 0.14, kickSide: 0.03, punch: 0.22, shake: 0.05, vmKick: 0.65, fovPunch: 9.0,
              bloomAdd: 0.05, bloomMax: 0.06, bloomDecay: 0.12, tracer: 0x66f6ff, sound: 'helix', falloff: 0,
              spinThreshold: 44 },
+  // MACHETE: free melee on key 3. No ammo, no reload — cleaves everything in front in half, diagonally.
+  machete: { name: 'MACHETE', slot: 3, damage: 150, headMult: 1.0, magSize: 0, startReserve: 0, fireInterval: 0.55, reloadTime: 0,
+             spreadHip: 0, spreadAim: 0, range: 3.4, auto: true, zoomFov: 75, price: 0,
+             kickUp: 0.02, kickSide: 0.012, punch: 0.05, shake: 0.012, vmKick: 0.3, fovPunch: 1.2,
+             bloomAdd: 0, bloomMax: 0, bloomDecay: 0.055, tracer: 0xffffff, sound: 'machete', falloff: 0,
+             melee: true },
 };
 
 // Extension point: agents add weapons without editing combat/shooting code.
@@ -45,7 +51,7 @@ export const SPRAY_AK = [
   [0.9, 0.9], [-1.0, 0.85], [0.7, 0.9], [-0.6, 0.9], [0.5, 0.9], [-0.5, 0.9],
 ];
 
-export const SLOT_ORDER = ['ak', 'deagle', 'awp', 'p90', 'helix'];
+export const SLOT_ORDER = ['ak', 'deagle', 'awp', 'p90', 'helix', 'machete'];
 export const PRIMARIES = ['ak', 'p90', 'awp', 'helix']; // CS: one primary at a time — buying another replaces it
 
 // ---------------- Tactical grenades ----------------

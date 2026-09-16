@@ -17,7 +17,7 @@ import {
   decalTextures, spawnBloodPool, spawnBurst, spawnDebris, spawnDecal, spawnSmoke, spawnTracer,
   spawnWorldFlash, worldFlashes,
 } from './effects.js';
-import { explodeHead, spawnBloodSpray, tearLimbGib } from './gibs.js';
+import { bisectDiagonal, explodeHead, spawnBloodSpray, tearLimbGib } from './gibs.js';
 import {
   GK, bloodSplatterRays, explodeBody, goreN, pickFallParams, poseCorpseLimbs, screenGore, woundPart,
 } from './gore.js';
@@ -304,12 +304,14 @@ export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
       const explosive = !isFire && (!!(gore && gore.explosive) || wName.includes('HE') || wName.includes('C4'));
       const isAWP = wName.includes('AWP');
       const isHelix = wName.includes('HELIX');
+      const isMachete = wName.includes('MACHETE');
       const isDeagle = wName.includes('DESERT') || wName.includes('DEAGLE') || wName.includes('EAGLE');
       const sdir = _sdir ? _sdir.clone() : null;
       // knock power scales the fall + slide: AWP/HE hurl bodies, rifles shove
       let power = (gore && gore.power) || 1;
       if (power === 1) {
         if (explosive) power = 2.1;
+        else if (isMachete) power = 2.5;
         else if (isHelix) power = 3.0;
         else if (isAWP) power = 2.0;
         else if (isDeagle) power = 1.4;
@@ -318,7 +320,7 @@ export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
       if (head) power += 0.15;
       bot.fall = pickFallParams(bot.pos, sdir, power);
       bot.deathPos = bot.pos.clone();
-      const slideDist = explosive ? rand(0.9, 1.6) : isHelix ? rand(1.2, 2.0) : (isAWP ? rand(0.7, 1.2) : isDeagle ? rand(0.45, 0.8) : rand(0.3, 0.65));
+      const slideDist = explosive ? rand(0.9, 1.6) : isMachete ? rand(1.0, 1.7) : isHelix ? rand(1.2, 2.0) : (isAWP ? rand(0.7, 1.2) : isDeagle ? rand(0.45, 0.8) : rand(0.3, 0.65));
       const flat = sdir ? sdir.clone().setY(0) : new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1));
       if (flat.lengthSq() < 0.01) flat.set(rand(-1, 1), 0, rand(-1, 1));
       flat.normalize();
@@ -327,7 +329,16 @@ export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {
       const part = woundPart(bot.pos.y, _hp.y, head);
       let pop = false, popPower = 1;
       const headPos = new THREE.Vector3(bot.pos.x, (bot.pos.y || 0) + 1.76, bot.pos.z);
-      if (explosive) {
+      if (isMachete) {
+        // diagonal bisection, every kill — the body is gone, two halves tumble.
+        try { bisectDiagonal(bot.mesh, bot.pos, sdir, bot.team); } catch (e) {}
+        bot.gibbed = true; bot.headless = true; bot.exploded = true;
+        try {
+          bloodSplatterRays(botChest(bot), sdir, 14, 1.2, 8);
+          const dp = camera ? camera.position.distanceTo(new THREE.Vector3(bot.pos.x, 1, bot.pos.z)) : 99;
+          if (dp < 7) screenGore(clamp(1.2 - dp / 7, 0.25, 1));
+        } catch (e) {}
+      } else if (explosive) {
         pop = Math.random() < 0.75;
         popPower = 1.7;
         tearLimbGib(bot.mesh, bot.pos, sdir, bot.team, true, part === 'head' ? 'torso' : part);
