@@ -194,19 +194,22 @@ export function buildGunModel(key, M, root, magG, opts = {}) {
     P(root, [[-0.16, 0.02], [-0.34, 0.03], [-0.345, -0.10], [-0.16, -0.09]], 0.055, M.rubber, 0, null, 0.002);
     out.stock.push(P(root, [[-0.345, 0.03], [-0.46, 0.02], [-0.46, -0.08], [-0.345, -0.09]], 0.06, M.rubber, 0, null, 0.003));
     P(root, [[0.0, -0.05], [0.07, -0.05], [0.045, -0.16], [-0.01, -0.15]], 0.045, M.bakelite);
+    out.coils = [];
     for (let i = 0; i < 3; i++) {
       const f = 0.52 + i * 0.17;
       const ring = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.014, 10, 22), M.steel);
       ring.position.set(0, 0.01, -f); root.add(ring);
-      const core = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.10, 12),
-        new THREE.MeshBasicMaterial({ color: 0x66f6ff }));
+      const coreMat = new THREE.MeshBasicMaterial({ color: 0x66f6ff });
+      const core = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.10, 12), coreMat);
       core.rotation.x = Math.PI / 2; core.position.set(0, 0.01, -f); root.add(core);
+      out.coils.push({ m: coreMat, base: coreMat.color.clone(), ph: i * 2.1 });
     }
     Cy(root, 0.012, 0.22, M.blued, 1.12, 0.01);
     Bx(root, 0.05, 0.03, 0.16, M.dark, 0.10, 0.075); // top cell housing
-    { const cell = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.07, 4, 10),
-        new THREE.MeshBasicMaterial({ color: 0x9ff3ff }));
-      cell.rotation.x = Math.PI / 2; cell.position.set(0, 0.078, -0.10); root.add(cell); }
+    { const cellMat = new THREE.MeshBasicMaterial({ color: 0x9ff3ff });
+      const cell = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.07, 4, 10), cellMat);
+      cell.rotation.x = Math.PI / 2; cell.position.set(0, 0.078, -0.10); root.add(cell);
+      out.coils.push({ m: cellMat, base: cellMat.color.clone(), ph: 4.2 }); }
     if (hi) { const d = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 6), M.glowR); d.position.set(0, 0.078, -0.19); root.add(d); }
     const spinG = new THREE.Group(); spinG.position.set(0, 0.01, -0.44); spinG.name = 'helix-spinner'; root.add(spinG);
     for (let i = 0; i < 3; i++) {

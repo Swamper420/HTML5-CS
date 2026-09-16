@@ -187,6 +187,7 @@ function startRound(first = false, fromNet = false) {
   // reset actors — team-aware spawns (CT east-central, T west far).
   player.hp = 100;
   player.alive = true; player.reloading = 0; player.spectatorOnly = false;
+  try { AudioSys.helixWhine(0); vmRig.helixRate = 0; } catch {}
   player.specTarget = null;
   player.hasBomb = false;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
@@ -339,6 +340,7 @@ export function updateRoundTimers(dt, t) {
 }
 function endMatch() {
   G.phase = 'over';
+  try { AudioSys.helixWhine(0); vmRig.helixRate = 0; } catch {}
   updateInteractHUD(null);
   for (const b of bots) if (b.alive) b.mesh.visible = true; // unhide first-person spectate target
   if ($('bomb-status')) $('bomb-status').classList.add('hidden');
@@ -359,6 +361,7 @@ function endMatch() {
 // Online the world can't stop for one player: the menu is an overlay and the game keeps running.
 export function pauseGame() {
   if (G.phase !== 'playing') return;
+  try { AudioSys.helixWhine(0); } catch {} // never drone under the menu
   const online = isOnline();
   const title = document.querySelector('#pause-menu h2'), note = document.querySelector('#pause-menu p');
   if (title) title.textContent = online ? 'MENU' : 'PAUSED';

@@ -474,13 +474,39 @@ export const AudioSys = {
     this._noise({ dur: 0.04, type: 'bandpass', freq: 2000, Q: 1.8, peak: 0.15, decay: 0.035, rate: 1.2, pos, kind: 'sfx', at: 0.055 });
     this._noise({ dur: 0.025, type: 'highpass', freq: 4600, peak: 0.07, decay: 0.02, rate: 1.6, pos, kind: 'sfx', at: 0.055 });
   },
-  helixSpin() {
-    // 1s coil spin-up riser: staged whines climbing into the shot. First-person only.
-    if (!this.ctx || !opts.sound || this.muted) return;
-    this._tone({ type: 'sine', f0: 90, f1: 320, dur: 0.32, peak: 0.20, decay: 0.3, verb: 0.05 });
-    this._tone({ type: 'sine', f0: 320, f1: 750, dur: 0.32, peak: 0.22, decay: 0.3, verb: 0.05, at: 0.3 });
-    this._tone({ type: 'sine', f0: 750, f1: 1500, dur: 0.34, peak: 0.24, decay: 0.32, verb: 0.06, at: 0.6 });
-    this._noise({ dur: 0.9, type: 'bandpass', freq: 1200, Q: 2.5, peak: 0.10, decay: 0.85, rate: 1.2, verb: 0.08 });
+  helixWhine(k) {
+    // HELIX rotor loop: one persistent voice whose pitch/gain follow rotor energy 0..1.
+    // Call every frame while the gun is up; k=0 coasts it silent and frees the nodes.
+    if (!this.ctx) return;
+    k = (!opts.sound || this.muted) ? 0 : clamp(k || 0, 0, 1);
+    const t = this.now();
+    let h = this._helixWh;
+    if (!h) {
+      if (k <= 0.001) return;
+      try {
+        const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 80;
+        const o2 = this.ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = 160;
+        const g2 = this.ctx.createGain(); g2.gain.value = 0.3;
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        o.connect(g); o2.connect(g2); g2.connect(g); g.connect(this.master);
+        o.start(); o2.start();
+        h = this._helixWh = { o, o2, g };
+      } catch (e) { return; }
+    }
+    try {
+      h.o.frequency.setTargetAtTime(80 + k * 1320, t, 0.03);
+      h.o2.frequency.setTargetAtTime(160 + k * 2640, t, 0.03);
+      h.g.gain.setTargetAtTime(k * 0.14, t, 0.06);
+    } catch (e) {}
+    if (k <= 0.001 && h) {
+      // coasted out: stop + disconnect shortly after the ramp lands
+      const { o, o2, g } = h;
+      this._helixWh = null;
+      try {
+        o.stop(t + 0.5); o2.stop(t + 0.5);
+        setTimeout(() => { try { o.disconnect(); o2.disconnect(); g.disconnect(); } catch (e) {} }, 700);
+      } catch (e) {}
+    }
   },
   helixReady() {
     // cell recharged: bright double-chime + soft thunk.

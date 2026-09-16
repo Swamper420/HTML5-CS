@@ -22,12 +22,12 @@ export const WEAPONS = {
              kickUp: 0.0062, kickSide: 0.0045, punch: 0.008, shake: 0.002, vmKick: 0.045, fovPunch: 0.8,
              bloomAdd: 0.0032, bloomMax: 0.03, bloomDecay: 0.07, tracer: 0xffe9a8, sound: 'smg', falloff: 0.55 },
   // HELIX ARC: fictional coilgun. magSize 1 = battery cell; reloadTime 5 = recharge (no reserve — see shooting.js).
-  // spinUp 1.0 = trigger must be held 1s while the coils spin before it fires.
+  // spinThreshold = rotor speed (rad/s, max 48) the trigger must wind up to before it fires (~1s hold).
   helix:  { name: 'HELIX ARC', slot: 0, damage: 1000, headMult: 1.0, magSize: 1, startReserve: 0, fireInterval: 1.1, reloadTime: 5.0,
              spreadHip: 0.002, spreadAim: 0.0005, range: 240, auto: true, zoomFov: 40, price: 6000,
              kickUp: 0.14, kickSide: 0.03, punch: 0.22, shake: 0.05, vmKick: 0.65, fovPunch: 9.0,
              bloomAdd: 0.05, bloomMax: 0.06, bloomDecay: 0.12, tracer: 0x66f6ff, sound: 'helix', falloff: 0,
-             spinUp: 1.0 },
+             spinThreshold: 44 },
 };
 
 // Extension point: agents add weapons without editing combat/shooting code.

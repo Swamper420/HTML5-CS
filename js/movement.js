@@ -27,7 +27,7 @@ import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
 import { updateSpectate, updateSpectateOverlay } from './spectate.js';
 import { G, isFreeze, keys, player } from './state.js';
 import {
-  VM_AIM, VM_AIM_SOLVED, VM_HIP, buildViewmodel, viewmodel, vmBase, vmBolt, vmL, vmMag, vmRig, vmSpinner, vmStockParts,
+  VM_AIM, VM_AIM_SOLVED, VM_HIP, buildViewmodel, viewmodel, vmBase, vmBolt, vmCoils, vmL, vmMag, vmRig, vmSpinner, vmStockParts,
 } from './viewmodel.js';
 
 let stepAt = 0;
@@ -38,6 +38,7 @@ function endWallRun() {
 }
 export function updatePlayer(dt, t) {
   if (!player.alive) {
+    try { AudioSys.helixWhine(0); } catch {} // never drone while dead
     // CS: dead until round ends — spectate a living teammate instead of a
     // static death cam. Auto-advances when the target dies (spectateCurrent).
     const before = player.specTarget;
@@ -237,7 +238,7 @@ export function updatePlayer(dt, t) {
   // firing (also catch fast semi-auto clicks that release within one frame; blocked in freeze)
   // nades throw via mousedown/mouseup prime-release — never via the hitscan path
   // HELIX spin-up needs a fresh trigger hold: releasing resets the wind.
-  if (player.cur === 'helix' && !mouseDown) { player._helixSpin = 0; player._helixHummed = false; }
+  if (player.cur === 'helix' && !mouseDown) { player._helixSpin = 0; }
   if (!isNade && (mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze()) {
     if (def.auto) playerTryFire(t);
     else if (mouseJustDown) { playerTryFire(t); }
@@ -339,13 +340,26 @@ export function updatePlayer(dt, t) {
     }
     vmBase.position.set(px, py, pz);
     vmBase.rotation.set(rx, ry, rz);
-    // HELIX rotor: idle crawl, screaming spin while the trigger is held, slow churn while recharging
+    // HELIX rotor: real spool inertia — winds up toward full scream while held,
+    // coasts back down on release, churns slow while the cell recharges.
+    // Coils pulse with rotor energy (idle breathing -> strobing chase at full spin).
     try {
-      if (vmSpinner && player.cur === 'helix') {
-        let rate = 2;
-        if (player.reloading > 0) rate = 6;
-        else if (mouseDown && player._helixSpin) rate = 2 + clamp((t - player._helixSpin) / 1, 0, 1) * 46;
-        vmSpinner.rotation.z += rate * dt;
+      const isH = player.cur === 'helix';
+      const hw = isH && player.weapons.helix;
+      const holding = isH && mouseDown && player._helixSpin && player.reloading <= 0 && hw && hw.mag > 0 && player.alive;
+      const tgt = !isH ? 0 : player.reloading > 0 ? 6 : holding ? 48 : 2;
+      const kk = tgt > vmRig.helixRate ? 2.6 : 1.4; // spool up quick, coast down slow
+      vmRig.helixRate += (tgt - vmRig.helixRate) * Math.min(1, dt * kk);
+      if (Math.abs(vmRig.helixRate) < 0.01) vmRig.helixRate = 0;
+      if (vmSpinner && isH) vmSpinner.rotation.z += vmRig.helixRate * dt;
+      const e = clamp(vmRig.helixRate / 48, 0, 1);
+      try { AudioSys.helixWhine(isH ? e : 0); } catch {}
+      if (vmCoils && isH) {
+        for (const c of vmCoils) {
+          const breathe = 0.7 + 0.3 * Math.sin(t * 3.1 + c.ph);
+          const strobe = 0.5 + 0.5 * Math.sin(t * (10 + e * 38) + c.ph * 2);
+          c.m.color.copy(c.base).multiplyScalar(breathe * (1 - e) + (1.1 + 1.3 * strobe) * e);
+        }
       }
     } catch {}
   }

@@ -8,7 +8,7 @@ import { buildGunModel, gunMats } from './gunmodels.js';
 import { camera, scene } from './render.js';
 import { player } from './state.js';
 
-export let viewmodel = null, vmMuzzle = null, vmBase = null, vmKickG = null, vmFlashGroup = null, vmBolt = null, vmMag = null, vmSpinner = null;
+export let viewmodel = null, vmMuzzle = null, vmBase = null, vmKickG = null, vmFlashGroup = null, vmBolt = null, vmMag = null, vmSpinner = null, vmCoils = null;
 export let vmL = null; // left-hand gun when dual wielding: { base, kick, mag, muzzle, flash }
 // Iron-sight reference points: the top of the rear notch and the tip of the front
 // post. The eye sits at the camera origin, so a correct sight picture means both of
@@ -23,6 +23,7 @@ export const vmRig = {
   swayX: 0, swayY: 0, bobT: 0, aimK: 0, drawT: 1, landK: 0, busyK: 0,
   fovKick: 0, punchP: 0, punchY: 0, shake: 0,
   muzzleT: 0, boltT: 0,
+  helixRate: 0, // HELIX rotor angular speed (rad/s) — spools with inertia, drives whine + coil pulse
 };
 export const VM_HIP = new THREE.Vector3(0.24, -0.235, -0.42);
 export const VM_AIM = {
@@ -129,6 +130,7 @@ export function buildViewmodel(key, opts = {}) {
   vmKickG = new THREE.Group();
   vmBolt = null;
   vmSpinner = null;
+  vmCoils = null;
   vmSightRear = vmSightFront = null; vmStockParts = [];
   viewmodel.add(vmBase); vmBase.add(vmKickG);
   vmMag = new THREE.Group(); vmKickG.add(vmMag); // magazine rides its own group so it can drop
@@ -144,7 +146,7 @@ export function buildViewmodel(key, opts = {}) {
 
   if (WEAPONS[key]) {
     const gm = buildGunModel(key, M, vmKickG, vmMag, { hands: true });
-    vmMuzzle = gm.muzzle; vmBolt = gm.bolt; vmSpinner = gm.spinner || null;
+    vmMuzzle = gm.muzzle; vmBolt = gm.bolt; vmSpinner = gm.spinner || null; vmCoils = gm.coils || null;
     vmSightRear = gm.rear; vmSightFront = gm.front; vmStockParts = gm.stock;
     vmMag.userData.top = key === 'p90'; // P90 mag lifts off the top instead of dropping
   } else if (isNadeKey(key)) {

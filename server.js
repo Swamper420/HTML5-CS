@@ -196,7 +196,7 @@ const RATE_BURST = 240;
 // Dropped weapons on the floor: wid -> { wid, key, mag, reserve, x, y, z, ry, at }.
 // The server arbitrates pickups so two players can never grab the same gun.
 const drops = new Map();
-const WEAPON_KEYS = new Set(['ak', 'deagle', 'awp', 'p90']);
+const WEAPON_KEYS = new Set(['ak', 'deagle', 'awp', 'p90', 'helix']);
 // id -> { ws, id, name, team, state, lastSeen }
 const clients = new Map();
 

@@ -40,15 +40,14 @@ export function playerTryFire(t, hand = 'R') {
       startReload();
       return;
     }
-    // Spin-up gate: trigger must be held (spinUp)s while the rotor winds.
-    const need = def.spinUp || 1.0;
+    // Spin-up gate: the shot breaks when the rotor winds past spinThreshold —
+    // spinrate is the defining factor, not hold time. (Rotor inertia + whine
+    // are driven per-frame in movement.js; this just gates the shot.)
     if (!player._helixSpin || t - player._helixSpin < 0) player._helixSpin = t;
-    if (t - player._helixSpin < need) {
-      if (!player._helixHummed) { player._helixHummed = true; try { AudioSys.helixSpin(); } catch {} }
+    if (vmRig.helixRate < (def.spinThreshold || 44)) {
       player[nextKey] = t + 0.05; // stay trigger-hot; fires once wound
       return;
     }
-    player._helixHummed = false;
   } else
   if (w[magKey] <= 0) {
     AudioSys.click(300, 0.06, 0.3); player[nextKey] = t + 0.3;
@@ -185,7 +184,7 @@ export function startReload() {
     // Battery recharge: no reserve, 5s cell cycle. Manual R restarts it.
     if (player.reloading > 0 || w.mag >= def.magSize || !player.alive) return;
     player.reloading = def.reloadTime; player.reloadDur = def.reloadTime;
-    player.sprayIdx = 0; player._helixSpin = 0; player._helixHummed = false;
+    player.sprayIdx = 0; player._helixSpin = 0;
     AudioSys.click(500, 0.15, 0.3);
     const tip = $('reload-tip'); tip.textContent = 'RECHARGING…'; tip.classList.remove('hidden');
     return;
@@ -204,7 +203,7 @@ export function finishReload() {
   if (!w || !def) { player.reloading = 0; return; }
   if (wkey === 'helix') {
     w.mag = def.magSize; w.reserve = 0;
-    player.reloading = 0; player.bloom = 0; player._helixSpin = 0; player._helixHummed = false;
+    player.reloading = 0; player.bloom = 0; player._helixSpin = 0;
     const tip = $('reload-tip'); tip.textContent = 'RELOADING…'; tip.classList.add('hidden');
     try { AudioSys.helixReady(); } catch {}
     try { announce('HELIX CHARGED ⚡', 800); } catch {}
@@ -239,7 +238,7 @@ export function switchWeapon(key) {
   try { updateInteractHUD(null); } catch (e) {}
   player.reloading = 0; $('reload-tip').classList.add('hidden');
   player.bloom = 0; player.sprayIdx = 0;
-  player._helixSpin = 0; player._helixHummed = false; // fresh trigger for the coilgun
+  player._helixSpin = 0; // fresh trigger for the coilgun
   // You cannot carry a sight picture through a weapon swap — dropping ADS also
   // stops the new gun snapping straight to its aim pose with no raise animation.
   player.aiming = false;
