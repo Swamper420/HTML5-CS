@@ -11,6 +11,7 @@ import {
 import { disarmNuke, playerPrimeNade, playerReleaseNade } from './grenades.js';
 import { announce } from './hud.js';
 import { dropWeapon, isDualCur } from './pickups.js';
+import { startPee, stopPee, PEE } from './pee.js';
 import { renderer } from './render.js';
 import { pauseGame } from './rounds.js';
 import { setScoreboard } from './scoreboard.js';
@@ -77,12 +78,13 @@ export function initInput() {
     }
     if (e.code === 'KeyC' && SET.crouchToggle && !e.repeat) player.crouchWant = !player.crouchWant;
     if (e.code === 'KeyR') startReload();
+    if (e.code === 'KeyP' && !e.repeat && !G.buyOpen) startPee(performance.now() / 1000);
     if (e.code === 'KeyX' && player.carryingNuke) { if (!e.repeat) disarmNuke(); return; }
     if (e.code === 'KeyX' && WEAPONS[player.cur]) dropWeapon(player.cur);
     if (e.code === 'KeyE') player.useQueued = performance.now() / 1000;
     if (e.code === 'KeyB') toggleBuy();
   });
-  addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'Tab') setScoreboard(false); });
+  addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'Tab') setScoreboard(false); if (e.code === 'KeyP') stopPee(); });
   addEventListener('blur', () => { clearKeys(); try { setScoreboard(false); } catch {} });
   document.addEventListener('mousedown', (e) => {
     if (G.phase !== 'playing' || !pointerLocked) return;
@@ -93,6 +95,8 @@ export function initInput() {
       return;
     }
     if (G.buyOpen) { if (e.button === 0) buyCursorClick(); return; }
+    // hands busy peeing: no shooting, no nade priming — release P
+    if (PEE.peeing) { if (!e.repeat) AudioSys.dryfire(); return; }
     // Nades (CS2): hold LMB = far, RMB = short lob, both = medium — throws on release.
     if (isNadeKey(player.cur)) {
       if (G.buyOpen || isFreeze() || G.roundEnding) return;

@@ -419,6 +419,14 @@ export function damagePlayer(dmg, shooter, head) {
   const hpBefore = player.hp;
   player.hp -= dmg;
   try { noteDamageTaken(shooter, hpBefore - Math.max(0, player.hp), player.hp <= 0); } catch {}
+  // Piss in the eyes: brief white-out. Victim-side, so it works online — the
+  // attacker's 'hit' just carries weapon 'PEE', same as bullets.
+  try {
+    if (String((shooter && shooter.weaponName) || '').toUpperCase() === 'PEE' && player.alive) {
+      const tt = performance.now() / 1000;
+      if (tt + 1.0 > (player.flashUntil || 0)) { player.flashUntil = tt + 1.0; player.flashMax = 1.0; }
+    }
+  } catch {}
   AudioSys.hurt();
   try { noteDamage(player, shooter); } catch {}
   try { screenGore(clamp(dmg / 55, 0.15, 1) * (head ? 1.3 : 1)); } catch (e) {}

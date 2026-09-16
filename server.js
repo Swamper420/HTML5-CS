@@ -368,6 +368,7 @@ wss.on('connection', (ws, req) => {
           dual: !!m.dual,                          // dual wielding the current weapon
           planting: !!m.planting,                  // kneel anim while working the bomb
           defusing: !!m.defusing,
+          peeing: !!m.peeing,                      // piss stream (visual droplets on receivers)
           harvesting: !!m.harvesting,               // kneel anim while working the weed farm
           reloading: !!m.reloading,                // reload anim + sound cue
           helix: Math.max(0, Math.min(1, +m.helix || 0)), // coil energy 0..1 (wind-up whine)

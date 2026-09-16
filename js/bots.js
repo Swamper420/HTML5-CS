@@ -20,6 +20,7 @@ import { setSoldierGun } from './gunmodels.js';
 import { announce } from './hud.js';
 import { waypoints } from './map.js';
 import { inFire } from './molotov.js';
+import { onPee } from './pee.js';
 import { isMultiplayer } from './multiplayer.js';
 import { scene } from './render.js';
 import { _smokePt, hasLOSClear, smokeBlocks, smokePushAt, smokeSlowAt } from './smoke.js';
@@ -294,6 +295,8 @@ export function updateBot(bot, dt, t) {
   botDepenetrate(bot);
   if (t >= bot.nextThink) botThink(bot, t);
   let moveDir = null, speed = bot.speed;
+  // ponytail: piss reads as slippery via struggle (slow + wobble), not a physics sim
+  try { if (onPee(bot.pos.x, bot.pos.z)) { speed *= 0.5; bot.yaw += rand(-1, 1) * dt * 2; } } catch {}
 
   // --- Flash blindness: stagger in place, no shooting/thinking (CS full white) ---
   if (bot.blindUntil && t < bot.blindUntil) {

@@ -152,7 +152,7 @@ export const Net = {
             weapon: String(p.weapon || 'deagle').slice(0, 12),
             aiming: !!p.aiming, moving: !!p.moving,
             crouch: !!p.crouch, gnd: p.gnd !== false, wr: Math.max(-1, Math.min(1, p.wr | 0)), dual: !!p.dual,
-            planting: !!p.planting, defusing: !!p.defusing, harvesting: !!p.harvesting,
+            planting: !!p.planting, defusing: !!p.defusing,             harvesting: !!p.harvesting, peeing: !!p.peeing,
             reloading: !!p.reloading, helix: Math.max(0, Math.min(1, +p.helix || 0)), yell: !!p.yell,
             nuke: !!p.nuke,
             // beater Yaris: driver flag + owner-simulated car pose + event counters (honk/backfire)

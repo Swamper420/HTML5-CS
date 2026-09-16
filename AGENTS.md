@@ -67,6 +67,7 @@ grep -ln "\bupdateBot\b" js/*.js main.js         # who uses it
 | `js/minimap.js` | 148 | Minimap |
 | `js/weed.js` | | Mid-map weed farm: hold-E harvest ($100/s), trip hallucination |
 | `js/yaris.js` | | Drivable beater Yaris: E enter/exit, WASD + Space handbrake, horn, run-overs |
+| `js/pee.js` | | Piss: hold P arcing stream (blinds + friendly fire), slippery puddles, 20s evaporate, online via nade channel + snapshot peeing flag |
 
 ## Frame order (`loop()` in main.js, while playing)
 timers → `updatePlayer` → `updatePlayerBody` → bots (`updateBot`, `animateBotMesh`; skipped in PvP) → `updateRemoteMeshes` → `updateBomb` → `updateWeed` → `updateYaris` → `updateNades` → `updateEffects` → `updateScreenFeel` → `updateGoreScreen` → `updateHUD`/`updateBuyTimer` → `drawMinimap` → render.

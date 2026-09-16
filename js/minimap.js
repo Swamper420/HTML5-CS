@@ -10,6 +10,7 @@ import { colliders } from './map.js';
 import { isMultiplayer, isOnline, remotes } from './multiplayer.js';
 import { hasLOSClear, smokeVolumeRadius } from './smoke.js';
 import { WEED } from './weed.js';
+import { peeZones, PEE_EVAP } from './pee.js';
 import { YARIS } from './yaris.js';
 import { bots, player } from './state.js';
 
@@ -158,6 +159,13 @@ export function drawMinimap(t) {
     g.fillStyle = '#ffffff';
     for (const p of nadeProjectiles) {
       g.fillRect(px(p.pos.x) - 1.5, pz(p.pos.z) - 1.5, 3, 3);
+    }
+    for (const z of peeZones) {
+      const left = z.until - performance.now() / 1000;
+      if (left <= 0) continue;
+      const rr = ((z.maxR * Math.max(0, left / PEE_EVAP)) / world) * S;
+      g.fillStyle = 'rgba(215,185,30,0.4)';
+      g.beginPath(); g.arc(px(z.x), pz(z.z), Math.max(2, rr), 0, 7); g.fill();
     }
   } catch (e) {}
   // player arrow (greyed out while spectating)

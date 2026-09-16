@@ -15,6 +15,7 @@ import { announce, flashExplosionOverlay, playerHitmark, updateHUD } from './hud
 import { mouseJustDown, rmbJustDown, setCrossGap, setMouseJustDown, setRmbJustDown } from './input.js';
 import { isOnline, remotes } from './multiplayer.js';
 import { DUAL } from './pickups.js';
+import { PEE } from './pee.js';
 import { playerMesh } from './playerbody.js';
 import { camera, muzzleLight } from './render.js';
 import { G, isFreeze, bots, keys, player } from './state.js';
@@ -93,6 +94,8 @@ export function meleeSlash(t, wkey, def) {
   updateHUD();
 }
 export function playerTryFire(t, hand = 'R') {
+  // hands busy peeing — release P, then shoot
+  if (PEE.peeing) { setMouseJustDown(false); setRmbJustDown(false); return; }
   // nades never reach the hitscan path — they prime/throw instead
   if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];

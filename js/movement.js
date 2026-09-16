@@ -21,6 +21,7 @@ import {
 } from './input.js';
 import { isOnline } from './multiplayer.js';
 import { DUAL, isDualCur, updateWorldWeapons } from './pickups.js';
+import { onPee, stopPee, PEE } from './pee.js';
 import { WEED } from './weed.js';
 import { YARIS } from './yaris.js';
 import { camera, coilLight } from './render.js';
@@ -43,6 +44,7 @@ export function updatePlayer(dt, t) {
   if (!player.alive) {
     try { AudioSys.helixWhine(0); } catch {} // never drone while dead
     try { AudioSys.tarzanLoop(false); } catch {}
+    try { stopPee(); } catch {}
     try { if (coilLight) coilLight.intensity = 0; } catch {}
     _helixWindSent = false;
     // CS: dead until round ends — spectate a living teammate instead of a
@@ -149,7 +151,9 @@ export function updatePlayer(dt, t) {
       if (t > stepAt) { stepAt = t + 0.24; AudioSys.step(null, true); }
     }
   } else {
-    const accel = player.onGround ? 14 : 3;
+    // piss is slippery: near-zero traction, you keep your momentum
+    let accel = player.onGround ? 14 : 3;
+    try { if (player.onGround && !player.driving && onPee(player.pos.x, player.pos.z)) accel = 1.1; } catch {}
     player.vel.x += (mx - player.vel.x) * Math.min(1, accel * dt);
     player.vel.z += (mz - player.vel.z) * Math.min(1, accel * dt);
     // gravity / jump (blocked while frozen — CS freeze time)
@@ -447,6 +451,7 @@ export function updatePlayer(dt, t) {
       wr: player.wallRun ? player.wallRun.side : 0,
       planting: !!(player.alive && keys['KeyE'] && playerInPlantSite()),
       defusing: !!(player.alive && keys['KeyE'] && playerNearPlantedBomb()),
+      peeing: !!PEE.peeing,
       harvesting: !!WEED.harvesting,
       // sound state: reload + coil energy so remotes hear wind-up/recharge in time
       reloading: player.reloading > 0,

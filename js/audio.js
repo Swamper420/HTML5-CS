@@ -293,6 +293,43 @@ export const AudioSys = {
     this._noise({ dur: 0.14, type: 'bandpass', freq: 900, Q: 1, peak: 0.09, decay: 0.12, rate: 1 });
     this._tone({ type: 'sine', f0: 180, f1: 120, dur: 0.1, peak: 0.07, decay: 0.09 });
   },
+  peeLoop(on) {
+    // Own stream: one persistent trickle voice, call every frame, on=false frees it.
+    if (!this.ctx) return;
+    on = !!on && !!opts.sound && !this.muted;
+    const t = this.now();
+    let h = this._peeLp;
+    if (!h) {
+      if (!on) return;
+      try {
+        const src = this.ctx.createBufferSource();
+        src.buffer = this._white; src.loop = true; src.playbackRate.value = 1.4;
+        const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 4200; f.Q.value = 0.7;
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        src.connect(f); f.connect(g); g.connect(this.master);
+        src.start();
+        h = this._peeLp = { src, f, g };
+      } catch (e) { return; }
+    }
+    try {
+      // splatter wobble so it never sounds like a steady hose
+      h.f.frequency.setTargetAtTime(3800 + 900 * Math.sin(t * 13) + 400 * Math.sin(t * 31), t, 0.03);
+      h.g.gain.setTargetAtTime(on ? 0.09 : 0, t, on ? 0.08 : 0.06);
+    } catch (e) {}
+    if (!on) {
+      const { src, f, g } = h;
+      this._peeLp = null;
+      try {
+        src.stop(t + 0.3);
+        setTimeout(() => { try { src.disconnect(); f.disconnect(); g.disconnect(); } catch (e) {} }, 500);
+      } catch (e) {}
+    }
+  },
+  peeAt(pos) {
+    // Someone else's stream: short positional trickle burst (fired per relay update).
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    this._noise({ dur: 0.4, type: 'bandpass', freq: 4200, Q: 0.7, peak: 0.22, decay: 0.38, rate: 1.4, pos, kind: 'sfx', verb: 0.08 });
+  },
   applyVolumes() {
     if (!this.ctx) return;
     try {

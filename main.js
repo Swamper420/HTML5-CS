@@ -30,6 +30,7 @@ import {
 } from './js/multiplayer.js';
 import { updatePlayerBody } from './js/playerbody.js';
 import { updateWeed, buildWeed } from './js/weed.js';
+import { initPee, updatePee } from './js/pee.js';
 import { buildYaris, updateYaris } from './js/yaris.js';
 import { camera, initThree, renderer, scene, sunLight } from './js/render.js';
 import { lockPointer, pauseGame, resumeGame, startMatch, updateRoundTimers } from './js/rounds.js';
@@ -102,6 +103,7 @@ function loop() {
     try { if (isOnline()) updateRemoteMeshes(dt, t); } catch {}
     updateBomb(dt, t);
     try { updateWeed(dt, t); } catch (e) { console.warn('weed', e); }
+    try { updatePee(dt, t); } catch (e) { console.warn('pee', e); }
     try { updateYaris(dt, t); } catch (e) { console.warn('yaris', e); }
     try { updateNades(dt, t); } catch (e) { console.warn('nades', e); }
     updateEffects(dt, t);
@@ -179,6 +181,7 @@ function boot() {
   buildMap();
   buildWeed();
   buildYaris();
+  try { initPee(); } catch (e) { console.warn('pee net', e); }
   buildViewmodel('deagle');
   if (viewmodel) viewmodel.visible = false; // hidden until match starts
   for (let i = 0; i < 4; i++) makeBot('ct', i);
