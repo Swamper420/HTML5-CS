@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { Net } from '../net.js';
 import { AudioSys } from './audio.js';
 import { MAP_HALF } from './config.js';
-import { clamp, rand } from './utils.js';
+import { clamp, rand, $ } from './utils.js';
 import { collidesAt, supportHeightAt } from './collision.js';
 import { damageBot } from './combat.js';
 import { spawnBurst, spawnSmoke } from './effects.js';
@@ -103,6 +103,8 @@ export function stopPee() {
 
 export function resetPee() {
   stopPee();
+  try { player.peeUntil = 0; player.peeMax = 0; } catch {}
+  try { const el = $('pee-overlay'); if (el) el.style.opacity = 0; } catch {}
   for (const d of peeDrops) { try { scene.remove(d.mesh); } catch {} }
   peeDrops.length = 0;
   for (const zn of peeZones) { try { scene.remove(zn.mesh); } catch {} }
@@ -289,4 +291,20 @@ export function updatePee(dt, t) {
       }
     } catch {}
   }
+  // melting piss-blindness overlay: yellow drip wash + lens wobble while it lasts
+  try {
+    const el = $('pee-overlay');
+    if (el) {
+      const left = (player.peeUntil || 0) - t;
+      if (left <= 0 || G.phase !== 'playing' || !player.alive) {
+        if (el.style.opacity !== '0' && el.style.opacity !== 0) el.style.opacity = 0;
+        player.peeMax = 0;
+      } else {
+        const k = clamp(left / Math.max(0.001, player.peeMax || left), 0, 1);
+        el.style.opacity = (Math.pow(k, 0.8) * 0.92).toFixed(3);
+        try { camera.rotation.z += Math.sin(t * 13.0) * 0.022 * k; } catch {}
+        try { camera.rotation.x += Math.sin(t * 17.3 + 1) * 0.008 * k; } catch {}
+      }
+    }
+  } catch {}
 }

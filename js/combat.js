@@ -486,6 +486,8 @@ export function damagePlayer(dmg, shooter, head) {
     if (String((shooter && shooter.weaponName) || '').toUpperCase() === 'PEE' && player.alive) {
       const tt = performance.now() / 1000;
       if (tt + 1.0 > (player.flashUntil || 0)) { player.flashUntil = tt + 1.0; player.flashMax = 1.0; }
+      // yellow melt outlasts the white-out: lens stays stained while vision returns
+      if (tt + 2.4 > (player.peeUntil || 0)) { player.peeUntil = tt + 2.4; player.peeMax = 2.4; }
     }
   } catch {}
   AudioSys.hurt();

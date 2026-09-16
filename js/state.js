@@ -48,6 +48,7 @@ export const player = {
   carryingNuke: false, nukeArmedAt: 0, // two-hand live-bomb carry: touch a wall/person = boom
   _moveBlocked: false, // set per-frame by movement.js: full intent, ~no travel (ran face-first into a wall)
   flashUntil: 0, flashMax: 0, // white-out blindness (performance-time seconds)
+  peeUntil: 0, peeMax: 0, // piss-in-eyes melt overlay (performance-time seconds)
   burnT: 0, // last molotov burn tick overlay
 };
 
