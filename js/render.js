@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { $ } from './utils.js';
 
-export let renderer, scene, camera, sunLight, muzzleLight, vmFill = null;
+export let renderer, scene, camera, sunLight, muzzleLight, coilLight, vmFill = null;
 export let maxAniso = 4;
 
 // Seeded value-noise helper for procedural textures (cheap, tileable-ish)
@@ -121,6 +121,9 @@ export function initThree() {
 
   muzzleLight = new THREE.PointLight(0xffc36b, 0, 14, 2);
   scene.add(muzzleLight);
+  // HELIX wind-up glow: cyan wash cast all around the charging player
+  coilLight = new THREE.PointLight(0x66f6ff, 0, 24, 1.7);
+  scene.add(coilLight);
 
   // small warm fill attached to camera so viewmodel + nearby walls read well
   vmFill = new THREE.PointLight(0xfff0d8, 0.55, 6, 1.6);

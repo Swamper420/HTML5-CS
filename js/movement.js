@@ -21,7 +21,7 @@ import {
 } from './input.js';
 import { isOnline } from './multiplayer.js';
 import { DUAL, isDualCur, updateWorldWeapons } from './pickups.js';
-import { camera } from './render.js';
+import { camera, coilLight } from './render.js';
 import { finishReload, playerTryFire } from './shooting.js';
 import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
 import { updateSpectate, updateSpectateOverlay } from './spectate.js';
@@ -40,6 +40,7 @@ function endWallRun() {
 export function updatePlayer(dt, t) {
   if (!player.alive) {
     try { AudioSys.helixWhine(0); } catch {} // never drone while dead
+    try { if (coilLight) coilLight.intensity = 0; } catch {}
     _helixWindSent = false;
     // CS: dead until round ends — spectate a living teammate instead of a
     // static death cam. Auto-advances when the target dies (spectateCurrent).
@@ -366,12 +367,24 @@ export function updatePlayer(dt, t) {
       const e = clamp(vmRig.helixRate / 48, 0, 1);
       try { AudioSys.helixWhine(isH ? e : 0); } catch {}
       if (vmCoils && isH) {
+        // HAM: idle breathing -> screaming white-hot strobing chase at full spin.
+        // MeshBasicMaterial colors above 1 blow through tone mapping into pure glare.
         for (const c of vmCoils) {
           const breathe = 0.7 + 0.3 * Math.sin(t * 3.1 + c.ph);
-          const strobe = 0.5 + 0.5 * Math.sin(t * (10 + e * 38) + c.ph * 2);
-          c.m.color.copy(c.base).multiplyScalar(breathe * (1 - e) + (1.1 + 1.3 * strobe) * e);
+          const strobe = 0.5 + 0.5 * Math.sin(t * (14 + e * 60) + c.ph * 2);
+          const heat = breathe * (1 - e) + (1.2 + 7.5 * strobe) * e;
+          c.m.color.copy(c.base).multiplyScalar(heat);
         }
       }
+      // Dynamic light wash all around the charging player, flickering with the strobe.
+      try {
+        if (coilLight) {
+          if (isH && e > 0.01) {
+            coilLight.position.set(player.pos.x, player.pos.y + 1.4, player.pos.z);
+            coilLight.intensity = e * 30 * (0.88 + 0.12 * Math.sin(t * 43));
+          } else coilLight.intensity = 0;
+        }
+      } catch {}
     } catch {}
   }
 

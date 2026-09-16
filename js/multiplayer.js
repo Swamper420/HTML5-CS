@@ -60,6 +60,7 @@ export function removeRemoteMesh(id) {
   const e = remotes.get(id);
   if (!e) return;
   try { AudioSys.helixRemote(id, 0); } catch {}
+  try { coilRemote(id, 0, 0, -99, 0, 0); } catch {}
   try { scene.remove(e.mesh); } catch {}
   try { if (e.blob) scene.remove(e.blob); } catch {}
   remotes.delete(id);
@@ -241,7 +242,51 @@ export function updateRemoteMeshes(dt, t) {
       if (hk > 0.01) AudioSys.helixRemote(id, hk, { x: e.pos.x, y: e.pos.y + 1.4, z: e.pos.z });
       else AudioSys.helixRemote(id, 0);
     } catch {}
+    // Remote coil glow + dynamic light wash, driven by the same relayed 0..1 state.
+    try {
+      const hk2 = (r.weapon === 'helix' && r.alive) ? (+r.helix || 0) : 0;
+      const mud = m.userData || {};
+      const gunG = mud.gunG || mud.gun || (mud.rig && mud.rig.gun);
+      const coils = gunG && gunG.userData.coils;
+      if (coils && r.weapon === 'helix') {
+        for (const c of coils) {
+          const breathe = 0.7 + 0.3 * Math.sin(t * 3.1 + c.ph);
+          const strobe = 0.5 + 0.5 * Math.sin(t * 74 + c.ph * 2);
+          c.m.color.copy(c.base).multiplyScalar(breathe * (1 - hk2) + (1.2 + 7.5 * strobe) * hk2);
+        }
+      }
+      coilRemote(id, hk2, e.pos.x, e.pos.y + 1.2, e.pos.z, t);
+    } catch {}
   }
+}
+
+// Shared pool of cyan wash lights for winding enemies (max 3 — beyond that, glow only).
+const _coilPool = [];
+function coilRemote(id, k, x, y, z, t) {
+  let slot = null;
+  for (const s of _coilPool) if (s.id === id) { slot = s; break; }
+  if (!slot) {
+    if (!(k > 0.04)) return;
+    const free = _coilPool.find((s) => !s.id);
+    if (free) slot = free;
+    else if (_coilPool.length < 3) {
+      try {
+        const light = new THREE.PointLight(0x66f6ff, 0, 24, 1.7);
+        scene.add(light);
+        slot = { light, id: null };
+        _coilPool.push(slot);
+      } catch { return; }
+    } else return;
+    slot.id = id;
+  }
+  try {
+    if (!(k > 0.04) || !isFinite(x + y + z)) { slot.light.intensity = 0; slot.id = null; return; }
+    slot.light.position.set(x, y, z);
+    slot.light.intensity = k * 26 * (0.88 + 0.12 * Math.sin(t * 43 + id));
+  } catch {}
+}
+export function killCoilLights() {
+  for (const s of _coilPool) { try { s.light.intensity = 0; } catch {} s.id = null; }
 }
 
 // Outgoing state @ ~20Hz + incoming event wiring (called once from boot).

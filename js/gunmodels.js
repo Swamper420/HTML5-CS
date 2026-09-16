@@ -235,7 +235,8 @@ export function setSoldierGun(mesh, key) {
   for (let i = gunG.children.length - 1; i >= 0; i--) gunG.remove(gunG.children[i]);
   const holder = new THREE.Group(); holder.rotation.y = Math.PI; holder.scale.setScalar(0.85); holder.position.z = 0.02;
   gunG.add(holder);
-  buildGunModel(key, _worldGunMats, holder, holder, { world: true });
+  const built = buildGunModel(key, _worldGunMats, holder, holder, { world: true });
+  try { gunG.userData.coils = built.coils || null; } catch (e) {}
   holder.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   gunG.userData.model = key;
 }
@@ -253,7 +254,8 @@ export function setSoldierDual(mesh, key, dual) {
   gl.position.set(-gunG.position.x, gunG.position.y, gunG.position.z);
   const holder = new THREE.Group(); holder.rotation.y = Math.PI; holder.scale.setScalar(0.85); holder.position.z = 0.02;
   gl.add(holder);
-  buildGunModel(want, _worldGunMats, holder, holder, { world: true });
+  const built2 = buildGunModel(want, _worldGunMats, holder, holder, { world: true });
+  try { gl.userData.coils = built2.coils || null; } catch (e) {}
   holder.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   gl.userData.model = want;
   gunG.parent.add(gl);

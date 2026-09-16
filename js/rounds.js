@@ -20,10 +20,10 @@ import { clearGibs } from './gibs.js';
 import { clearNades } from './grenades.js';
 import { announce, announceRoundEnd, updateHUD } from './hud.js';
 import { setRmbDown } from './input.js';
-import { clearBotsForMP, isMultiplayer, isOnline, isServerMatch, remotes } from './multiplayer.js';
+import { clearBotsForMP, isMultiplayer, isOnline, isServerMatch, killCoilLights, remotes } from './multiplayer.js';
 import { clearWorldWeapons, setPickupHint } from './pickups.js';
 import { resetPlayerBody } from './playerbody.js';
-import { renderer, scene } from './render.js';
+import { coilLight, renderer, scene } from './render.js';
 import { mySpawnSlot, spawnList, spawnPoint, spawnYawMesh, spawnYawPlayer } from './spawns.js';
 import { G, addMoney, bots, isFreeze, keys, newLoadout, player } from './state.js';
 import { spectateCurrent, updateSpectateOverlay } from './spectate.js';
@@ -341,6 +341,8 @@ export function updateRoundTimers(dt, t) {
 function endMatch() {
   G.phase = 'over';
   try { AudioSys.helixWhine(0); vmRig.helixRate = 0; } catch {}
+  try { if (coilLight) coilLight.intensity = 0; } catch {}
+  try { killCoilLights(); } catch {}
   updateInteractHUD(null);
   for (const b of bots) if (b.alive) b.mesh.visible = true; // unhide first-person spectate target
   if ($('bomb-status')) $('bomb-status').classList.add('hidden');
