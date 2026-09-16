@@ -264,11 +264,12 @@ export function updatePlayer(dt, t) {
     else if (mouseJustDown) { playerTryFire(t); }
   }
   const dualNow = !isNade && isDualCur();
-  if (dualNow && (rmbDown || rmbJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze()) {
+  const altFire = dualNow || (!isNade && player.cur === 'portal'); // portal gun: RMB places orange
+  if (altFire && (rmbDown || rmbJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze()) {
     if (def.auto) playerTryFire(t, 'L');
     else if (rmbJustDown) playerTryFire(t, 'L');
   }
-  if (!dualNow) setRmbDown(false);
+  if (!altFire) setRmbDown(false);
   setRmbJustDown(false);
   if (isNade) setMouseJustDown(false);
   else setMouseJustDown(false);

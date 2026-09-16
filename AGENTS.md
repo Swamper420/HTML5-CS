@@ -68,9 +68,10 @@ grep -ln "\bupdateBot\b" js/*.js main.js         # who uses it
 | `js/weed.js` | | Mid-map weed farm: hold-E harvest ($100/s), trip hallucination |
 | `js/yaris.js` | | Drivable beater Yaris: E enter/exit, WASD + Space handbrake, horn, run-overs |
 | `js/pee.js` | | Piss: hold P arcing stream (blinds + friendly fire), slippery puddles, 20s evaporate, online via nade channel + snapshot peeing flag |
+| `js/portals.js` | | Portal gun: per-owner blue/orange wall portals, body teleport, online via nade channel |
 
 ## Frame order (`loop()` in main.js, while playing)
-timers → `updatePlayer` → `updatePlayerBody` → bots (`updateBot`, `animateBotMesh`; skipped in PvP) → `updateRemoteMeshes` → `updateBomb` → `updateWeed` → `updateYaris` → `updateNades` → `updateEffects` → `updateScreenFeel` → `updateGoreScreen` → `updateHUD`/`updateBuyTimer` → `drawMinimap` → render.
+timers → `updatePlayer` → `updatePlayerBody` → bots (`updateBot`, `animateBotMesh`; skipped in PvP) → `updateRemoteMeshes` → `updateBomb` → `updateWeed` → `updateYaris` → `updateNades` → `updatePortals` → `updateEffects` → `updateScreenFeel` → `updateGoreScreen` → `updateHUD`/`updateBuyTimer` → `drawMinimap` → render.
 
 Boot order: `initThree` → `buildMap` → `buildViewmodel` → `makeBot` ×8 → `initInput` → settings → `wireMultiplayer`.
 

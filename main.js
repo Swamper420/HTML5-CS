@@ -18,6 +18,7 @@ import { hasLOS, moveWithCollision } from './js/collision.js';
 import { updateEffects } from './js/effects.js';
 import { updateGoreScreen } from './js/gore.js';
 import { captureFlashAfterimage, updateNades } from './js/grenades.js';
+import { updatePortals } from './js/portals.js';
 import { announce, updateHUD, updateScreenFeel } from './js/hud.js';
 import { initInput, pointerLocked } from './js/input.js';
 import { buildMap, waypoints } from './js/map.js';
@@ -106,6 +107,7 @@ function loop() {
     try { updatePee(dt, t); } catch (e) { console.warn('pee', e); }
     try { updateYaris(dt, t); } catch (e) { console.warn('yaris', e); }
     try { updateNades(dt, t); } catch (e) { console.warn('nades', e); }
+    try { updatePortals(dt, t); } catch (e) { console.warn('portals', e); }
     updateEffects(dt, t);
     try { updateDamageReport(t); } catch (e) {}
     try { updateScreenFeel(dt, t); } catch (e) {}

@@ -33,6 +33,7 @@ export const VM_AIM = {
   awp: new THREE.Vector3(0.0, -0.107, -0.34),
   p90: new THREE.Vector3(0.0, -0.100, -0.30),
   helix: new THREE.Vector3(0.0, -0.095, -0.34),
+  portal: new THREE.Vector3(0.0, -0.095, -0.34),
   machete: new THREE.Vector3(0.0, -0.16, -0.42),
   he: new THREE.Vector3(0.0, -0.10, -0.32),
   flash: new THREE.Vector3(0.0, -0.10, -0.32),
@@ -124,7 +125,7 @@ export function buildGunHands(key, M, root) {
   else if (key === 'p90') { vmGripHand(root, M, 0.005, -0.075, 0.2); vmSupportHand(root, M, 0.2, -0.13, 0.033); }
   else if (key === 'deagle') { vmGripHand(root, M, -0.02, -0.055, 0.3); const s = vmSupportHand(root, M, 0.0, -0.14, 0.03); s.rotation.set(0.3, 0, -0.35); s.position.x = -0.02; }
   else if (key === 'awp') { vmGripHand(root, M, 0.03, -0.06, 0.4); vmSupportHand(root, M, 0.42, -0.048, 0.031); }
-  else if (key === 'helix') { vmGripHand(root, M, 0.01, -0.07, 0.25); vmSupportHand(root, M, 0.30, -0.075, 0.038); }
+  else if (key === 'helix' || key === 'portal') { vmGripHand(root, M, 0.01, -0.07, 0.25); vmSupportHand(root, M, 0.30, -0.075, 0.038); }
   else if (key === 'machete') { vmGripHand(root, M, -0.12, -0.06, 0.3); }
 }
 

@@ -17,6 +17,7 @@ import {
   corpseK, goreRemoteDeath, pickFallParams, poseCorpseLimbs, slideCorpseOut, updateRagdoll,
 } from './gore.js';
 import { detonateFlash, detonateHE, detonateNuke, makeNadeMesh, tacticalSmokes, throwNade } from './grenades.js';
+import { applyRemotePortal } from './portals.js';
 import { setSoldierDual, setSoldierGun } from './gunmodels.js';
 import { addKillfeed, announce, playerHitmark, updateHUD } from './hud.js';
 import { igniteMolotov } from './molotov.js';
@@ -587,6 +588,11 @@ function applyRemoteNade(m) {
   // Host-relayed bot utility (solo-with-guests spectating): attribute to a display name.
   if (m.botShort) owner.remoteName = `${m.botShort} (BOT)`;
   const inMap = (x, y, z) => isFinite(x) && isFinite(y) && isFinite(z) && Math.abs(x) <= MAP_HALF + 6 && Math.abs(z) <= MAP_HALF + 6 && y >= -1 && y <= 12;
+  if (m.action === 'portal') {
+    // Portal gun placement: sender + bounds validated like any other relayed event.
+    try { applyRemotePortal(m); } catch {}
+    return;
+  }
   if (m.action === 'throw' && NADE_DEFS[m.nade]) {
     if (m.nade === 'nuke') return; // live carry now — never thrown, ignore stale throws
     const ox = +m.x || 0, oy = +m.y || 1.4, oz = +m.z || 0;

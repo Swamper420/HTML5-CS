@@ -47,6 +47,7 @@ export function initInput() {
       if (m) { if (!e.repeat) buyByKey(m[1]); return; }
       if (e.code === 'KeyR') { if (!e.repeat) buyByKey('R'); return; }
       if (e.code === 'KeyH') { if (!e.repeat) buyItem('helix'); return; }
+      if (e.code === 'KeyP') { if (!e.repeat) buyItem('portal'); return; }
       if (e.code === 'KeyN') { if (!e.repeat) buyItem('nuke'); return; }
     }
     if (e.code === 'Digit1') { const pk = primaryKey(); if (pk) switchWeapon(pk); else announce('NO PRIMARY — PRESS B', 1100); }
@@ -104,7 +105,7 @@ export function initInput() {
       return;
     }
     if (e.button === 0) { mouseDown = true; mouseJustDown = true; }
-    if (e.button === 2) { if (isDualCur()) { rmbDown = true; rmbJustDown = true; } else if (WEAPONS[player.cur] && !WEAPONS[player.cur].melee) player.aiming = true; }
+    if (e.button === 2) { if (isDualCur() || player.cur === 'portal') { rmbDown = true; rmbJustDown = true; } else if (WEAPONS[player.cur] && !WEAPONS[player.cur].melee) player.aiming = true; }
   });
   document.addEventListener('mouseup', (e) => {
     if (e.button === 0) {

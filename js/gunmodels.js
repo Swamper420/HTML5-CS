@@ -239,6 +239,17 @@ export function buildGunModel(key, M, root, magG, opts = {}) {
     out.spinner = spinG;
     out.rear = mark(0.10, 0.09); out.front = mark(0.86, 0.065);
     out.muzzle = mark(1.24, 0.01);
+  } else if (key === 'portal') {
+    // PORTAL GUN: stubby emitter shroud, barrel, fork prongs, blue/orange charge vials.
+    P(root, [[-0.14, -0.045], [0.30, -0.045], [0.32, 0.045], [-0.14, 0.05]], 0.07, M.polymer);
+    Cy(root, 0.016, 0.16, M.blued, 0.40, 0.0);
+    for (const sx of [-0.035, 0.035]) Bx(root, 0.012, 0.02, 0.20, M.steel, 0.36, 0.01, sx);
+    for (const [c, x] of [[0x2e9bff, -0.02], [0xff9a2a, 0.02]]) {
+      const vial = new THREE.Mesh(new THREE.SphereGeometry(0.014, 10, 8), new THREE.MeshBasicMaterial({ color: c }));
+      vial.position.set(x, 0.055, -0.10); root.add(vial);
+    }
+    P(root, [[-0.02, -0.045], [0.05, -0.045], [0.03, -0.15], [-0.03, -0.14]], 0.045, M.bakelite);
+    out.muzzle = mark(0.49, 0.0);
   }
   if (opts.hands) buildGunHands(key, M, root);
   return out;

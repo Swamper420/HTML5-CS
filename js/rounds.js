@@ -18,6 +18,7 @@ import {
 } from './effects.js';
 import { clearGibs } from './gibs.js';
 import { clearNades } from './grenades.js';
+import { clearPortals } from './portals.js';
 import { announce, announceRoundEnd, updateHUD } from './hud.js';
 import { setRmbDown } from './input.js';
 import { clearBotsForMP, isMultiplayer, isOnline, isServerMatch, killCoilLights, remotes } from './multiplayer.js';
@@ -168,6 +169,7 @@ function startRound(first = false, fromNet = false) {
   try {
     clearDecals();
     clearNades();
+    try { clearPortals(); } catch (e3) {}
     try { clearGibs(); } catch (e2) {}
     for (const arr of [tracers, particles, smokes, shockwaves, worldFlashes, debrisChunks]) {
       for (const e of arr) { try { scene.remove(e.mesh); } catch (err) {} }

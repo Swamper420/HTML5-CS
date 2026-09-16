@@ -34,6 +34,13 @@ export const WEAPONS = {
              kickUp: 0.02, kickSide: 0.012, punch: 0.05, shake: 0.012, vmKick: 0.3, fovPunch: 1.2,
              bloomAdd: 0, bloomMax: 0, bloomDecay: 0.055, tracer: 0xffffff, sound: 'machete', falloff: 0,
              melee: true },
+  // PORTAL GUN: infinite-ammo placer. LMB = blue (A), RMB = orange (B).
+  // Step into one end, come out the other. Zero damage — portals move bodies, not bullets.
+  portal:  { name: 'PORTAL GUN', slot: 0, damage: 0, headMult: 1.0, magSize: 0, startReserve: 0, fireInterval: 0.35, reloadTime: 0,
+             spreadHip: 0.002, spreadAim: 0.002, range: 120, auto: true, zoomFov: 75, price: 5000,
+             kickUp: 0.004, kickSide: 0.002, punch: 0.008, shake: 0.002, vmKick: 0.05, fovPunch: 0.8,
+             bloomAdd: 0, bloomMax: 0, bloomDecay: 0.055, tracer: 0x66d9ff, sound: 'portal', falloff: 0,
+             portal: true },
 };
 
 // Extension point: agents add weapons without editing combat/shooting code.
@@ -51,8 +58,8 @@ export const SPRAY_AK = [
   [0.9, 0.9], [-1.0, 0.85], [0.7, 0.9], [-0.6, 0.9], [0.5, 0.9], [-0.5, 0.9],
 ];
 
-export const SLOT_ORDER = ['ak', 'deagle', 'awp', 'p90', 'helix', 'machete'];
-export const PRIMARIES = ['ak', 'p90', 'awp', 'helix']; // CS: one primary at a time — buying another replaces it
+export const SLOT_ORDER = ['ak', 'deagle', 'awp', 'p90', 'helix', 'machete', 'portal'];
+export const PRIMARIES = ['ak', 'p90', 'awp', 'helix', 'portal']; // CS: one primary at a time — buying another replaces it
 
 // ---------------- Tactical grenades ----------------
 // fuse = seconds after release (CS2: no cooking).

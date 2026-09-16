@@ -529,6 +529,12 @@ export const AudioSys = {
       this._noise({ dur: 0.9, type: 'lowpass', freq: 600, sweepTo: 70, peak: 0.4 * lv, decay: 0.8, rate: 0.7, pos, kind: 'helix', verb: 0.3, echo: 0.3, at: 0.08, brown: true });
       return;
     }
+    if (kind === 'portal') {
+      // Portal gun: quick zap in, warble out. Pure synth, no samples.
+      this._tone({ type: 'sine', f0: 300, f1: 950, dur: 0.16, peak: 0.4 * lv, decay: 0.14, pos, kind: 'sfx', verb: dry });
+      this._tone({ type: 'sine', f0: 950, f1: 280, dur: 0.22, peak: 0.25 * lv, decay: 0.2, pos, kind: 'sfx', verb: dry, at: 0.05 });
+      return;
+    }
     if (kind === 'smg') {
       // P90: the rifle recording sped up + lighter thump reads as a small-calibre bullpup
       const ok = this._sample({ name: 'rifle', peak: 0.6 * lv, dur: 0.2, rate: 1.42, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0 : 0.06 });

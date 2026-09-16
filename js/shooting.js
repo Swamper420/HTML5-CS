@@ -16,6 +16,7 @@ import { mouseJustDown, rmbJustDown, setCrossGap, setMouseJustDown, setRmbJustDo
 import { isOnline, remotes } from './multiplayer.js';
 import { DUAL } from './pickups.js';
 import { PEE } from './pee.js';
+import { firePortalSlot } from './portals.js';
 import { playerMesh } from './playerbody.js';
 import { camera, muzzleLight } from './render.js';
 import { G, isFreeze, bots, keys, player } from './state.js';
@@ -93,6 +94,41 @@ export function meleeSlash(t, wkey, def) {
   }
   updateHUD();
 }
+// PORTAL GUN: infinite ammo, zero damage — LMB places blue (A), RMB orange (B).
+function firePortal(t, hand = 'R') {
+  const def = WEAPONS.portal;
+  const nextKey = hand === 'L' ? 'nextShotL' : 'nextShot';
+  if (!player.alive || player.reloading > 0 || t < (player[nextKey] || 0)) return;
+  if (isFreeze()) return;
+  player[nextKey] = t + def.fireInterval;
+  player.lastShotT = t;
+  player.sprayIdx = 0;
+  G.shots++;
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE - CROUCH_EYE_DROP * (player.crouch || 0), player.pos.z);
+  const slot = hand === 'L' ? 'B' : 'A';
+  const wallD = rayWallDist(eye, dir, def.range);
+  const muzzleWorld = new THREE.Vector3();
+  if (vmMuzzle) vmMuzzle.getWorldPosition(muzzleWorld);
+  else muzzleWorld.copy(eye);
+  spawnTracer(muzzleWorld, eye.clone().addScaledVector(dir, Math.min(wallD, def.range)), def.tracer, 2);
+  firePortalSlot(eye, dir, slot, 'local', false, def.range);
+  try {
+    if (isOnline()) Net.sendShot({
+      ox: eye.x, oy: eye.y, oz: eye.z,
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      weapon: def.name, tracer: def.tracer, sound: def.sound,
+    });
+  } catch {}
+  vmRig.kickV += def.vmKick * 15;
+  vmRig.punchP += def.punch;
+  vmRig.shake += def.shake;
+  vmRig.fovKick += def.fovPunch;
+  soldierFireKick(playerMesh, 0.4);
+  if (hand === 'L') setRmbJustDown(false); else setMouseJustDown(false);
+  setCrossGap(8);
+  updateHUD();
+}
 export function playerTryFire(t, hand = 'R') {
   // hands busy peeing — release P, then shoot
   if (PEE.peeing) { setMouseJustDown(false); setRmbJustDown(false); return; }
@@ -101,7 +137,7 @@ export function playerTryFire(t, hand = 'R') {
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) return;
   const dual = !!w.dual;
-  if (hand === 'L' && !dual) return;
+  if (hand === 'L' && !dual && wkey !== 'portal') return;
   const left = hand === 'L';
   const magKey = left ? 'mag2' : 'mag', nextKey = left ? 'nextShotL' : 'nextShot';
   const justDown = left ? rmbJustDown : mouseJustDown;
@@ -110,6 +146,7 @@ export function playerTryFire(t, hand = 'R') {
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
   if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
   if (def.melee) { meleeSlash(t, wkey, def); return; }
+  if (def.portal) { firePortal(t, hand); return; }
   if (wkey === 'helix') {
     // HELIX ARC: battery cell (mag 1, no reserve — recharges via reload clock).
     if (w[magKey] <= 0) {
@@ -257,7 +294,7 @@ export function startReload() {
   if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) return;
-  if (def.melee) return; // nothing to reload — the blade is always ready
+  if (def.melee || def.portal) return; // nothing to reload — the blade is always ready, portals are infinite
   if (wkey === 'helix') {
     // Battery recharge: no reserve, 5s cell cycle. Manual R restarts it.
     if (player.reloading > 0 || w.mag >= def.magSize || !player.alive) return;
@@ -283,7 +320,7 @@ export function finishReload() {
   if (isNadeKey(player.cur)) { player.reloading = 0; return; }
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) { player.reloading = 0; return; }
-  if (def.melee) { player.reloading = 0; return; }
+  if (def.melee || def.portal) { player.reloading = 0; return; }
   if (wkey === 'helix') {
     w.mag = def.magSize; w.reserve = 0;
     player.reloading = 0; player.bloom = 0; player._helixSpin = 0;

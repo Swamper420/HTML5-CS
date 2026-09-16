@@ -154,6 +154,7 @@ function pickupAction(e) {
     return { kind: 'take', auto: true };
   }
   if (e.key === 'helix') return null; // single cell — spares are useless
+  if (e.key === 'portal') return null; // single unit — spares are useless
   if (!w.dual) return { kind: 'dual', auto: false, label: `E — DUAL WIELD ${WEAPONS[e.key].name}` };
   if (w.reserve < reserveCap(e.key, true) && (e.mag + e.reserve) > 0) return { kind: 'ammo', auto: false, label: `E — TAKE AMMO (${WEAPONS[e.key].name})` };
   return null;
@@ -191,6 +192,7 @@ function applyPickup(d) {
     }
   } else if (!w.dual) {
     if (key === 'helix') return; // single cell — never duals
+    if (key === 'portal') return; // single unit — never duals
     w.dual = true; w.mag2 = mag;
     w.reserve = Math.min(reserveCap(key, true), w.reserve + reserve);
     announce(`DUAL ${def.name.toUpperCase()}S — LMB RIGHT · RMB LEFT`, 1400);

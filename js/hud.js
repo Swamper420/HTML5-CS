@@ -142,7 +142,7 @@ export function updateHUD() {
     _setText(_el('ammo-mag'), w.mag > 0 ? '⚡' : '○');
     _setText(_el('ammo-reserve'), w.mag > 0 ? 'CELL' : (player.reloading > 0 ? player.reloading.toFixed(1) + 's' : '…'));
     _setText(_el('weapon-name'), def.name.toUpperCase());
-  } else if (WEAPONS[player.cur] && WEAPONS[player.cur].melee) {
+  } else if (WEAPONS[player.cur] && (WEAPONS[player.cur].melee || WEAPONS[player.cur].portal)) {
     _setText(_el('ammo-mag'), '—'); _setText(_el('ammo-reserve'), '∞');
     _setText(_el('weapon-name'), WEAPONS[player.cur].name);
   } else {
