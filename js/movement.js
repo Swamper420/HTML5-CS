@@ -236,12 +236,12 @@ export function updatePlayer(dt, t) {
   }
   // firing (also catch fast semi-auto clicks that release within one frame; blocked in freeze)
   // nades throw via mousedown/mouseup prime-release — never via the hitscan path
-  if (!isNade && (mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze() && !G.roundEnding) {
+  if (!isNade && (mouseDown || mouseJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze()) {
     if (def.auto) playerTryFire(t);
     else if (mouseJustDown) { playerTryFire(t); }
   }
   const dualNow = !isNade && isDualCur();
-  if (dualNow && (rmbDown || rmbJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze() && !G.roundEnding) {
+  if (dualNow && (rmbDown || rmbJustDown) && player.alive && G.phase === 'playing' && !G.buyOpen && !isFreeze()) {
     if (def.auto) playerTryFire(t, 'L');
     else if (rmbJustDown) playerTryFire(t, 'L');
   }

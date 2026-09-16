@@ -30,7 +30,7 @@ export function playerTryFire(t, hand = 'R') {
   const magKey = left ? 'mag2' : 'mag', nextKey = left ? 'nextShotL' : 'nextShot';
   const justDown = left ? rmbJustDown : mouseJustDown;
   if (!player.alive || player.reloading > 0 || t < (player[nextKey] || 0)) return;
-  if (isFreeze() || G.roundEnding) return; // CS freeze: no shooting
+  if (isFreeze()) return; // CS freeze: no shooting (post-round stays live)
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
   if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
   if (w[magKey] <= 0) {

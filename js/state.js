@@ -33,7 +33,7 @@ export const player = {
   cur: 'deagle', last: 'ak', reloading: 0, reloadDur: 1, nextShot: 0,
   aiming: false, respawnAt: 0, radius: 0.45, lastDmgDir: 0,
   crouching: false, crouch: 0, // held (or toggled) with C; crouch is the 0..1 blend
-  useQueued: false, nextShotL: 0, // E press edge (pickup) · left-gun cooldown (dual wield)
+  useQueued: 0, nextShotL: 0, // E press time (pickup, s) · left-gun cooldown (dual wield)
   airTuck: false,               // crouched mid-air (feet lifted by CROUCH_JUMP_LIFT)
   wallRun: null,                // { t, nx, nz, side, box } while running on a wall
   wallCd: 0, lastWallBox: null, wallRoll: 0, spaceWas: false,

@@ -34,6 +34,8 @@ export const DUAL = {
   reserveMul: 2,                       // carry double reserve
 };
 const PICKUP_RANGE = 1.35;
+const E_RANGE = 2.4; // E reaches further than the auto-pickup radius
+const E_QUEUE = 0.4; // E press stays valid this long (s), so edge presses aren't lost
 const worldWeapons = new Map(); // wid -> { wid, key, mag, reserve, mesh, pos, vel, rest, ry, spin, pendingUntil, mine, noPickupUntil }
 let _wwSeq = 0;
 export const newWid = () => `${isOnline() && Net.id ? Net.id : 'L'}.${Date.now().toString(36)}.${(_wwSeq++).toString(36)}`;
@@ -172,7 +174,14 @@ function applyPickup(d) {
   AudioSys.click(1300, 0.05, 0.3);
   setTimeout(() => AudioSys.click(950, 0.05, 0.25), 90);
   if (!w.owned) {
-    if (PRIMARIES.includes(key)) { const pk = primaryKey(); if (pk) dropWeapon(pk, { both: true }); }
+    if (PRIMARIES.includes(key)) {
+      const pk = primaryKey();
+      if (pk && !dropWeapon(pk, { both: true })) {
+        // swap must never leave two primaries: force-clear the old one
+        const ow = player.weapons[pk];
+        if (ow) { ow.owned = false; ow.mag = 0; ow.reserve = 0; ow.dual = false; ow.mag2 = 0; }
+      }
+    }
     w.owned = true; w.dual = false; w.mag = mag; w.mag2 = 0; w.reserve = Math.min(reserve, reserveCap(key, false));
     announce(`PICKED UP ${def.name}`, 800);
     if (PRIMARIES.includes(key) || !player.cur || !player.weapons[player.cur] || !player.weapons[player.cur].owned) {
@@ -228,29 +237,49 @@ export function updateWorldWeapons(dt, t) {
     e.mesh.position.copy(e.pos); e.mesh.rotation.y = e.ry;
   }
   // --- pickup ---
-  const useQueued = player.useQueued; player.useQueued = false;
-  if (!player.alive || G.phase !== 'playing' || G.roundEnding || G.buyOpen) { setPickupHint(''); return; }
-  let best = null, bestD = PICKUP_RANGE;
+  // E press lives briefly (E_QUEUE) so edge presses aren't lost; only consume it on use.
+  const wantE = (t - (player.useQueued || 0)) < E_QUEUE;
+  const consumeE = () => { player.useQueued = 0; };
+  if (t - (player.useQueued || 0) > E_QUEUE) player.useQueued = 0;
+  if (!player.alive || G.phase !== 'playing' || G.buyOpen) { setPickupHint(''); return; }
+  // nearest-first candidates within E reach (skip guns awaiting server pickup)
+  const near = [];
   for (const e of worldWeapons.values()) {
     if (e.pendingUntil > t) continue;
     const dy = e.pos.y - player.pos.y;
     if (dy < -0.6 || dy > 1.4) continue;
     const d = Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
-    if (d < bestD) { bestD = d; best = e; }
+    if (d < E_RANGE) near.push([d, e]);
   }
-  if (!best) { setPickupHint(''); return; }
-  const act = pickupAction(best);
-  if (!act) { setPickupHint(''); return; }
-  if (act.auto) {
+  near.sort((a, b) => a[0] - b[0]);
+  let best = null, bestAct = null;
+  for (const [d, e] of near) {
+    const act = pickupAction(e);
+    if (act) { best = e; bestAct = act; break; }
+  }
+  if (!best) {
+    // E on an already-owned full gun still switches to it
+    if (wantE && near.length) {
+      const owned = near.find(([d, e]) => d < E_RANGE && player.weapons[e.key] && player.weapons[e.key].owned && WEAPONS[e.key]);
+      if (owned) { consumeE(); try { switchWeapon(owned[1].key); } catch (err) {} }
+    }
     setPickupHint('');
-    if (t >= best.noPickupUntil) requestPickup(best);
     return;
   }
-  // E is shared with plant/defuse — the bomb always wins
+  const act = bestAct;
+  if (act.auto) {
+    setPickupHint('');
+    const dAuto = Math.hypot(best.pos.x - player.pos.x, best.pos.z - player.pos.z);
+    if (dAuto < PICKUP_RANGE && t >= best.noPickupUntil) { consumeE(); requestPickup(best); }
+    else if (wantE && dAuto < E_RANGE) { consumeE(); requestPickup(best); }
+    return;
+  }
+  // E is shared with plant/defuse — the bomb always wins (E press kept for after)
   const bombBusy = (typeof playerNearPlantedBomb === 'function' && playerNearPlantedBomb()) || (player.hasBomb && typeof playerInPlantSite === 'function' && playerInPlantSite());
   if (bombBusy) { setPickupHint(''); return; }
   setPickupHint(act.label);
-  if (useQueued) requestPickup(best);
+  // E grabs from further out than the auto radius; noPickupUntil only gates auto
+  if (wantE && Math.hypot(best.pos.x - player.pos.x, best.pos.z - player.pos.z) < E_RANGE) { consumeE(); requestPickup(best); }
 }
 export function applyRemoteWeapon(m) {
   if (m.action === 'drop') {

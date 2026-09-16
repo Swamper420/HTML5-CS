@@ -69,7 +69,7 @@ export function initInput() {
     if (e.code === 'KeyC' && SET.crouchToggle && !e.repeat) player.crouchWant = !player.crouchWant;
     if (e.code === 'KeyR') startReload();
     if (e.code === 'KeyX' && WEAPONS[player.cur]) dropWeapon(player.cur);
-    if (e.code === 'KeyE') player.useQueued = true;
+    if (e.code === 'KeyE') player.useQueued = performance.now() / 1000;
     if (e.code === 'KeyB') toggleBuy();
   });
   addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'Tab') setScoreboard(false); });
