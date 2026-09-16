@@ -15,7 +15,7 @@ import {
   decalTextures, spawnBurst, spawnDebris, spawnDecal, spawnFireball, spawnShockwave, spawnSmoke,
   spawnWorldFlash,
 } from './effects.js';
-import { announce, playerHitmark, updateHUD } from './hud.js';
+import { announce, flashExplosionOverlay, playerHitmark, updateHUD } from './hud.js';
 import { colliders } from './map.js';
 import { igniteMolotov, updateFires } from './molotov.js';
 import { isOnline, remoteEye, remotes } from './multiplayer.js';
@@ -48,12 +48,26 @@ export function nadeOwnerTeam(o) {
   if (o.team) return o.team;
   return 't';
 }
-function makeNadeMesh(type) {
+export function makeNadeMesh(type) {
   const g = new THREE.Group();
   try {
     const def = NADE_DEFS[type];
     const dark = new THREE.MeshStandardMaterial({ color: 0x1f2226, roughness: 0.5, metalness: 0.6 });
     const steel = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.35, metalness: 0.85 });
+    if (type === 'nuke') {
+      // Hand-carried atomic bomb: black sphere, yellow warning band, pulsing core glow.
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12),
+        new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.4, metalness: 0.7 }));
+      ball.castShadow = true; g.add(ball);
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.016, 8, 24),
+        new THREE.MeshStandardMaterial({ color: 0xffd21f, roughness: 0.6, emissive: 0x7a5c00, emissiveIntensity: 0.4 }));
+      band.rotation.x = Math.PI / 2; g.add(band);
+      const T = decalTextures();
+      const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff3b1f, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+      gl.scale.setScalar(0.34); g.add(gl);
+      g.userData.blink = gl;
+      return g;
+    }
     if (type === 'molotov') {
       const glass = new THREE.MeshStandardMaterial({ color: 0x3f6b2a, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.9 });
       const bottle = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.16, 10), glass);
@@ -120,6 +134,18 @@ export function makeFirstPersonNadeMesh(type) {
       const T = decalTextures();
       const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff9a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
       gl.scale.setScalar(0.22); gl.position.y = 0.24; g.add(gl);
+    } else if (type === 'nuke') {
+      // First-person hand nuke: fat black bomb with yellow band + blinking red core light.
+      const ball = mesh(new THREE.SphereGeometry(0.11, 28, 20), new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.35, metalness: 0.75 }));
+      ball.scale.y = 1.1;
+      const band = mesh(new THREE.TorusGeometry(0.11, 0.016, 8, 32), new THREE.MeshStandardMaterial({ color: 0xffd21f, roughness: 0.5, emissive: 0x7a5c00, emissiveIntensity: 0.5 }));
+      band.rotation.x = Math.PI / 2;
+      mesh(new THREE.CylinderGeometry(0.02, 0.026, 0.05, 12), dark, 0, 0.125, 0);
+      const T = decalTextures();
+      const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff3b1f, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+      gl.scale.setScalar(0.3); gl.position.y = 0.16; g.add(gl);
+      g.userData.blink = gl;
+      pinLever(0.155);
     } else if (type === 'he') {
       const body = mesh(new THREE.SphereGeometry(0.062, 28, 20), new THREE.MeshStandardMaterial({ color: 0x4d7c3a, roughness: 0.5, metalness: 0.3 }));
       body.scale.y = 1.15;
@@ -226,6 +252,7 @@ export function botThrowNadeAt(bot, type, targetPos) {
 }
 // ---- Player prime / release (CS2: pin on press, throw on release; LMB far · RMB short · both medium) ----
 export function playerPrimeNade(type, t, button = 0) {
+  if (type === 'nuke') return false; // two-hand live carry — never primed, never thrown
   if (!player.alive || isFreeze() || G.roundEnding || G.phase !== 'playing') return false;
   if ((player.nades[type] || 0) <= 0) { announce(`${NADE_DEFS[type].name} EMPTY — PRESS B`, 1100); AudioSys.dryfire(); return false; }
   if (keys['KeyE'] && (playerNearPlantedBomb() || playerInPlantSite())) return false; // hands busy
@@ -328,11 +355,13 @@ function nadeResolve(p, r) {
 }
 export function updateNades(dt, t) {
   updateNadeCook(dt, t);
+  updateNukeCarry(t);
   const r = NADE_RADIUS;
   for (let i = nadeProjectiles.length - 1; i >= 0; i--) {
     const p = nadeProjectiles[i];
     p.fuse -= dt;
     try { if (p.mesh.userData.flame) p.mesh.userData.flame.material.opacity = 0.6 + Math.sin(t * 30 + i) * 0.3; } catch (e) {}
+    try { if (p.mesh.userData.blink) p.mesh.userData.blink.material.opacity = 0.45 + 0.55 * Math.abs(Math.sin(t * 9 + i)); } catch (e) {}
     // substep so fast throws never tunnel through thin walls
     const steps = clamp(Math.ceil(p.vel.length() * dt / 0.05), 1, 8);
     const h = dt / steps;
@@ -546,6 +575,102 @@ export function detonateHE(at, owner, t, inHand = false) {
   try { disperseSmokes(at, 6.5, 6.0); } catch (e) {}
   explodeDamage(at, NADE_DEFS.he.radius, NADE_DEFS.he.damage, owner, label);
   try { if (isOnline() && owner.isPlayer && inHand) Net.sendNade({ action: 'boom', nade: 'he', x: at.x, y: at.y, z: at.z }); } catch (e) {}
+}
+// Is the carrier's live bomb touching anyone? (The carrier themself doesn't count.)
+function nukeTouchingCarrier(at) {
+  try {
+    for (const b of bots) {
+      if (!b.alive) continue;
+      if (at.distanceTo(botChest(b)) < 1.4) return true;
+    }
+  } catch (e) {}
+  try {
+    for (const [, e] of remotes) {
+      if (!e.data || !e.data.alive) continue;
+      if (at.distanceTo(new THREE.Vector3(e.pos.x, e.pos.y + 1.1, e.pos.z)) < 1.4) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+// Two-hand live carry: the bomb goes off when the carrier runs face-first into a
+// wall (movement.js sets _moveBlocked) or bumps another player. Called from updateNades.
+export function updateNukeCarry(t) {
+  if (!player.carryingNuke || !player.alive || G.phase !== 'playing' || G.roundEnding || isFreeze()) return;
+  if (t - (player.nukeArmedAt || 0) < 1.0) return; // buy/spawn grace
+  const at = new THREE.Vector3(player.pos.x, player.pos.y + 1.1, player.pos.z);
+  if (!player._moveBlocked && !nukeTouchingCarrier(at)) return;
+  player.carryingNuke = false; player.nades.nuke = 0;
+  detonateNuke(at, { isPlayer: true, team: player.team || 'ct' }, t);
+  try {
+    if (player.alive && player.cur === 'nuke') { switchWeapon(primaryKey() || 'deagle'); updateHUD(); }
+  } catch (e) {}
+}
+export function disarmNuke() {
+  if (!player.carryingNuke) return false;
+  player.carryingNuke = false; player.nades.nuke = 0;
+  try { AudioSys.pin(); } catch (e) {}
+  try { announce('NUKE DISARMED — HANDS FREE', 1200); } catch (e) {}
+  try {
+    if (player.cur === 'nuke') switchWeapon(primaryKey() || 'deagle');
+    updateHUD();
+  } catch (e) {}
+  return true;
+}
+// ---- ☢ ATOMIC BOMB: map-wide over-the-top contact nuke ----
+export function detonateNuke(at, owner, t) {
+  const def = NADE_DEFS.nuke, label = def.name;
+  if (owner && owner.isPlayer && player.carryingNuke) { player.carryingNuke = false; player.nades.nuke = 0; }
+  try { AudioSys.nukeBoom(at); } catch (e) {}
+  try {
+    const up = (y) => at.clone().add(new THREE.Vector3(0, y, 0));
+    spawnFireball(up(1), 14, 0.7);                       // core flash
+    spawnFireball(up(4), 10, 1.0);                       // rising fire
+    spawnFireball(up(8), 13, 1.3);                       // mushroom cap
+    spawnShockwave(at, 34, 0.9);
+    setTimeout(() => { try { spawnShockwave(at, 26, 0.7, 0xff9a3c); } catch (e2) {} }, 150);
+    setTimeout(() => { try { spawnShockwave(at, 18, 0.6, 0xc8b090); } catch (e2) {} }, 350);
+    spawnWorldFlash(up(2), 0xfff2cc, 22);
+    spawnBurst(at, 0xffd27a, 60, 22, 1.2, 0.22);
+    spawnBurst(at, 0xff6a2a, 50, 16, 1.5, 0.3);
+    spawnBurst(at, 0x333333, 40, 10, 2.2, 0.4);
+    for (let i = 0; i < 10; i++) {                       // mushroom stem + cap smoke
+      const stem = i < 6;
+      const c = at.clone().add(new THREE.Vector3(rand(-2, 2) * (stem ? 0.5 : 2.5), stem ? rand(1, 7) : rand(7, 10), rand(-2, 2) * (stem ? 0.5 : 2.5)));
+      spawnSmoke(c, rand(1.4, 2.6), rand(2.0, 3.5), i % 2 ? 0x3a3a3a : 0x8a7a64);
+    }
+    spawnDebris(at, opts.quality ? 22 : 10, 18, 16);
+    spawnDecal('scorch', new THREE.Vector3(at.x, 0.06, at.z), new THREE.Vector3(0, 1, 0), 16, 1);
+    spawnDecal('scorch', new THREE.Vector3(at.x + rand(-3, 3), 0.055, at.z + rand(-3, 3)), new THREE.Vector3(0, 1, 0), 9, 0.8);
+  } catch (e) {}
+  try {
+    muzzleLight.position.copy(at).add(new THREE.Vector3(0, 2, 0));
+    muzzleLight.intensity = 30; muzzleLight.distance = 90;
+  } catch (e) {}
+  try { flashExplosionOverlay(); } catch (e) {}
+  try {
+    if (camera) {
+      const d = camera.position.distanceTo(at);
+      const k = clamp(1 - d / 70, 0, 1);
+      vmRig.shake += 0.12 * k + 0.03;
+      vmRig.fovKick += 10 * k + 2;
+    }
+  } catch (e) {}
+  // White-out anyone close enough to see it + blind every bot (they stare at everything).
+  try {
+    if (player.alive && G.phase === 'playing') {
+      const eye = new THREE.Vector3(player.pos.x, player.pos.y + 1.2, player.pos.z);
+      const d = eye.distanceTo(at);
+      if (d < 45 && hasLOS(eye, at)) {
+        const dur = (1 - d / 45) * 2.5 + 0.5;
+        if (t + dur > (player.flashUntil || 0)) { player.flashUntil = t + dur; player.flashMax = dur; flashAfterPending = true; }
+      }
+    }
+  } catch (e) {}
+  try { for (const b of bots) if (b.alive) { b.blindUntil = t + 5; b.target = null; } } catch (e) {}
+  try { disperseSmokes(at, 30, 12); } catch (e) {}
+  try { announce('☢ ATOMIC DETONATION ☢', 2200); } catch (e) {}
+  explodeDamage(at, def.radius, def.damage, owner, label);
+  try { if (isOnline() && owner.isPlayer) Net.sendNade({ action: 'boom', nade: 'nuke', x: at.x, y: at.y, z: at.z }); } catch (e) {}
 }
 // ---- Flash: LOS + facing + distance blindness for player, bots, remotes(feedback) ----
 function flashPowerAt(viewPos, viewFwd, at) {

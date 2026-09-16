@@ -21,7 +21,7 @@ import { explodeHead, spawnBloodSpray, tearLimbGib } from './gibs.js';
 import {
   GK, bloodSplatterRays, explodeBody, goreN, pickFallParams, poseCorpseLimbs, screenGore, woundPart,
 } from './gore.js';
-import { tacticalSmokes } from './grenades.js';
+import { detonateNuke, tacticalSmokes } from './grenades.js';
 import { addKillfeed, announce, flashDamage, playerHitmark, updateHUD } from './hud.js';
 import { flashDamageRemote, isOnline, isServerMatch, remotes } from './multiplayer.js';
 import { dropAllOnDeath, newWid, spawnWorldWeapon } from './pickups.js';
@@ -418,6 +418,11 @@ export function damagePlayer(dmg, shooter, head) {
   updateHUD();
   if (player.hp <= 0) {
     player.hp = 0; player.alive = false; player.deaths++;
+    // Died holding a live nuke: hitting the floor is impact enough.
+    if (player.carryingNuke) {
+      player.carryingNuke = false; player.nades.nuke = 0;
+      try { detonateNuke(player.pos.clone().add(new THREE.Vector3(0, 1, 0)), { isPlayer: true, team: player.team || 'ct' }, performance.now() / 1000); } catch (e) {}
+    }
     try { awardAssist(player, shooterId(shooter)); } catch {}
     try { if (!shooter.isPlayer) creditKill(shooter, player); } catch {}
     try { dropAllOnDeath(); } catch (e) { console.warn('death drop', e); }
@@ -434,7 +439,7 @@ export function damagePlayer(dmg, shooter, head) {
       player.fall = pickFallParams(player.pos, sdir, head ? 1.4 : 1.0);
       const gk = GK();
       const wExpl = String((shooter && shooter.weaponName) || '').toUpperCase();
-      const isExpl = /HE|C4|MOLOTOV/.test(wExpl) || dmg >= 400;
+      const isExpl = /HE|C4|MOLOTOV|NUKE|ATOMIC|☢/.test(wExpl) || dmg >= 400;
       player.exploded = gk > 0 && isExpl;
       if (player.exploded && playerMesh) {
         setPlayerBodyFirstPerson(false);

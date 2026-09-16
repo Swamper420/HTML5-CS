@@ -53,7 +53,7 @@ export function updatePlayer(dt, t) {
         x: player.pos.x, y: player.pos.y, z: player.pos.z,
         yaw: player.yaw, pitch: player.pitch, hp: 0, alive: false,
         weapon: player.cur, aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false,
-        reloading: false, helix: 0,
+        reloading: false, helix: 0, nuke: false,
       });
     } catch {}
     return;
@@ -168,6 +168,11 @@ export function updatePlayer(dt, t) {
   const fallV = player.vel.y;
   const preX = player.pos.x, preZ = player.pos.z;
   moveWithCollision(player.pos, player.vel.x * dt, player.vel.z * dt, player.radius, hull);
+  // wall-smack detector for the live-nuke carry: full intent, ~no travel = ran face-first into a wall
+  try {
+    const hSp0 = Math.hypot(player.vel.x, player.vel.z), wantD0 = hSp0 * dt;
+    player._moveBlocked = wantD0 > 0.04 && hSp0 > 2.5 && Math.hypot(player.pos.x - preX, player.pos.z - preZ) < wantD0 * 0.2;
+  } catch (e) { player._moveBlocked = false; }
   if (tacticalSmokes.length && (player.vel.x || player.vel.z)) smokePushAt(_smokePt.set(player.pos.x, player.pos.y + 1, player.pos.z), player.vel.x * dt * 8, player.vel.z * dt * 8, 1);
   if (player.wallRun && dt > 0) {
     // ran into something ahead (corner, pillar): stall counter, drop off after a beat
@@ -418,6 +423,7 @@ export function updatePlayer(dt, t) {
       // sound state: reload + coil energy so remotes hear wind-up/recharge in time
       reloading: player.reloading > 0,
       helix: player.cur === 'helix' ? Math.round(clamp(vmRig.helixRate / 48, 0, 1) * 100) / 100 : 0,
+      nuke: !!player.carryingNuke, // live-bomb carry prop for remotes
     });
   } catch {}
 }

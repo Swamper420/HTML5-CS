@@ -43,8 +43,10 @@ export const player = {
   // spectate-after-death state (bot ref + camera mode)
   specTarget: null, specMode: 'chase', // 'first' | 'chase'
   // tactical grenades: counts per round (CS: rebuy each round, no carry-over for dead)
-  nades: { he: 0, flash: 0, smoke: 0, molotov: 0 },
+  nades: { he: 0, flash: 0, smoke: 0, molotov: 0, nuke: 0 },
   cook: null, // {type, lmb, rmb, heldT} pin pulled — throw on release (LMB far, RMB short, both medium)
+  carryingNuke: false, nukeArmedAt: 0, // two-hand live-bomb carry: touch a wall/person = boom
+  _moveBlocked: false, // set per-frame by movement.js: full intent, ~no travel (ran face-first into a wall)
   flashUntil: 0, flashMax: 0, // white-out blindness (performance-time seconds)
   burnT: 0, // last molotov burn tick overlay
 };

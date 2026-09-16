@@ -16,7 +16,7 @@ import { restoreSoldierMesh } from './gibs.js';
 import {
   corpseK, goreRemoteDeath, pickFallParams, poseCorpseLimbs, slideCorpseOut, updateRagdoll,
 } from './gore.js';
-import { detonateFlash, detonateHE, tacticalSmokes, throwNade } from './grenades.js';
+import { detonateFlash, detonateHE, detonateNuke, makeNadeMesh, tacticalSmokes, throwNade } from './grenades.js';
 import { setSoldierDual, setSoldierGun } from './gunmodels.js';
 import { addKillfeed, announce, playerHitmark, updateHUD } from './hud.js';
 import { igniteMolotov } from './molotov.js';
@@ -59,6 +59,7 @@ function addRemoteMesh(r) {
 export function removeRemoteMesh(id) {
   const e = remotes.get(id);
   if (!e) return;
+  try { if (e.nukeMesh) scene.remove(e.nukeMesh); } catch {}
   try { AudioSys.helixRemote(id, 0); } catch {}
   try { coilRemote(id, 0, 0, -99, 0, 0); } catch {}
   try { scene.remove(e.mesh); } catch {}
@@ -204,6 +205,7 @@ export function updateRemoteMeshes(dt, t) {
             e._thudded = true;
             try { spawnSmoke(new THREE.Vector3(e.pos.x, 0.25, e.pos.z), 0.7, 0.9, 0xbfae8e); } catch (err) {}
           }
+          try { if (e.nukeMesh) e.nukeMesh.visible = false; } catch {}
         } catch (err) {}
         m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
       } else {
@@ -232,6 +234,26 @@ export function updateRemoteMeshes(dt, t) {
         e.wallRoll = damp(e.wallRoll || 0, (r.wr ? Math.sign(r.wr) : 0) * WALLRUN.camRoll, 10, dt);
         if (Math.abs(e.wallLean) > 0.005) m.rotation.z = e.wallLean;
         else if (Math.abs(m.rotation.z || 0) > 0.01) m.rotation.z *= Math.max(0, 1 - dt * 6);
+        // live-nuke carry prop: bomb in both hands (gun hidden), blinking core
+        try {
+          const wantNuke = !!r.nuke && !!r.alive;
+          const gunG = m.userData.gunG || m.userData.gun || (m.userData.rig && m.userData.rig.gun);
+          if (gunG) gunG.visible = !wantNuke;
+          if (wantNuke && !e.nukeMesh) {
+            e.nukeMesh = makeNadeMesh('nuke');
+            e.nukeMesh.scale.setScalar(1.6);
+            scene.add(e.nukeMesh);
+          }
+          if (e.nukeMesh) {
+            e.nukeMesh.visible = wantNuke;
+            if (wantNuke) {
+              const fx = -Math.sin(e.yaw), fz = -Math.cos(e.yaw);
+              e.nukeMesh.position.set(e.pos.x + fx * 0.5, e.pos.y + 1.15, e.pos.z + fz * 0.5);
+              const bl = e.nukeMesh.userData.blink;
+              if (bl) bl.material.opacity = 0.45 + 0.55 * Math.abs(Math.sin(t * 9 + e.walkPhase));
+            }
+          }
+        } catch {}
         m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
       }
       updateBlob(e, e.pos.x, e.pos.z, !!r.alive, moving);
@@ -465,6 +487,7 @@ function applyRemoteNade(m) {
   if (m.botShort) owner.remoteName = `${m.botShort} (BOT)`;
   const inMap = (x, y, z) => isFinite(x) && isFinite(y) && isFinite(z) && Math.abs(x) <= MAP_HALF + 6 && Math.abs(z) <= MAP_HALF + 6 && y >= -1 && y <= 12;
   if (m.action === 'throw' && NADE_DEFS[m.nade]) {
+    if (m.nade === 'nuke') return; // live carry now — never thrown, ignore stale throws
     const ox = +m.x || 0, oy = +m.y || 1.4, oz = +m.z || 0;
     const vx = +m.vx || 0, vy = +m.vy || 0, vz = +m.vz || 0;
     if (!inMap(ox, oy, oz)) return;
@@ -504,6 +527,7 @@ function applyRemoteNade(m) {
     if (!inMap(ax, ay, az)) return;
     const at = new THREE.Vector3(ax, ay, az);
     if (m.nade === 'he') detonateHE(at, owner, t, true);
+    else if (m.nade === 'nuke') detonateNuke(at, owner, t);
     else if (m.nade === 'flash') detonateFlash(at, owner, t, true);
     else if (m.nade === 'smoke') deploySmoke(at, owner, t);
     else if (m.nade === 'molotov') igniteMolotov(at, owner, t);

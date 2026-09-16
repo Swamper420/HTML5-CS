@@ -183,6 +183,18 @@ export function buyItem(kind) {
     $('heal-flash').style.opacity = 1; setTimeout(() => $('heal-flash').style.opacity = 0, 400);
     return ok('+50 HP');
   }
+  if (kind === 'nuke') {
+    // Live bomb: bought straight into both hands, no throwing, no stowing.
+    const def = NADE_DEFS.nuke;
+    if (player.carryingNuke) return no('ALREADY CARRYING LIVE NUKE');
+    if (player.money < def.price) return no('NOT ENOUGH $');
+    player.money -= def.price;
+    player.nades.nuke = 1;
+    player.carryingNuke = true; player.nukeArmedAt = performance.now() / 1000;
+    player.cook = null;
+    if (player.cur !== 'nuke') switchWeapon('nuke');
+    return ok('☢ LIVE NUKE — TWO HANDS, TOUCH NOTHING');
+  }
   if (isNadeKey(kind)) {
     const def = NADE_DEFS[kind];
     if ((player.nades[kind] || 0) >= def.max) return no(`${def.name} FULL (MAX ${def.max})`);

@@ -8,7 +8,7 @@ import { clamp } from './utils.js';
 import {
   buyByKey, buyCursorClick, buyCursorSync, buyItem, moveBuyCursor, refreshBuyMenu, toggleBuy,
 } from './buymenu.js';
-import { playerPrimeNade, playerReleaseNade } from './grenades.js';
+import { disarmNuke, playerPrimeNade, playerReleaseNade } from './grenades.js';
 import { announce } from './hud.js';
 import { dropWeapon, isDualCur } from './pickups.js';
 import { renderer } from './render.js';
@@ -46,6 +46,7 @@ export function initInput() {
       if (m) { if (!e.repeat) buyByKey(m[1]); return; }
       if (e.code === 'KeyR') { if (!e.repeat) buyByKey('R'); return; }
       if (e.code === 'KeyH') { if (!e.repeat) buyItem('helix'); return; }
+      if (e.code === 'KeyN') { if (!e.repeat) buyItem('nuke'); return; }
     }
     if (e.code === 'Digit1') { const pk = primaryKey(); if (pk) switchWeapon(pk); else announce('NO PRIMARY — PRESS B', 1100); }
     if (e.code === 'Digit2') switchWeapon('deagle');
@@ -57,6 +58,7 @@ export function initInput() {
     if (e.code === 'Digit5') switchWeapon('flash');
     if (e.code === 'Digit6') switchWeapon('smoke');
     if (e.code === 'Digit7') switchWeapon('molotov');
+    if (e.code === 'Digit8') switchWeapon('nuke');
     if (e.repeat) return;
     if (e.code === 'KeyQ') {
       const fb = player.last;
@@ -73,6 +75,7 @@ export function initInput() {
     }
     if (e.code === 'KeyC' && SET.crouchToggle && !e.repeat) player.crouchWant = !player.crouchWant;
     if (e.code === 'KeyR') startReload();
+    if (e.code === 'KeyX' && player.carryingNuke) { if (!e.repeat) disarmNuke(); return; }
     if (e.code === 'KeyX' && WEAPONS[player.cur]) dropWeapon(player.cur);
     if (e.code === 'KeyE') player.useQueued = performance.now() / 1000;
     if (e.code === 'KeyB') toggleBuy();

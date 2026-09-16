@@ -36,6 +36,7 @@ export const VM_AIM = {
   flash: new THREE.Vector3(0.0, -0.10, -0.32),
   smoke: new THREE.Vector3(0.0, -0.10, -0.32),
   molotov: new THREE.Vector3(0.0, -0.10, -0.32),
+  nuke: new THREE.Vector3(0.0, -0.10, -0.30),
 };
 function makeFlashTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -157,6 +158,11 @@ export function buildViewmodel(key, opts = {}) {
     // hand holding it
     B(vmKickG, 0.075, 0.080, 0.085, M.glove, 0, -0.115, -0.24, 0.35);
     B(vmKickG, 0.030, 0.055, 0.060, M.glove, 0.045, -0.08, -0.27, 0.35);
+    if (key === 'nuke') {
+      // second hand: both hands cradle the live bomb
+      B(vmKickG, 0.075, 0.080, 0.085, M.glove, -0.09, -0.115, -0.24, 0.35);
+      B(vmKickG, 0.030, 0.055, 0.060, M.glove, -0.135, -0.08, -0.27, 0.35);
+    }
     vmMuzzle = new THREE.Object3D(); vmMuzzle.position.set(0, -0.02, -0.34); vmKickG.add(vmMuzzle);
   } else {
     // fallback (unknown key -> AWP silhouette safety)

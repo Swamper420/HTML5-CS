@@ -227,6 +227,7 @@ export function finishReload() {
 }
 export function switchWeapon(key) {
   if (!player.alive) return;
+  if (player.carryingNuke && key !== 'nuke') { announce('HANDS FULL — LIVE NUKE (X TO DISARM)', 1200); AudioSys.dryfire(); return; }
   if (isNadeKey(key)) {
     if ((player.nades[key] || 0) <= 0) { announce(`${NADE_DEFS[key].name} EMPTY — PRESS B`, 1100); AudioSys.dryfire(); return; }
     if (player.cur === key) return;

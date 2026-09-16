@@ -55,8 +55,10 @@ export const NADE_DEFS = {
   flash:   { name: 'FLASHBANG',  short: 'FLASH', slot: 4, price: 200, max: 2, fuse: 1.5, radius: 26,  blindMax: 3.2, throwPower: 17, underPower: 7,  color: 0x8fc3ec, desc: 'Blinds on LOS' },
   smoke:   { name: 'SMOKE',      short: 'SMOKE', slot: 5, price: 300, max: 2, fuse: 1.7, radius: 3.8, duration: 18, throwPower: 17, underPower: 7, color: 0x9aa0ab, desc: 'Dynamic vision block' },
   molotov: { name: 'MOLOTOV',    short: 'MOLY',  slot: 6, price: 400, max: 1, fuse: 2.0, radius: 2.8, duration: 7.0, dps: 52, throwPower: 17, underPower: 7, color: 0xc76a1e, desc: 'Area denial fire' },
+  // Two-hand live carry, never thrown: the carrier's wall/person contact sets it off.
+  nuke:    { name: '☢ ATOMIC BOMB', short: 'NUKE', slot: 7, price: 8000, max: 1, fuse: 3.0, radius: 30, damage: 1200, throwPower: 15, underPower: 6, color: 0x2b2b2b, desc: 'Two-hand carry — touch = boom' },
 };
-export const NADE_ORDER = ['he', 'flash', 'smoke', 'molotov'];
+export const NADE_ORDER = ['he', 'flash', 'smoke', 'molotov', 'nuke'];
 export const isNadeKey = (k) => !!NADE_DEFS[k];
 
 // Extension point: agents add grenades without editing throw/detonate code.

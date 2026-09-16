@@ -997,6 +997,24 @@ export const AudioSys = {
       this._noise({ dur: 1.1, type: 'lowpass', freq: 300, sweepTo: 90, peak: 0.28, decay: 1.0, rate: 0.6, pos: p, kind: 'explosion', verb: 0.38, echo: 0.4, at: 0.25, brown: true });
     } catch (e) {}
   },
+  nukeBoom(pos = null) {
+    // ☢ over the top: flash crack, planet-cracking sub drop, rolling rumble,
+    // air-raid scream under the fireball, Geiger crackle as fallout settles.
+    if (!this.ctx || !opts.sound || this.muted) return;
+    try {
+      this._noise({ dur: 0.12, type: 'highpass', freq: 900, peak: 0.7, decay: 0.1, rate: 1.0, pos, kind: 'explosion', echo: 0.05 });
+      this._tone({ type: 'sine', f0: 95, f1: 22, dur: 2.2, peak: 0.8, decay: 2.0, pos, kind: 'explosion', verb: 0.3 });
+      this._tone({ type: 'sine', f0: 60, f1: 18, dur: 3.0, peak: 0.5, decay: 2.8, pos, kind: 'explosion', verb: 0.35, at: 0.15 });
+      this._noise({ dur: 3.2, type: 'lowpass', freq: 900, sweepTo: 45, peak: 0.75, decay: 3.0, rate: 0.8, pos, kind: 'explosion', verb: 0.4, echo: 0.45, brown: true });
+      for (let i = 0; i < 5; i++) {
+        this._noise({ dur: 0.3, type: 'lowpass', freq: 500, sweepTo: 80, peak: 0.4, decay: 0.28, rate: 0.7, pos, kind: 'explosion', verb: 0.3, echo: 0.4, at: 0.5 + i * 0.55, brown: true });
+      }
+      this._tone({ type: 'sawtooth', f0: 700, f1: 140, dur: 2.4, peak: 0.10, decay: 2.2, pos, kind: 'explosion', verb: 0.4, echo: 0.3 });
+      for (let i = 0; i < 12; i++) {
+        this._noise({ dur: 0.02, type: 'highpass', freq: rand(3000, 6000), peak: 0.10, decay: 0.018, rate: 1.5, pos, kind: 'sfx', at: 1.2 + Math.random() * 2.2 });
+      }
+    } catch (e) {}
+  },
   // ---- Tactical grenade sounds (all positional) ----
   pin(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;

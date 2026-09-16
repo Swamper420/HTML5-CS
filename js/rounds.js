@@ -174,7 +174,8 @@ function startRound(first = false, fromNet = false) {
   } catch (e) {}
   // CS loadout rules: survivors keep guns/ammo/armor, dead reset to pistol + no armor
   // Nades never carry over — rebuy every round (CS economy).
-  player.nades = { he: 0, flash: 0, smoke: 0, molotov: 0 };
+  player.nades = { he: 0, flash: 0, smoke: 0, molotov: 0, nuke: 0 };
+  player.carryingNuke = false; player.nukeArmedAt = 0; player._moveBlocked = false;
   player.cook = null; player.flashUntil = 0; player.flashMax = 0; player.burnT = 0;
   // CS loadout rules: survivors keep guns/ammo/armor, dead reset to pistol + no armor
   if (first || diedLastRound) {
