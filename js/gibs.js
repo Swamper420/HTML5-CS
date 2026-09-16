@@ -374,7 +374,8 @@ export function restoreSoldierMesh(mesh) {
         rg.shoulderL.rotation.set(-0.55, 0, 0); rg.elbowL.rotation.set(-0.85, 0, 0);
         rg.shoulderR.rotation.set(-0.55, 0, 0); rg.elbowR.rotation.set(-0.85, 0, 0);
         if (rg.gun && rg.gun.userData.baseY !== undefined) {
-          rg.gun.position.y = rg.gun.userData.baseY; rg.gun.position.z = rg.gun.userData.baseZ;
+          if (rg.gun.parent !== rg.chest) rg.chest.add(rg.gun);
+          rg.gun.position.set(0.22, rg.gun.userData.baseY, rg.gun.userData.baseZ);
         }
       } catch (e) {}
     }

@@ -204,21 +204,17 @@ export function animateSoldier(mesh, inp, dt, t) {
   }
 
   // ---- WEAPON: barrel tracks the aim line, kicks on fire, dips on reload/kneel ----
-  if (r.gun && inp.blade && A.slash <= 0) {
-    // blade hangs from the lowered hand, tip down-forward (forward is -Z world,
-    // so X-rotation dips it) — never aimed like a barrel
-    r.gun.rotation.x = 0.55 - A.pitch * 0.15;
-    r.gun.rotation.y = -A.turn * 0.12;
-    r.gun.rotation.z = 0.15;
+  if (r.gun && inp.blade) {
+    // blade base snapped to the hand: grip sits in the fist, arm sweep carries it.
+    // No aim-line or chop offsets here — the shoulder/elbow chop above IS the motion.
+    if (r.gun.parent !== r.elbowR) r.elbowR.add(r.gun);
+    r.gun.position.set(0, -0.34, 0.03);
+    r.gun.rotation.set(0.75, 0, 0.1);
   } else if (r.gun) {
+    if (r.gun.parent !== r.chest) { r.chest.add(r.gun); r.gun.position.set(0.22, 0.13, 0.55); }
     r.gun.rotation.x = -A.pitch * 0.55 - A.fire * 0.22 + 0.25 * rl + 0.30 * kneelK;
     r.gun.rotation.z = 0.55 * rl + 0.35 * kneelK;
     r.gun.rotation.y = -A.turn * 0.12;
-    if (A.slash > 0) { // blade rides the chop, not the aim line
-      const chop = Math.sin(clamp(1 - A.slash, 0, 1) * Math.PI), f = A.slashDir || 1;
-      r.gun.rotation.x += -0.4 * chop;
-      r.gun.rotation.z += f * -0.7 * chop;
-    }
     r.gun.position.y = (r.gun.userData.baseY !== undefined ? r.gun.userData.baseY : (r.gun.userData.baseY = r.gun.position.y))
       - 0.05 * rl - A.fire * 0.015;
     r.gun.position.z = (r.gun.userData.baseZ !== undefined ? r.gun.userData.baseZ : (r.gun.userData.baseZ = r.gun.position.z))
@@ -245,7 +241,7 @@ export function animateSoldier(mesh, inp, dt, t) {
     r.shoulderL.rotation.z += 0.75 * wL; r.shoulderR.rotation.z -= 0.75 * wR;
     r.shoulderL.rotation.x -= 0.30 * wL; r.shoulderR.rotation.x -= 0.30 * wR;
     r.elbowL.rotation.x -= 0.25 * wL; r.elbowR.rotation.x -= 0.25 * wR;
-    if (r.gun) { r.gun.rotation.z += wk * 0.12; r.gun.rotation.y -= wk * 0.08; }
+    if (r.gun && !inp.blade) { r.gun.rotation.z += wk * 0.12; r.gun.rotation.y -= wk * 0.08; }
   }
   return struck;
 }
