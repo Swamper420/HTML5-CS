@@ -150,7 +150,7 @@ export function updatePlayer(dt, t) {
     player.vel.x += (mx - player.vel.x) * Math.min(1, accel * dt);
     player.vel.z += (mz - player.vel.z) * Math.min(1, accel * dt);
     // gravity / jump (blocked while frozen — CS freeze time)
-    if (player.onGround && spaceDown) { player.vel.y = 5.2; player.onGround = false; }
+    if (player.onGround && spaceDown) { player.vel.y = 5.2; player.onGround = false; try { AudioSys.jump(); } catch (e) {} }
     // latch onto a wall: airborne, holding W, moving fast enough, not crouched
     if (!player.onGround && canAct && keys['KeyW'] && !player.crouching && player.wallCd <= 0) {
       const floorY = supportHeightAt(player.pos.x, player.pos.z, player.pos.y, player.radius);

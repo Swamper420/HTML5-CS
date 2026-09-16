@@ -20,6 +20,11 @@ Mixkit Sound Effects License (free for commercial use, no attribution required):
 - crack.mp3 — "Arrow whoosh" (trimmed) https://mixkit.co/free-sound-effects/whoosh/
 - impact.mp3 — "Impact of a blow" (trimmed) https://mixkit.co/free-sound-effects/impact/
 - clang.mp3 — "Metal hammer hit" (trimmed) https://mixkit.co/free-sound-effects/metal/
+- cash.mp3 — "Coin win notification" (trimmed) https://mixkit.co/free-sound-effects/money/
+- whistle.mp3 — "Police short whistle" (trimmed) https://mixkit.co/free-sound-effects/whistle/
+- glass.mp3 — "Glass break with hammer thud" (trimmed) https://mixkit.co/free-sound-effects/glass/
+- thud.mp3 — "Body impact falling into the sand" (trimmed) https://mixkit.co/free-sound-effects/thud/
+- punch.mp3 — "Body punch quick hit" (trimmed) https://mixkit.co/free-sound-effects/punch/
 
 Classical Music Stings (Round ends, Victory, Defeat, Bomb detonate):
 - music_beethoven.mp3 — Ludwig van Beethoven: Symphony No. 5 in C minor, Op. 67 (I. Allegro con brio)

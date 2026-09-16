@@ -156,6 +156,7 @@ function startRound(first = false, fromNet = false) {
   G.roundKills = { ct: 0, t: 0 };
   G.timeLeft = ROUND_TIME; G.buyOpen = false; G.roundEnding = false;
   G.freezeLeft = FREEZE_TIME; G.buyLeft = BUY_TIME;
+  try { AudioSys.whistle(); } catch (e) {}
   try { beginRoundReport(); } catch (e) {}
   $('buy-menu').classList.remove('open'); buyCursorSync();
   $('killfeed').innerHTML = '';

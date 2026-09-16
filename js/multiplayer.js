@@ -204,6 +204,7 @@ export function updateRemoteMeshes(dt, t) {
           if (!e._thudded && dk >= 1) {
             e._thudded = true;
             try { spawnSmoke(new THREE.Vector3(e.pos.x, 0.25, e.pos.z), 0.7, 0.9, 0xbfae8e); } catch (err) {}
+            try { AudioSys.thud(new THREE.Vector3(e.pos.x, 0.6, e.pos.z)); } catch (err) {}
           }
           try { if (e.nukeMesh) e.nukeMesh.visible = false; } catch {}
         } catch (err) {}

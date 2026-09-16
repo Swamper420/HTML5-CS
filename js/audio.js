@@ -127,6 +127,8 @@ export const AudioSys = {
     reload_pump: 'sounds/reload_pump.mp3', reload_move: 'sounds/reload_move.mp3',
     click: 'sounds/click.mp3', steps: 'sounds/steps.mp3', crack: 'sounds/crack.mp3',
     impact: 'sounds/impact.mp3', clang: 'sounds/clang.mp3',
+    cash: 'sounds/cash.mp3', whistle: 'sounds/whistle.mp3', glass: 'sounds/glass.mp3',
+    thud: 'sounds/thud.mp3', punch: 'sounds/punch.mp3',
     music_beethoven: 'sounds/music_beethoven.mp3',
     music_valkyrie: 'sounds/music_valkyrie.mp3',
     music_chopin: 'sounds/music_chopin.mp3',
@@ -230,7 +232,65 @@ export const AudioSys = {
       lfo2.connect(lfo2G); lfo2G.connect(f.frequency);
       src.connect(f); f.connect(g); g.connect(this.master);
       src.start(); lfo.start(); lfo2.start();
+      this._ambientLife();
     } catch (e) {}
+  },
+  _ambientLife() {
+    // ponytail: one timer, procedural only — gusts + distant crows so the map breathes
+    const tick = () => {
+      if (!this.ctx) return;
+      try {
+        if (opts.sound && !this.muted && !document.hidden) {
+          if (Math.random() < 0.5) this._gust();
+          else this._crow();
+        }
+      } catch (e) {}
+      setTimeout(tick, rand(7000, 18000));
+    };
+    setTimeout(tick, 5000);
+  },
+  _gust() {
+    this._noise({ dur: 2.2, type: 'lowpass', freq: 420, sweepTo: 180, peak: 0.055, decay: 2.0, rate: 0.5, verb: 0.25, brown: true });
+  },
+  _crow() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    const n = 2 + ((Math.random() * 2) | 0);
+    for (let i = 0; i < n; i++) {
+      this._tone({ type: 'triangle', f0: rand(1300, 1700), f1: rand(750, 950), dur: 0.16, peak: 0.045, decay: 0.15, verb: 0.3, at: i * rand(0.18, 0.26) });
+    }
+  },
+  rustle(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.12, type: 'bandpass', freq: rand(1800, 3200), Q: 0.7, peak: 0.16, decay: 0.1, rate: rand(1.2, 1.7), pos, kind: 'sfx', verb: 0.06 });
+  },
+  cash() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // real coin-win recording; synth cha-ching fallback until decoded
+    if (this._sample({ name: 'cash', peak: 0.5, dur: 1.2, verb: 0.06 })) return;
+    this._tone({ type: 'sine', f0: 1568, dur: 0.09, peak: 0.16, decay: 0.08, verb: 0.06 });
+    this._tone({ type: 'sine', f0: 2093, dur: 0.18, peak: 0.1, decay: 0.16, verb: 0.06, at: 0.07 });
+  },
+  whistle() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // round-start ref whistle; dry pea-trill fallback until decoded
+    if (this._sample({ name: 'whistle', peak: 0.4, dur: 0.9, verb: 0.12 })) return;
+    this._tone({ type: 'triangle', f0: 2300, dur: 0.14, peak: 0.2, decay: 0.13, verb: 0.1 });
+    this._tone({ type: 'triangle', f0: 2300, dur: 0.2, peak: 0.2, decay: 0.19, verb: 0.1, at: 0.16 });
+  },
+  thud(pos = null) {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    // body hitting dirt: real recording + dust wash, positional for corpses
+    if (this._sample({ name: 'thud', peak: 0.55, dur: 0.9, pos, kind: 'impact', verb: 0.1 })) {
+      this._noise({ dur: 0.12, type: 'lowpass', freq: 500, sweepTo: 150, peak: 0.14, decay: 0.1, rate: 0.8, pos, kind: 'impact' });
+      return;
+    }
+    this._tone({ type: 'sine', f0: 95, f1: 40, dur: 0.12, peak: 0.3, decay: 0.11, pos, kind: 'impact' });
+    this._noise({ dur: 0.1, type: 'lowpass', freq: 500, peak: 0.2, decay: 0.09, rate: 0.8, pos, kind: 'impact' });
+  },
+  jump() {
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.14, type: 'bandpass', freq: 900, Q: 1, peak: 0.09, decay: 0.12, rate: 1 });
+    this._tone({ type: 'sine', f0: 180, f1: 120, dur: 0.1, peak: 0.07, decay: 0.09 });
   },
   applyVolumes() {
     if (!this.ctx) return;
@@ -639,6 +699,8 @@ export const AudioSys = {
   },
   hurt() {
     if (!this.ctx || !opts.sound || this.muted) return;
+    // real body-punch layer under the synth grunt — felt, not melodic
+    this._sample({ name: 'punch', peak: 0.4, dur: 0.4, verb: 0.04 });
     // body thud + soft grunt drop + breath — round waves only, no saw buzz
     this._tone({ type: 'triangle', f0: 190, f1: 85, dur: 0.2, peak: 0.32, decay: 0.19, verb: 0.06 });
     this._tone({ type: 'sine', f0: 95, f1: 45, dur: 0.19, peak: 0.42, decay: 0.17 });
@@ -681,6 +743,8 @@ export const AudioSys = {
     const slice = this.STEP_SLICES[(Math.random() * this.STEP_SLICES.length) | 0];
     if (isSelf) {
       const pan = (this._stepAlt ? -1 : 1) * 0.12;
+      // ~1 in 4 steps: faint gear jingle so own movement isn't metronomic
+      if (Math.random() < 0.25) this._noise({ dur: 0.05, type: 'highpass', freq: rand(4000, 6000), peak: 0.03, decay: 0.04, rate: rand(1.4, 1.8), verb: 0.02 });
       if (this._sample({ name: 'steps', peak: sprint ? 0.34 : 0.26, offset: slice + rand(-0.03, 0.03), dur: 0.3, pan, verb: 0.03 })) return;
       // fallback: alternating L/R micro-pan gravel crunch + soft thud
       const t0 = this.now();
@@ -711,6 +775,8 @@ export const AudioSys = {
   },
   land(hard = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
+    // hard landings get the real body-fall layer under the synth thump
+    if (hard) this._sample({ name: 'thud', peak: 0.4, dur: 0.7, verb: 0.06 });
     this._tone({ type: 'sine', f0: hard ? 105 : 88, f1: 42, dur: 0.11, peak: hard ? 0.34 : 0.19, decay: 0.1 });
     this._noise({ dur: 0.09, type: 'lowpass', freq: hard ? 600 : 430, peak: hard ? 0.28 : 0.15, decay: 0.08, rate: 0.8 });
   },
@@ -718,6 +784,8 @@ export const AudioSys = {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     const s = this._spatial(pos, 'impact');
     if (s.vol < 0.012) return;
+    // ~1 in 5 hits: faint metallic ricochet whine after the thwack
+    if (Math.random() < 0.2) this._tone({ type: 'sine', f0: rand(2200, 3400), f1: rand(900, 1400), dur: 0.12, peak: 0.06, decay: 0.11, pos, kind: 'impact', verb: 0.2, at: rand(0.03, 0.09) });
     // real recorded impact + dust wash. No ring — concrete doesn't ring.
     if (this._sample({ name: 'impact', peak: big ? 0.55 : 0.4, dur: 0.4, pos, kind: 'impact' })) {
       this._noise({ dur: 0.14, type: 'lowpass', freq: 850, sweepTo: 250, peak: 0.14, decay: 0.11, rate: 0.9, pos, kind: 'impact' });
@@ -1067,8 +1135,9 @@ export const AudioSys = {
   },
   molotovIgnite(pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;
-    // glass shatter + whoomph: noise only, no pitched element
-    this._noise({ dur: 0.09, type: 'highpass', freq: 2800, peak: 0.4, decay: 0.07, rate: 1.4, pos, kind: 'explosion' });
+    // real glass smash first, then the whoomph (noise only, no pitched element)
+    this._sample({ name: 'glass', peak: 0.5, dur: 1.2, pos, kind: 'explosion' });
+    this._noise({ dur: 0.09, type: 'highpass', freq: 2800, peak: 0.25, decay: 0.07, rate: 1.4, pos, kind: 'explosion' });
     this._noise({ dur: 0.22, type: 'highpass', freq: 1500, peak: 0.4, decay: 0.18, rate: 1.1, pos, kind: 'explosion', at: 0.03 });
     this._noise({ dur: 0.6, type: 'lowpass', freq: 850, sweepTo: 200, peak: 0.55, decay: 0.55, rate: 0.8, pos, kind: 'explosion', verb: 0.25, at: 0.06, brown: true });
   },

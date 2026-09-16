@@ -409,6 +409,7 @@ export function updateDeadBots(dt) {
     if (!b._thudded && k >= 1) {
       b._thudded = true;
       try { spawnSmoke(new THREE.Vector3(b.pos.x, 0.25, b.pos.z), 0.7, 0.9, 0xbfae8e); } catch (e) {}
+      try { AudioSys.thud(new THREE.Vector3(b.pos.x, 0.6, b.pos.z)); } catch (e) {}
     }
     try { if (b.blob) { b.blob.position.set(b.pos.x, 0.02, b.pos.z); } } catch (e) {}
   }

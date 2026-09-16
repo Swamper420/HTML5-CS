@@ -130,7 +130,7 @@ export function buyItem(kind) {
   if (!player.alive) { buyFeedback(kind, false, 'CAN\'T BUY WHILE DEAD'); AudioSys.click(250, 0.12, 0.35); return; }
   if (G.roundEnding) return;
   const w = player.weapons;
-  const ok = (msg) => { buyFeedback(kind, true, msg); refreshBuyMenu(true); updateHUD(); AudioSys.click(1500, 0.07, 0.35); };
+  const ok = (msg) => { buyFeedback(kind, true, msg); refreshBuyMenu(true); updateHUD(); AudioSys.cash(); };
   const no = (msg) => { buyFeedback(kind, false, msg); AudioSys.click(250, 0.12, 0.35); };
   // Buying a gun you already hold buys a second one: dual wield.
   const buySecond = (k) => {
