@@ -27,8 +27,10 @@ function gunProfileGeo(pts, holes, w, bevel = 0.0025) {
   return g;
 }
 export let _worldGunMats = null;
+let _gunMats = null;
 export function gunMats() {
-  const M = vmMats();
+  if (_gunMats) return _gunMats;
+  const M = Object.assign({}, vmMats());
   M.polymer = new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.72, metalness: 0.05 });
   M.polymerL = new THREE.MeshStandardMaterial({ color: 0x45484c, roughness: 0.8, metalness: 0.05 });
   M.bakelite = new THREE.MeshStandardMaterial({ color: 0x5b2a17, roughness: 0.55, metalness: 0.05 });
@@ -40,6 +42,7 @@ export function gunMats() {
   M.glowR = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
   M.sleeve = new THREE.MeshStandardMaterial({ color: 0x3d4654, roughness: 0.95 });
   M.gloveK = new THREE.MeshStandardMaterial({ color: 0x3a3630, roughness: 0.85 });
+  _gunMats = M;
   return M;
 }
 // Build `key` into `root`; magazine parts go into `magG` (so reloads can drop them).

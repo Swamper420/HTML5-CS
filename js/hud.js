@@ -14,6 +14,15 @@ import { renderScoreboard, scoreboardVisible } from './scoreboard.js';
 import { G, bots, isBuyTime, isFreeze, player, primaryKey } from './state.js';
 import { esc } from './stats.js';
 
+// cached DOM (boot-time lookup, reused — HUD runs at 4-30Hz)
+const _elCache = {};
+const _el = (id) => _elCache[id] || (_elCache[id] = $(id));
+let _wslots = null, _nslots = null;
+const _wsl = () => _wslots || (_wslots = document.querySelectorAll('.wslot'));
+const _nsl = () => _nslots || (_nslots = document.querySelectorAll('.nslot'));
+const _fwdV = new THREE.Vector3();
+function _setText(e, v) { if (e && e.__hv !== v) { e.__hv = v; e.textContent = v; } }
+function _setOp(e, v) { if (e && e.__op !== v) { e.__op = v; e.style.opacity = v; } }
 export function playerHitmark(head, kill) {
   const h = $('hitmarker');
   h.classList.remove('show', 'kill'); void h.offsetWidth;
@@ -46,29 +55,27 @@ const _sunDirV = new THREE.Vector3(34, 42, 20).normalize();
 export function updateScreenFeel(dt, t) {
   try {
     if (G.phase === 'playing' && player.alive && camera) {
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-      const sunK = Math.max(0, fwd.dot(_sunDirV));
+      _fwdV.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      const sunK = Math.max(0, _fwdV.dot(_sunDirV));
       const glare = Math.pow(sunK, 18) * 0.85 + Math.pow(sunK, 90) * 0.9;
-      const el = $('glare');
-      if (el) el.style.opacity = clamp(glare, 0, 0.9).toFixed(3);
+      _setOp(_el('glare'), clamp(glare, 0, 0.9).toFixed(3));
     } else {
-      const el = $('glare');
-      if (el && el.style.opacity !== '0') el.style.opacity = 0;
+      const el = _el('glare');
+      if (el && el.__op !== 0) _setOp(el, 0);
     }
   } catch (e) {}
   try {
-    const el = $('lowhp');
+    const el = _el('lowhp');
     if (el) {
       if (G.phase === 'playing' && player.alive && player.hp <= 45) {
-        el.style.opacity = (0.35 + 0.4 * (1 - player.hp / 45) + Math.sin(t * 5) * 0.12).toFixed(3);
-      } else if (el.style.opacity !== '0') el.style.opacity = 0;
+        _setOp(el, (0.35 + 0.4 * (1 - player.hp / 45) + Math.sin(t * 5) * 0.12).toFixed(3));
+      } else if (el.__op !== 0) _setOp(el, 0);
     }
   } catch (e) {}
   try {
     if (_boomFlashV > 0) {
       _boomFlashV = Math.max(0, _boomFlashV - dt * 1.8);
-      const el = $('boomflash');
-      if (el) el.style.opacity = _boomFlashV.toFixed(3);
+      _setOp(_el('boomflash'), _boomFlashV.toFixed(3));
     }
   } catch (e) {}
 }
@@ -112,44 +119,46 @@ export function addKillfeed(killer, kTeam, victim, vTeam, wpn, head) {
 }
 function fmtTime(s) { s = Math.max(0, Math.ceil(s)); return `${(s / 60) | 0}:${String(s % 60).padStart(2, '0')}`; }
 export function updateHUD() {
-  $('hp-num').textContent = Math.ceil(player.hp);
-  $('hp-fill').style.width = clamp(player.hp, 0, 100) + '%';
-  $('armor-num').textContent = Math.ceil(player.armor);
-  $('armor-fill').style.width = clamp(player.armor, 0, 100) + '%';
-  const moneyEl = $('money');
+  _setText(_el('hp-num'), Math.ceil(player.hp));
+  const _hpf = _el('hp-fill'), _hpW = clamp(player.hp, 0, 100) + '%';
+  if (_hpf && _hpf.__hv !== _hpW) { _hpf.__hv = _hpW; _hpf.style.width = _hpW; }
+  _setText(_el('armor-num'), Math.ceil(player.armor));
+  const _arf = _el('armor-fill'), _arW = clamp(player.armor, 0, 100) + '%';
+  if (_arf && _arf.__hv !== _arW) { _arf.__hv = _arW; _arf.style.width = _arW; }
+  const moneyEl = _el('money');
   if (updateHUD._money !== undefined && player.money > updateHUD._money) {
     moneyEl.classList.remove('bump'); void moneyEl.offsetWidth; moneyEl.classList.add('bump');
   }
   updateHUD._money = player.money;
-  moneyEl.textContent = '$' + player.money;
-  $('health-panel').classList.toggle('low', player.alive && player.hp <= 25);
+  _setText(moneyEl, '$' + player.money);
+  _el('health-panel').classList.toggle('low', player.alive && player.hp <= 25);
   if (isNadeKey(player.cur)) {
     const def = NADE_DEFS[player.cur];
     const n = player.nades[player.cur] || 0;
-    $('ammo-mag').textContent = '×' + n; $('ammo-reserve').textContent = def.max;
-    $('weapon-name').textContent = def.name;
+    _setText(_el('ammo-mag'), '×' + n); _setText(_el('ammo-reserve'), def.max);
+    _setText(_el('weapon-name'), def.name);
   } else if (player.cur === 'helix') {
     const w = player.weapons.helix, def = WEAPONS.helix;
-    $('ammo-mag').textContent = w.mag > 0 ? '⚡' : '○';
-    $('ammo-reserve').textContent = w.mag > 0 ? 'CELL' : (player.reloading > 0 ? player.reloading.toFixed(1) + 's' : '…');
-    $('weapon-name').textContent = def.name.toUpperCase();
+    _setText(_el('ammo-mag'), w.mag > 0 ? '⚡' : '○');
+    _setText(_el('ammo-reserve'), w.mag > 0 ? 'CELL' : (player.reloading > 0 ? player.reloading.toFixed(1) + 's' : '…'));
+    _setText(_el('weapon-name'), def.name.toUpperCase());
   } else if (WEAPONS[player.cur] && WEAPONS[player.cur].melee) {
-    $('ammo-mag').textContent = '—'; $('ammo-reserve').textContent = '∞';
-    $('weapon-name').textContent = WEAPONS[player.cur].name;
+    _setText(_el('ammo-mag'), '—'); _setText(_el('ammo-reserve'), '∞');
+    _setText(_el('weapon-name'), WEAPONS[player.cur].name);
   } else {
     const w = player.weapons[player.cur] || player.weapons.deagle;
     const def = WEAPONS[player.cur] || WEAPONS.deagle;
-    $('ammo-mag').textContent = w.dual ? `${w.mag2 | 0}|${w.mag}` : w.mag; $('ammo-reserve').textContent = w.reserve;
-    $('weapon-name').textContent = (w.dual ? 'DUAL ' : '') + def.name.toUpperCase();
+    _setText(_el('ammo-mag'), w.dual ? `${w.mag2 | 0}|${w.mag}` : w.mag); _setText(_el('ammo-reserve'), w.reserve);
+    _setText(_el('weapon-name'), (w.dual ? 'DUAL ' : '') + def.name.toUpperCase());
   }
-  document.querySelectorAll('.wslot').forEach((el) => {
+  _wsl().forEach((el) => {
     const k = el.dataset.slot === 'primary' ? (primaryKey() || null) : 'deagle';
     if (el.dataset.slot === 'primary') { const sp = el.querySelector('span'); if (sp) sp.textContent = k ? WEAPONS[k].name : 'PRIMARY'; }
     el.classList.toggle('active', !!k && k === player.cur);
     el.classList.toggle('locked', !k || !player.weapons[k].owned);
   });
   // nade slots (4-7) with counts
-  document.querySelectorAll('.nslot').forEach((el) => {
+  _nsl().forEach((el) => {
     const k = el.dataset.nade;
     const n = player.nades[k] || 0;
     el.classList.toggle('active', k === player.cur);
@@ -157,15 +166,15 @@ export function updateHUD() {
     const cnt = el.querySelector('i');
     if (cnt) cnt.textContent = '×' + n;
   });
-  $('ct-score').textContent = G.score.ct; $('t-score').textContent = G.score.t;
+  _setText(_el('ct-score'), G.score.ct); _setText(_el('t-score'), G.score.t);
   if (BOMB.planted && BOMB.pos && !G.roundEnding) {
     const tNow = performance.now() / 1000;
     const left = Math.max(0, BOMB.explodeAt - tNow);
-    $('timer').textContent = '💣 ' + left.toFixed(1);
-    $('timer').classList.toggle('low', true);
+    _setText(_el('timer'), '💣 ' + left.toFixed(1));
+    _el('timer').classList.toggle('low', true);
   } else {
-    $('timer').textContent = isFreeze() ? ('❄ ' + G.freezeLeft.toFixed(1)) : fmtTime(G.timeLeft);
-    $('timer').classList.toggle('low', !isFreeze() && G.timeLeft < 20);
+    _setText(_el('timer'), isFreeze() ? ('❄ ' + G.freezeLeft.toFixed(1)) : fmtTime(G.timeLeft));
+    _el('timer').classList.toggle('low', !isFreeze() && G.timeLeft < 20);
   }
   let ctAlive = (player.alive && (player.team || 'ct') === 'ct' ? 1 : 0) + bots.filter((b) => b.alive && b.team === 'ct').length;
   let tAlive = (player.alive && player.team === 't' ? 1 : 0) + bots.filter((b) => b.alive && b.team === 't').length;
@@ -180,8 +189,9 @@ export function updateHUD() {
   let phase = '';
   // freeze countdown is already the big clock — don't repeat it here
   if (!isFreeze() && isBuyTime()) phase = ` · BUY ${G.buyLeft.toFixed(1)}s`;
-  $('round-label').textContent = `R${G.round}/${ROUNDS_TO_WIN_MATCH * 2 - 1} · ${ctAlive} v ${tAlive}${phase}`;
-  $('crosshair').style.setProperty('--gap', (crossGap * SET.chGap / 100).toFixed(1) + 'px');
+  _setText(_el('round-label'), `R${G.round}/${ROUNDS_TO_WIN_MATCH * 2 - 1} · ${ctAlive} v ${tAlive}${phase}`);
+  const _ch = _el('crosshair'), _gap = (crossGap * SET.chGap / 100).toFixed(1) + 'px';
+  if (_ch && _ch.__hv !== _gap) { _ch.__hv = _gap; _ch.style.setProperty('--gap', _gap); }
   try { if (scoreboardVisible()) renderScoreboard(); } catch {}
 }
 

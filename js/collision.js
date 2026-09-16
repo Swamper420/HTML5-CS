@@ -18,15 +18,20 @@ export function collidesAt(p, radius, height = 1.7) {
   return null;
 }
 export function moveWithCollision(p, dx, dz, radius, height = 1.7) {
+  // substep so fast moves never tunnel through thin walls (same 0.05/8 rule as nades)
+  const steps = clamp(Math.ceil(Math.hypot(dx, dz) / 0.05), 1, 8);
+  const sx = dx / steps, sz = dz / steps;
+  for (let s = 0; s < steps; s++) {
   // X axis — reuse temp vectors, no per-frame allocation
-  let nx = p.x + dx;
+  let nx = p.x + sx;
   _tmpMoveA.set(nx, p.y, p.z);
   const hitX = collidesAt(_tmpMoveA, radius, height);
   if (!hitX) p.x = clamp(nx, -MAP_HALF, MAP_HALF);
-  let nz = p.z + dz;
-  _tmpMoveA.set(p.x, p.y, p.z + dz);
+  let nz = p.z + sz;
+  _tmpMoveA.set(p.x, p.y, p.z + sz);
   const hitZ = collidesAt(_tmpMoveA, radius, height);
   if (!hitZ) p.z = clamp(nz, -MAP_HALF, MAP_HALF);
+  }
 }
 // footprint overlap (strict — touching a wall's side doesn't count as over it)
 function _overFootprint(b, x, z, r) {

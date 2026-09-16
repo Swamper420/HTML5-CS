@@ -26,10 +26,10 @@ export let rmbDown = false, rmbJustDown = false; // left-hand trigger when dual 
 export function initInput() {
   addEventListener('keydown', (e) => {
     if (['Space', 'Tab'].includes(e.code)) e.preventDefault();
-    if (G.menuOpen && !settingsOpen()) return; // online menu overlay: game runs on, you don't
-    keys[e.code] = true;
+    if (G.menuOpen && !settingsOpen()) { clearKeys(); return; } // online menu overlay: game runs on, you don't
     if (settingsOpen()) { if (e.code === 'Escape') { e.preventDefault(); closeSettings(); } return; }
-    if (G.phase !== 'playing') return;
+    if (G.phase !== 'playing') { clearKeys(); return; }
+    keys[e.code] = true;
     if (e.code === 'Tab') { if (!e.repeat) setScoreboard(true); return; }
     if (e.code === 'KeyM') { AudioSys.muted = !AudioSys.muted; announce(AudioSys.muted ? 'SOUND OFF' : 'SOUND ON', 800); return; }
     if (!player.alive) {
@@ -83,7 +83,7 @@ export function initInput() {
     if (e.code === 'KeyB') toggleBuy();
   });
   addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'Tab') setScoreboard(false); });
-  addEventListener('blur', () => { try { setScoreboard(false); } catch {} });
+  addEventListener('blur', () => { clearKeys(); try { setScoreboard(false); } catch {} });
   document.addEventListener('mousedown', (e) => {
     if (G.phase !== 'playing' || !pointerLocked) return;
     if (!player.alive) {
@@ -140,10 +140,11 @@ export function initInput() {
     if (!pointerLocked && G.buyOpen) {
       // ESC (browser-forced unlock) while shopping: close the menu and pause, like any other ESC.
       toggleBuy(false, false);
+      clearKeys();
       if (G.phase === 'playing' && player.alive) pauseGame();
       return;
     }
-    if (!pointerLocked && G.phase === 'playing' && player.alive) pauseGame();
+    if (!pointerLocked && G.phase === 'playing' && player.alive) { clearKeys(); pauseGame(); }
     buyCursorSync();
   });
   // Native click only matters when the pointer is NOT locked (locked clicks target the canvas).
@@ -153,6 +154,11 @@ export function initInput() {
 
 
 // Cross-module writers (ES imports are read-only bindings).
+export function clearKeys() {
+  for (const k of Object.keys(keys)) delete keys[k];
+  setMouseDown(false); setRmbDown(false);
+  setMouseJustDown(false); setRmbJustDown(false);
+}
 export function setCrossGap(v) { return (crossGap = v); }
 export function setRmbJustDown(v) { return (rmbJustDown = v); }
 export function setMouseJustDown(v) { return (mouseJustDown = v); }

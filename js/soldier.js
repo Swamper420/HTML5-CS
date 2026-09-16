@@ -51,21 +51,37 @@ function soldierTextures(team) {
 // to bend a limb; those keys now point at the hip / shoulder / spine PIVOTS, so
 // every existing call site (gore, ragdoll, restore) keeps working — and finally
 // bends the body where a body actually bends.
+// shared per-team materials (one set per team, reused across all soldiers)
+const _soldierMats = {};
+function soldierMats(team) {
+  const k = team === 'ct' ? 'ct' : 't';
+  let M = _soldierMats[k];
+  if (M) return M;
+  const tex = soldierTextures(k);
+  M = {
+    matBody: new THREE.MeshStandardMaterial({ map: tex.cloth, color: 0xffffff, roughness: 0.92 }),
+    matPants: new THREE.MeshStandardMaterial({ map: tex.pants, roughness: 0.95 }),
+    matSkin: new THREE.MeshStandardMaterial({ color: 0xc9986b, roughness: 0.65 }),
+    matGun: new THREE.MeshStandardMaterial({ color: 0x1e1e22, roughness: 0.42, metalness: 0.65 }),
+    matHelmet: new THREE.MeshStandardMaterial({ color: k === 'ct' ? 0x1d2f45 : 0x6b5a35, roughness: 0.75 }),
+    matVest: new THREE.MeshStandardMaterial({ color: k === 'ct' ? 0x1a2330 : 0x3d3220, roughness: 0.95 }),
+    matBoot: new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.9 }),
+    matPad: new THREE.MeshStandardMaterial({ color: 0x22262c, roughness: 0.85 }),
+    matCuff: new THREE.MeshStandardMaterial({ color: k === 'ct' ? 0x22344e : 0x6e562f, roughness: 0.9 }),
+    matGlove: new THREE.MeshStandardMaterial({ color: 0x2b2b26, roughness: 0.95 }),
+    matRoll: new THREE.MeshStandardMaterial({ color: k === 'ct' ? 0x3a4a5a : 0x7a6a48, roughness: 1 }),
+    matStripe: new THREE.MeshStandardMaterial({ color: k === 'ct' ? 0x66b3ff : 0xffc14d, emissive: k === 'ct' ? 0x1a3a5a : 0x5a3a10, emissiveIntensity: 0.7, roughness: 0.6 }),
+    matStock: new THREE.MeshStandardMaterial({ color: k === 'ct' ? 0x22303f : 0x6b4a2a, roughness: 0.8 }),
+    matBeard: new THREE.MeshStandardMaterial({ color: 0x2e1f12, roughness: 1 }),
+    matScarf: new THREE.MeshStandardMaterial({ color: 0x8a2f22, roughness: 1 }),
+    matGlass: new THREE.MeshStandardMaterial({ color: 0x0e141c, roughness: 0.15, metalness: 0.8 }),
+  };
+  _soldierMats[k] = M;
+  return M;
+}
 export function makeSoldier(team) {
   const g = new THREE.Group();
-  const tex = soldierTextures(team);
-  const cBody = team === 'ct' ? 0xffffff : 0xffffff; // cloth map carries the color
-  const skin = 0xc9986b;
-  const matBody = new THREE.MeshStandardMaterial({ map: tex.cloth, color: cBody, roughness: 0.92 });
-  const matPants = new THREE.MeshStandardMaterial({ map: tex.pants, roughness: 0.95 });
-  const matSkin = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.65 });
-  const matGun = new THREE.MeshStandardMaterial({ color: 0x1e1e22, roughness: 0.42, metalness: 0.65 });
-  const matHelmet = new THREE.MeshStandardMaterial({ color: team === 'ct' ? 0x1d2f45 : 0x6b5a35, roughness: 0.75 });
-  const matVest = new THREE.MeshStandardMaterial({ color: team === 'ct' ? 0x1a2330 : 0x3d3220, roughness: 0.95 });
-  const matBoot = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.9 });
-  const matPad = new THREE.MeshStandardMaterial({ color: 0x22262c, roughness: 0.85 });
-  const matCuff = new THREE.MeshStandardMaterial({ color: team === 'ct' ? 0x22344e : 0x6e562f, roughness: 0.9 });
-  const matGlove = new THREE.MeshStandardMaterial({ color: 0x2b2b26, roughness: 0.95 });
+  const { matBody, matPants, matSkin, matGun, matHelmet, matVest, matBoot, matPad, matCuff, matGlove, matRoll, matStripe, matStock, matBeard, matScarf, matGlass } = soldierMats(team);
   const mk = (geo, mat, x, y, z, shadow = true) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z); m.castShadow = shadow;
@@ -122,11 +138,11 @@ export function makeSoldier(team) {
   const pack = mk(new THREE.BoxGeometry(0.44, 0.5, 0.2), matVest, 0, C(1.25), -0.29);
   chest.add(pack);
   const roll = mk(new THREE.CylinderGeometry(0.09, 0.09, 0.46, 8),
-    new THREE.MeshStandardMaterial({ color: team === 'ct' ? 0x3a4a5a : 0x7a6a48, roughness: 1 }),
+    matRoll,
     0, C(1.52), -0.29, false);
   roll.rotation.z = Math.PI / 2; chest.add(roll);
   chest.add(mk(new THREE.BoxGeometry(0.64, 0.09, 0.40),
-    new THREE.MeshStandardMaterial({ color: team === 'ct' ? 0x66b3ff : 0xffc14d, emissive: team === 'ct' ? 0x1a3a5a : 0x5a3a10, emissiveIntensity: 0.7, roughness: 0.6 }),
+    matStripe,
     0, C(1.44), 0, false));
   for (const sx of [-0.38, 0.38]) chest.add(mk(new THREE.BoxGeometry(0.18, 0.1, 0.24), matVest, sx, C(1.52), 0, false));
 
@@ -139,12 +155,12 @@ export function makeSoldier(team) {
   neck.add(head);
   let beard = null, scarf = null, glass = null;
   if (team === 't') {
-    beard = mk(new THREE.BoxGeometry(0.3, 0.12, 0.05), new THREE.MeshStandardMaterial({ color: 0x2e1f12, roughness: 1 }), 0, N(1.66), 0.16, false);
+    beard = mk(new THREE.BoxGeometry(0.3, 0.12, 0.05), matBeard, 0, N(1.66), 0.16, false);
     neck.add(beard);
-    scarf = mk(new THREE.BoxGeometry(0.36, 0.12, 0.36), new THREE.MeshStandardMaterial({ color: 0x8a2f22, roughness: 1 }), 0, N(1.56), 0, false);
+    scarf = mk(new THREE.BoxGeometry(0.36, 0.12, 0.36), matScarf, 0, N(1.56), 0, false);
     neck.add(scarf);
   } else {
-    glass = mk(new THREE.BoxGeometry(0.3, 0.1, 0.05), new THREE.MeshStandardMaterial({ color: 0x0e141c, roughness: 0.15, metalness: 0.8 }), 0, N(1.79), 0.17, false);
+    glass = mk(new THREE.BoxGeometry(0.3, 0.1, 0.05), matGlass, 0, N(1.79), 0.17, false);
     neck.add(glass);
   }
   const helmet = mk(new THREE.BoxGeometry(0.4, 0.18, 0.42), matHelmet, 0, N(1.98), 0);
@@ -189,7 +205,7 @@ export function makeSoldier(team) {
   const mag = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.22, 0.1), matGun);
   mag.position.set(0, -0.15, 0.05); mag.rotation.x = 0.35; gunG.add(mag);
   const stock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 0.28),
-    new THREE.MeshStandardMaterial({ color: team === 'ct' ? 0x22303f : 0x6b4a2a, roughness: 0.8 }));
+    matStock);
   stock.position.z = -0.4; gunG.add(stock);
   const sight = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.07, 0.03), matGun);
   sight.position.set(0, 0.1, 0.18); gunG.add(sight);

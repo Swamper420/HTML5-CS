@@ -2,7 +2,7 @@
 // Ownership: toggleBuy, buyItem, refreshBuyMenu, updateBuyTimer.
 
 import { AudioSys } from './audio.js';
-import { BUY_TIME, NADE_DEFS, NADE_ORDER, PRIMARIES, SLOT_ORDER, WEAPONS, isNadeKey } from './config.js';
+import { BUY_TIME, MONEY_MAX, NADE_DEFS, NADE_ORDER, PRIMARIES, SLOT_ORDER, WEAPONS, isNadeKey } from './config.js';
 import { $, clamp } from './utils.js';
 import { updateInteractHUD } from './bomb.js';
 import { announce, updateHUD } from './hud.js';
@@ -129,6 +129,9 @@ export function buyItem(kind) {
   if (!isBuyTime()) { buyFeedback(kind, false, 'BUY TIME OVER'); AudioSys.click(250, 0.12, 0.35); return; }
   if (!player.alive) { buyFeedback(kind, false, 'CAN\'T BUY WHILE DEAD'); AudioSys.click(250, 0.12, 0.35); return; }
   if (G.roundEnding) return;
+  // No server economy (offline + online both client-side) — clamp ledger, reject negatives.
+  if (!Number.isFinite(player.money) || player.money < 0) player.money = 0;
+  player.money = Math.min(MONEY_MAX, Math.floor(player.money));
   const w = player.weapons;
   const ok = (msg) => { buyFeedback(kind, true, msg); refreshBuyMenu(true); updateHUD(); AudioSys.cash(); };
   const no = (msg) => { buyFeedback(kind, false, msg); AudioSys.click(250, 0.12, 0.35); };
@@ -173,12 +176,13 @@ export function buyItem(kind) {
     return ok('AMMO REFILLED');
   }
   if (kind === 'armor') {
+    if (player.armor >= 100) return no('ARMOR FULL');
     if (player.money < 1000) return no('NOT ENOUGH $');
     player.money -= 1000; player.armor = 100; return ok('ARMOR EQUIPPED');
   }
   if (kind === 'hp') {
-    if (player.money < 500) return no('NOT ENOUGH $');
     if (player.hp >= 100) return no('HP ALREADY FULL');
+    if (player.money < 500) return no('NOT ENOUGH $');
     player.money -= 500; player.hp = Math.min(100, player.hp + 50);
     $('heal-flash').style.opacity = 1; setTimeout(() => $('heal-flash').style.opacity = 0, 400);
     return ok('+50 HP');

@@ -39,6 +39,16 @@ export function isOnline() { try { return Net.active; } catch { return false; } 
 // Server owns rounds/score/bomb (2+ players on the server). See server-match.js.
 export function isServerMatch() { try { return Net.active && !!(Net.match && Net.match.active); } catch { return false; } }
 export function isMultiplayer() { try { return Net.active && (isServerMatch() || Net.hasRealOpponents); } catch { return false; } }
+// Beater Yaris ownership: one shared car, the driving remote owns its pose.
+export function remoteYarisDriver() {
+  try {
+    for (const [id, e] of remotes) {
+      const r = e.data;
+      if (r && r.ydrv && r.alive) return { id, e, r };
+    }
+  } catch {}
+  return null;
+}
 
 function addRemoteMesh(r) {
   if (remotes.has(r.id) || typeof scene === 'undefined' || !scene) return;
@@ -62,6 +72,7 @@ export function removeRemoteMesh(id) {
   try { if (e.nukeMesh) scene.remove(e.nukeMesh); } catch {}
   try { AudioSys.helixRemote(id, 0); } catch {}
   try { AudioSys.tarzanRemote(id, false); } catch {}
+  try { AudioSys.yarisRemote(id, 0); } catch {}
   try { coilRemote(id, 0, 0, -99, 0, 0); } catch {}
   try { scene.remove(e.mesh); } catch {}
   try { if (e.blob) scene.remove(e.blob); } catch {}
@@ -274,6 +285,20 @@ export function updateRemoteMeshes(dt, t) {
       if (wantT) AudioSys.tarzanRemote(id, true, { x: e.pos.x, y: e.pos.y + 1.4, z: e.pos.z });
       else AudioSys.tarzanRemote(id, false);
     } catch {}
+    // Remote beater: engine loop from speed state, honk/backfire on counter edges.
+    try {
+      const yOn = !!r.ydrv && !!r.alive;
+      const yk = yOn ? (+r.yspd || 0) : 0;
+      AudioSys.yarisRemote(id, yk, yOn ? { x: e.pos.x, y: e.pos.y + 1, z: e.pos.z } : null);
+      if (yOn && r.alive) {
+        if ((r.yhk | 0) !== (e._yhk | 0)) { e._yhk = r.yhk | 0; AudioSys.yarisHonkAt({ x: e.pos.x, y: e.pos.y + 1, z: e.pos.z }); }
+        if ((r.ybf | 0) !== (e._ybf | 0)) {
+          e._ybf = r.ybf | 0;
+          AudioSys.yarisBackfireAt({ x: e.pos.x, y: e.pos.y + 1, z: e.pos.z });
+          try { spawnBurst(new THREE.Vector3(e.pos.x, 0.8, e.pos.z), 0xff9a2a, 10, 5, 0.4); } catch {}
+        }
+      } else { e._yhk = r.yhk | 0; e._ybf = r.ybf | 0; }
+    } catch {}
     // Remote coil glow + dynamic light wash, driven by the same relayed 0..1 state.
     try {
       const hk2 = (r.weapon === 'helix' && r.alive) ? (+r.helix || 0) : 0;
@@ -321,10 +346,39 @@ export function killCoilLights() {
   for (const s of _coilPool) { try { s.light.intensity = 0; } catch {} s.id = null; }
 }
 
-// Outgoing state @ ~20Hz + incoming event wiring (called once from boot).
+// Kill-credit evidence: victims ack real damage via 'dmg', and we log our own
+// outgoing 'hit' claims. A relayed 'killed' crediting us with no hit or ack is forged.
+const _outHits = new Map(); // victimId -> at (performance.now ms)
+const _dmgAcked = new Map(); // victimId -> at
+const _boomAt = new Map(); // senderId -> last remote boom at (ms)
+let _hitHooked = false;
+function hookHitLedger() {
+  if (_hitHooked) return; _hitHooked = true;
+  try {
+    const orig = Net.sendHit.bind(Net);
+    Net.sendHit = (h) => {
+      try { if (h && h.targetId != null) _outHits.set(h.targetId, performance.now()); } catch {}
+      return orig(h);
+    };
+  } catch {}
+  try {
+    Net.on('dmg', (m) => {
+      try { if (m && m.fromId != null && m.toId === Net.id) _dmgAcked.set(m.fromId, performance.now()); } catch {}
+    });
+  } catch {}
+}
+function haveKillEvidence(victimId) {
+  const now = performance.now();
+  const h = _outHits.get(victimId);
+  if (h && now - h < 8000) return true;
+  const a = _dmgAcked.get(victimId);
+  if (a && now - a < 15000) return true;
+  return false;
+}
 let _mpWired = false;
 export function wireMultiplayer() {
   if (_mpWired) return; _mpWired = true;
+  hookHitLedger();
   mpStatusEl = document.getElementById('mp-status');
 
   Net.on('welcome', (m) => {
@@ -350,6 +404,7 @@ export function wireMultiplayer() {
   });
   Net.on('team', (m) => {
     // Takes effect at the round start that follows (server balances right before it).
+    if (m.team === 'ct' || m.team === 't') player.team = m.team;
     announce(`AUTO-BALANCE: YOU ARE NOW ${String(m.team).toUpperCase()}`, 2200);
   });
   Net.on('player_joined', () => { refreshBotsForMP(); updateMPStatus(); try { updateHUD(); } catch {} });
@@ -368,10 +423,16 @@ export function wireMultiplayer() {
   });
 
   Net.on('shot', (m) => {
-    // Remote tracer + positional gun sound.
+    // Remote tracer + positional gun sound. Sender + bounds validated (tracer spam).
     try {
       const e = remotes.get(m.fromId);
-      const from = new THREE.Vector3(m.ox, m.oy, m.oz);
+      if (m.fromId == null || !e) return; // unknown sender — drop
+      const ox = +m.ox, oy = +m.oy, oz = +m.oz, dx = +m.dx, dy = +m.dy, dz = +m.dz;
+      if (!isFinite(ox + oy + oz + dx + dy + dz)) return;
+      if (Math.abs(ox) > MAP_HALF + 6 || Math.abs(oz) > MAP_HALF + 6 || oy < -1 || oy > 12) return;
+      const dl = Math.hypot(dx, dy, dz);
+      if (!(dl > 0.01) || dl > 2) return; // finite unit-ish dir, no NaN/garbage vectors
+      const from = new THREE.Vector3(ox, oy, oz);
       const dir = new THREE.Vector3(m.dx, m.dy, m.dz).normalize();
       const end = from.clone().addScaledVector(dir, 30);
       spawnTracer(from, end, m.tracer || 0xff9a5c);
@@ -385,8 +446,8 @@ export function wireMultiplayer() {
       // Near-miss crack for remote shots.
       if (player.alive && camera) {
         const lp = camera.position;
-        const ox = lp.x - from.x, oy = lp.y - from.y, oz = lp.z - from.z;
-        const along = ox * dir.x + oy * dir.y + oz * dir.z;
+        const rx = lp.x - from.x, ry = lp.y - from.y, rz = lp.z - from.z;
+        const along = rx * dir.x + ry * dir.y + rz * dir.z;
         if (along > 0 && along < 45) {
           const px = from.x + dir.x * along - lp.x;
           const py = from.y + dir.y * along - lp.y;
@@ -430,8 +491,11 @@ export function wireMultiplayer() {
       if (!player.alive || G.phase !== 'playing') return;
       const e = remotes.get(m.fromId);
       if (m.fromId != null && !e) return; // unknown sender — drop forged hits
+      // Never trust the sender's claimed team — the snapshot roster owns it.
+      const realTeam = e && e.data && (e.data.team === 'ct' || e.data.team === 't') ? e.data.team : null;
+      const fromTeam = realTeam || (m.fromTeam === 'ct' || m.fromTeam === 't' ? m.fromTeam : 't');
       const shooter = {
-        isPlayer: false, team: m.fromTeam || (e ? e.data.team : 't'),
+        isPlayer: false, team: fromTeam,
         bot: null, remote: e || null,
         remoteName: m.fromName || (e ? e.data.name : 'Enemy'),
         remotePos: e ? e.pos.clone() : null,
@@ -455,6 +519,12 @@ export function wireMultiplayer() {
     try {
       // Remote-vs-remote or remote-vs-us killfeed + round check.
       if (m.victimId === Net.id) return; // already handled locally in damagePlayer
+      // Reporter must be the victim (server stamps fromId=victim); else forged.
+      if (m.fromId != null && m.victimId !== m.fromId) return;
+      const kt = m.killerTeam === 'ct' ? 'ct' : m.killerTeam === 't' ? 't' : null;
+      const vt = m.victimTeam === 'ct' ? 'ct' : m.victimTeam === 't' ? 't' : null;
+      if (!kt || !vt || kt === vt) return; // team-kill / garbage teams — drop
+      const weapon = String(m.weapon || 'AK-47').slice(0, 24);
       const e = remotes.get(m.victimId);
       const wasAlive = !!(e && e.data.alive);
       if (e) {
@@ -470,16 +540,18 @@ export function wireMultiplayer() {
             if (sdir.lengthSq() < 0.01) sdir.set(rand(-1, 1), 0, rand(-1, 1));
             sdir.normalize();
           }
-          goreRemoteDeath(e, !!m.head, m.weapon || 'AK-47', sdir);
+          goreRemoteDeath(e, !!m.head, weapon, sdir);
         } catch (err) {}
       }
-      addKillfeed(m.killerName || '???', m.killerTeam || 't', m.victimName || '???', m.victimTeam || 'ct', m.weapon || 'AK-47', !!m.head);
+      addKillfeed(m.killerName || '???', kt, m.victimName || '???', vt, weapon, !!m.head);
       try {
         if (m.killerId !== null && m.killerId !== undefined && m.killerId !== Net.id) statsHolder('remote:' + m.killerId).kills++;
         if (m.victimId !== null && m.victimId !== undefined && m.victimId !== Net.id) statsHolder('remote:' + m.victimId).deaths++;
       } catch {}
       if (m.killerId === Net.id) {
         if (!wasAlive) return;
+        // Self-credit needs proof: our hit log or the victim's dmg ack (fixed $300 via addMoney clamp).
+        if (!haveKillEvidence(m.victimId)) return;
         // K/D is server-owned in a server match (applied from 'match'); money + feedback stay local.
         G.kills++; player.kills++; addMoney(MONEY_KILL); playerHitmark(m.head, true);
         AudioSys.kill();
@@ -505,8 +577,10 @@ function applyRemoteNade(m) {
   if (G.phase !== 'playing') return;
   const t = performance.now() / 1000;
   if (m.fromId != null && !remotes.get(m.fromId)) return; // unknown sender
+  const snd0 = m.fromId != null ? remotes.get(m.fromId) : null;
+  const sndTeam = snd0 && snd0.data && (snd0.data.team === 'ct' || snd0.data.team === 't') ? snd0.data.team : null;
   const owner = {
-    isPlayer: false, team: m.fromTeam || 't',
+    isPlayer: false, team: sndTeam || (m.fromTeam === 'ct' || m.fromTeam === 't' ? m.fromTeam : 't'),
     bot: null, remoteName: m.fromName || ('Player' + (m.fromId ?? '?')),
     remoteId: m.fromId ?? null, weaponName: (NADE_DEFS[m.nade] || {}).name || 'GRENADE',
   };
@@ -549,9 +623,23 @@ function applyRemoteNade(m) {
     at.set(+m.x || 0, +m.y || 1, +m.z || 0);
     if (k > 0.2) { try { spawnSmoke(at, 0.55, 0.8, 0xd8d4cb); } catch (e) {} }
   } else if (m.action === 'boom') {
-    // in-hand cook from a remote player — detonate at the broadcast position
+    // in-hand cook from a remote player — detonate at the broadcast position.
+    // Ownership + proximity + rate guards: the blast must be near its sender, in-bounds, known nade.
+    if (!NADE_DEFS[m.nade]) return;
+    const snd = m.fromId != null ? remotes.get(m.fromId) : null;
+    if (m.fromId != null && !snd) return; // unknown sender
+    if (m.nade === 'nuke' && m.botShort) return; // bots never carry the live nuke
+    const nowMs = performance.now();
+    const last = _boomAt.get(m.fromId) || 0;
+    if (nowMs - last < 900) return; // one remote boom/sec max (nuke spam)
     const ax = +m.x || 0, ay = +m.y || 1.3, az = +m.z || 0;
     if (!inMap(ax, ay, az)) return;
+    if (snd) {
+      const dd = Math.hypot(ax - snd.pos.x, az - snd.pos.z);
+      if (!(dd <= 10) || Math.abs(ay - (snd.pos.y + 1.3)) > 5) return; // detonates anywhere — drop
+      if (!snd.data.alive) return; // dead players don't cook nades
+    }
+    _boomAt.set(m.fromId, nowMs);
     const at = new THREE.Vector3(ax, ay, az);
     if (m.nade === 'he') detonateHE(at, owner, t, true);
     else if (m.nade === 'nuke') detonateNuke(at, owner, t);

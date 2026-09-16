@@ -247,7 +247,7 @@ export function playerTryFire(t, hand = 'R') {
     setTimeout(() => AudioSys.mech(), 320);
   }
   if (left) setRmbJustDown(false); else setMouseJustDown(false);
-  if (w.mag === 0 && (!dual || (w.mag2 | 0) === 0)) setTimeout(() => startReload(), 260);
+  if (w.mag === 0 && (!dual || (w.mag2 | 0) === 0)) { const rk = wkey; setTimeout(() => { if (player.cur === rk) startReload(); }, 260); }
   updateHUD();
 }
 export function startReload() {

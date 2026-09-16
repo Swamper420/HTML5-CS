@@ -10,10 +10,12 @@ import { colliders } from './map.js';
 import { isMultiplayer, isOnline, remotes } from './multiplayer.js';
 import { hasLOSClear, smokeVolumeRadius } from './smoke.js';
 import { WEED } from './weed.js';
+import { YARIS } from './yaris.js';
 import { bots, player } from './state.js';
 
 // minimap
 const mm = { last: 0 };
+let _mmCtx = null, _mmS = 0, _lastLOS = true;
 // LOS tracking: stores last time each entity was in LOS of the player (for enemy linger on minimap).
 const mmSpotTime = new WeakMap(); // entity -> performance timestamp (seconds)
 const MM_SPOT_LINGER = 2.0; // seconds enemies remain visible after last LOS
@@ -26,21 +28,25 @@ function mmCanSeeEnemy(entityPos, tNow) {
 function mmEnemyVisible(entity, entityTeam, entityPos, tNow) {
   const myTeam = player.team || 'ct';
   const isEnemy = entityTeam !== myTeam;
-  if (!isEnemy) return true; // always show friendlies
-  if (!player.alive) return true; // spectating — show all
+  if (!isEnemy) { _lastLOS = true; return true; } // always show friendlies
+  if (!player.alive) { _lastLOS = true; return true; } // spectating — show all
   // Check current LOS.
   if (mmCanSeeEnemy(entityPos, tNow)) {
     mmSpotTime.set(entity, tNow);
+    _lastLOS = true;
     return true;
   }
+  _lastLOS = false;
   // Linger: keep visible briefly after LOS broken.
   const lastSeen = mmSpotTime.get(entity);
   return lastSeen !== undefined && (tNow - lastSeen) < MM_SPOT_LINGER;
 }
 export function drawMinimap(t) {
-  if (t - mm.last < 0.12) return; mm.last = t;
-  const c = $('minimap'), g = c.getContext('2d');
-  const S = c.width, world = MAP_HALF * 2 + 8;
+  if (t - mm.last < 0.125) return; mm.last = t;
+  const c = $('minimap');
+  if (!_mmCtx || _mmS !== c.width) { _mmCtx = c.getContext('2d'); _mmS = c.width; }
+  const g = _mmCtx;
+  const S = _mmS, world = MAP_HALF * 2 + 8;
   const px = (x) => (x + world / 2) / world * S;
   const pz = (z) => (z + world / 2) / world * S;
   g.clearRect(0, 0, S, S);
@@ -70,6 +76,12 @@ export function drawMinimap(t) {
     g.fillStyle = '#0a0e14'; g.font = 'bold 6px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText('🌿', px(WEED.x), pz(WEED.z));
   } catch (e) {}
+  // beater Yaris (yellow dot, white ring while driven)
+  try {
+    g.fillStyle = '#ffd76d';
+    g.beginPath(); g.arc(px(YARIS.pos.x), pz(YARIS.pos.z), 3.5, 0, 7); g.fill();
+    if (YARIS.driving) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(px(YARIS.pos.x), pz(YARIS.pos.z), 5.5, 0, 7); g.stroke(); }
+  } catch (e) {}
   // bomb: planted (blinking red) / dropped (orange) / carrier (ring the carrier)
   const tNow2 = performance.now() / 1000;
   if (BOMB.planted && BOMB.pos) {
@@ -90,7 +102,7 @@ export function drawMinimap(t) {
     const isEnemy = b.team !== (player.team || 'ct');
     g.fillStyle = b.team === 'ct' ? '#5eb2ff' : '#ff7043';
     // Fade enemy dots slightly when lingering (not currently in LOS).
-    if (isEnemy && !mmCanSeeEnemy(b.pos, tNowMm)) {
+    if (isEnemy && !_lastLOS) {
       const lastSeen = mmSpotTime.get(b);
       const age = lastSeen !== undefined ? (tNowMm - lastSeen) : MM_SPOT_LINGER;
       g.globalAlpha = Math.max(0.2, 1 - age / MM_SPOT_LINGER);
@@ -109,7 +121,7 @@ export function drawMinimap(t) {
         if (!mmEnemyVisible(e, remTeam, e.pos, tNowMm)) continue;
         const isEnemy = remTeam !== (player.team || 'ct');
         g.fillStyle = remTeam === 'ct' ? '#5eb2ff' : '#ff7043';
-        if (isEnemy && !mmCanSeeEnemy(e.pos, tNowMm)) {
+        if (isEnemy && !_lastLOS) {
           const lastSeen = mmSpotTime.get(e);
           const age = lastSeen !== undefined ? (tNowMm - lastSeen) : MM_SPOT_LINGER;
           g.globalAlpha = Math.max(0.2, 1 - age / MM_SPOT_LINGER);

@@ -200,7 +200,7 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
     } catch (e) { damageBot(hitBot, dmg, shooter, head, end); }
     return { hit: true, d: bestT };
   } else if (hitPlayer) {
-    let dmg = wdef.damage * fallK * (head ? 2.0 : 1) * rand(0.85, 1.1);
+    let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.85, 1.1);
     damagePlayer(dmg, shooter, head);
     spawnBurst(end, 0xaa0000, 6, 3, 0.4);
     return { hit: true, d: bestT };

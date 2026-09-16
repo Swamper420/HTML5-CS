@@ -65,8 +65,10 @@ function makeFlashTexture() {
 }
 let _flashTex = null;
 
+let _vmMats = null;
 export function vmMats() {
-  return {
+  if (_vmMats) return _vmMats;
+  _vmMats = {
     metal: new THREE.MeshStandardMaterial({ color: 0x232327, roughness: 0.36, metalness: 0.85 }),
     dark: new THREE.MeshStandardMaterial({ color: 0x131315, roughness: 0.5, metalness: 0.6 }),
     steel: new THREE.MeshStandardMaterial({ color: 0x9aa0ab, roughness: 0.28, metalness: 0.92 }),
@@ -83,6 +85,7 @@ export function vmMats() {
     lens: new THREE.MeshBasicMaterial({ color: 0x86c5ff, transparent: true, opacity: 0.85 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8bec9, roughness: 0.22, metalness: 0.95 }),
   };
+  return _vmMats;
 }
 // Gloved hands with sleeves. Grip hand wraps a vertical grip; support hand cradles the fore-end.
 // forearm sleeve: starts at the wrist and runs back toward the camera's lower edge

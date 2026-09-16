@@ -418,7 +418,7 @@ export function buildMap() {
           1.05 + by * 0.30,
           r.z - Math.sin(r.ry) * (bx - 1) * 0.62 + rand(-0.08, 0.08));
         bag.rotation.y = r.ry + rand(-0.3, 0.3);
-        bag.castShadow = true; bag.receiveShadow = true;
+        bag.castShadow = false; bag.receiveShadow = true;
         scene.add(bag);
       }
     }
@@ -550,7 +550,7 @@ export function buildMap() {
         frond.position.set(topX + Math.cos(a) * 1.1, topY - 0.25, topZ + Math.sin(a) * 1.1);
         frond.rotation.y = -a + Math.PI / 2;
         frond.rotation.x = -0.55 + rand(-0.12, 0.12);
-        frond.castShadow = true;
+        frond.castShadow = false;
         scene.add(frond);
         try { palmFronds.push({ mesh: frond, baseRX: frond.rotation.x, phase: Math.random() * 10, amp: 0.05 + Math.random() * 0.04 }); } catch (e) {}
       }
@@ -603,7 +603,7 @@ export function buildMap() {
       rock.position.set(x, 0.1 * sc, z);
       rock.scale.set(sc * rand(0.8, 1.3), sc * rand(0.5, 0.8), sc * rand(0.8, 1.3));
       rock.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-      rock.castShadow = true; rock.receiveShadow = true;
+      rock.castShadow = false; rock.receiveShadow = true;
       scene.add(rock);
       placed++;
     }
@@ -616,7 +616,7 @@ export function buildMap() {
         r.position.set(x + rand(-0.9, 0.9), 0.06, z + rand(-0.9, 0.9));
         r.scale.setScalar(sc);
         r.rotation.set(Math.random() * 3, Math.random() * 3, 0);
-        r.castShadow = true; r.receiveShadow = true;
+        r.castShadow = false; r.receiveShadow = true;
         scene.add(r);
       }
     }

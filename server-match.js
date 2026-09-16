@@ -33,6 +33,25 @@ export function createMatch({ clients, broadcast, send, onRoundStart }) {
   }
   const teamed = () => [...clients.values()].filter((c) => c.team === 'ct' || c.team === 't');
   const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
+  // Last-damage ledger: victimId -> [{by, at}]. Server stamps hit senders,
+  // so killerId claims can be checked against who actually hit the victim.
+  const dmgLog = new Map(); // victimId -> [{by, at}]
+  function noteHit(victimId, attackerId) {
+    if (!Number.isInteger(victimId) || !Number.isInteger(attackerId)) return;
+    if (victimId === attackerId) return;
+    const now = Date.now();
+    let a = dmgLog.get(victimId);
+    if (!a) { a = []; dmgLog.set(victimId, a); }
+    a.push({ by: attackerId, at: now });
+    while (a.length && now - a[0].at > 5000) a.shift();
+    if (a.length > 12) a.splice(0, a.length - 12);
+  }
+  function recentHitters(victimId) {
+    const now = Date.now();
+    const a = dmgLog.get(victimId) || [];
+    while (a.length && now - a[0].at > 5000) a.shift();
+    return a;
+  }
 
   function state(event) {
     const now = Date.now(), b = M.bomb;
@@ -166,13 +185,23 @@ export function createMatch({ clients, broadcast, send, onRoundStart }) {
     const deny = (what) => send(c.ws, { type: 'bomb', srv: 1, action: 'deny', what });
     switch (m.action) {
       case 'plant_start':
-        if (M.phase === 'live' && c.mAlive && c.team === 't' && b.carrierId === c.id && !b.planted) b.plantHold = { id: c.id, at: now };
+        if (M.phase === 'live' && c.mAlive && c.team === 't' && b.carrierId === c.id && !b.planted) {
+          // Must stand near a site to start planting (lastPos is server-stamped from state).
+          if (!p) { deny('plant_start'); break; }
+          const near = SITES.some((s) => dist2(p.x, p.z, s.x, s.z) <= s.r + 4);
+          if (!near) { deny('plant_start'); break; }
+          b.plantHold = { id: c.id, at: now };
+        }
         break;
       case 'plant_stop':
         if (b.plantHold && b.plantHold.id === c.id) b.plantHold = null;
         break;
       case 'defuse_start':
-        if (M.phase === 'live' && c.mAlive && c.team === 'ct' && b.planted) b.defuseHold = { id: c.id, at: now };
+        if (M.phase === 'live' && c.mAlive && c.team === 'ct' && b.planted) {
+          // Must stand next to the planted bomb to start defusing (<4m XZ).
+          if (!p || dist2(p.x, p.z, b.x, b.z) > 4) { deny('defuse_start'); break; }
+          b.defuseHold = { id: c.id, at: now };
+        }
         break;
       case 'defuse_stop':
         if (b.defuseHold && b.defuseHold.id === c.id) b.defuseHold = null;
@@ -258,10 +287,18 @@ export function createMatch({ clients, broadcast, send, onRoundStart }) {
     },
     onKilled(c, m) {
       if (m.rid !== M.roundId) return false;
-      const kid = Number.isInteger(m.killerId) ? m.killerId : null;
-      const aid = Number.isInteger(m.assistId) ? m.assistId : null;
+      let kid = Number.isInteger(m.killerId) ? m.killerId : null;
+      let aid = Number.isInteger(m.assistId) ? m.assistId : null;
+      // Victim-supplied ids are untrusted: only credit hitters the server saw via 'hit'.
+      const hits = recentHitters(c.id);
+      const byIds = new Set(hits.map((h) => h.by));
+      if (kid !== null && !byIds.has(kid)) kid = null; // forged killer — no credit, death still counts
+      if (aid !== null && (aid === kid || !byIds.has(aid))) aid = null;
+      // Overwrite client-supplied names/teams with server truth (set by caller in server.js too).
+      dmgLog.delete(c.id);
       return markDead(c, kid, aid);
     },
+    noteHit,
     handleBomb,
     sync() { if (M.active) push('sync'); },
   };

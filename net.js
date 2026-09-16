@@ -1,7 +1,7 @@
 // HTML5-CS client net layer — WebSocket relay protocol.
 // No three.js here: main.js owns all meshes and passes snapshots through.
 // Protocol (JSON, see server.js):
-//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock, rid} | shot | helix | hit | killed{rid} | bomb (requests) | nade | yell | chat | ping
+//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock, rid, yaris fields} | shot | helix | hit | killed{rid} | bomb (requests) | nade | yell | chat | ping
 //   s->c: welcome{match} | roster | player_joined | player_left | snapshot | match (server-authoritative round/score/bomb, see server-match.js)
 //         | team | shot|helix|hit|killed|bomb|nade|yell|chat
 //
@@ -129,6 +129,7 @@ export const Net = {
           if (Math.abs(+p.x) > 45 || Math.abs(+p.z) > 45) continue;
           const cleanName = String(p.name || '').replace(/[<>&"']/g, '').slice(0, 16);
           const cleanTeam = p.team === 'ct' ? 'ct' : 't';
+          const cy = Math.max(-2, Math.min(15, +p.y || 0)); // clamp snapshot y (server bounds)
           let r = this.remotes.get(p.id);
           if (!r) {
             r = { id: p.id, name: cleanName || `Player${p.id}`, team: cleanTeam, lastSeen: now, ping: 0 };
@@ -146,15 +147,26 @@ export const Net = {
           if (ct) r.lastCt = ct;
           Object.assign(r, {
             name: cleanName || r.name, team: cleanTeam,
-            x: +p.x || 0, y: +p.y || 0, z: +p.z || 0, yaw: +p.yaw || 0, pitch: +p.pitch || 0,
-            hp: Math.max(0, Math.min(100, +p.hp || 0)), alive: p.alive !== false, weapon: String(p.weapon || 'deagle').slice(0, 12),
+            x: +p.x || 0, y: cy, z: +p.z || 0, yaw: +p.yaw || 0, pitch: +p.pitch || 0,
+            hp: Math.max(0, Math.min(100, +p.hp || 0)),
+            weapon: String(p.weapon || 'deagle').slice(0, 12),
             aiming: !!p.aiming, moving: !!p.moving,
             crouch: !!p.crouch, gnd: p.gnd !== false, wr: Math.max(-1, Math.min(1, p.wr | 0)), dual: !!p.dual,
             planting: !!p.planting, defusing: !!p.defusing, harvesting: !!p.harvesting,
             reloading: !!p.reloading, helix: Math.max(0, Math.min(1, +p.helix || 0)), yell: !!p.yell,
             nuke: !!p.nuke,
+            // beater Yaris: driver flag + owner-simulated car pose + event counters (honk/backfire)
+            ydrv: !!p.ydrv, yx: +p.yx || 0, yz: +p.yz || 0, yyaw: +p.yyaw || 0,
+            yspd: Math.max(0, Math.min(1, +p.yspd || 0)),
+            yhk: Math.max(0, Math.min(1e9, p.yhk | 0)), ybf: Math.max(0, Math.min(1e9, p.ybf | 0)),
           });
-          this._pushSample(r, ct || now, now, p);
+          // Alive flap gate: ignore rapid alive toggles (<600ms) from out-of-order snapshots.
+          const wantAlive = p.alive !== false;
+          if (r.alive === undefined) r.alive = wantAlive;
+          else if (wantAlive !== r.alive) {
+            if (!r._aliveAt || now - r._aliveAt >= 600) { r.alive = wantAlive; r._aliveAt = now; }
+          }
+          this._pushSample(r, ct || now, now, { ...p, y: cy });
         }
         // Prune stale remotes (>4s without snapshot and not in roster)
         for (const [id, r] of this.remotes) {
@@ -189,10 +201,11 @@ export const Net = {
   _setMatch(m) {
     m.recvAt = performance.now();
     this.match = m;
-    // Remote teams can change at round start (auto-balance).
+    // Remote teams can change at round start (auto-balance). Server alive wins over flap gate.
     for (const p of (m.players || [])) {
       const r = this.remotes.get(p.id);
       if (r && (p.team === 'ct' || p.team === 't')) r.team = p.team;
+      if (r && typeof p.alive === 'boolean' && r.alive !== p.alive) { r.alive = p.alive; r._aliveAt = performance.now(); }
       if (p.id === this.id && (p.team === 'ct' || p.team === 't')) this.team = p.team;
     }
   },
@@ -256,7 +269,8 @@ export const Net = {
 
   _syncRoster(players) {
     // Remove remotes that the server no longer lists (clean disconnects).
-    if (!players || !players.length) return;
+    // null/undefined = no roster info (keep); [] = server says nobody else (prune ghosts).
+    if (!players) return;
     const ids = new Set(players.map((p) => p.id));
     for (const id of [...this.remotes.keys()]) {
       if (id !== this.id && !ids.has(id)) {

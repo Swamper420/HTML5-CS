@@ -80,9 +80,9 @@ export function bumpBlotch(b, s, n, minR, maxR, up = true) {
 export function initThree() {
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(1);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   // filmic look: richer sun, softer highlights, less washed-out sand
   try {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -107,7 +107,7 @@ export function initThree() {
   sunLight = new THREE.DirectionalLight(0xffe3b8, 2.4);
   sunLight.position.set(34, 42, 20);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.mapSize.set(1024, 1024);
   sunLight.shadow.camera.left = -48; sunLight.shadow.camera.right = 48;
   sunLight.shadow.camera.top = 48; sunLight.shadow.camera.bottom = -48;
   sunLight.shadow.camera.far = 160;

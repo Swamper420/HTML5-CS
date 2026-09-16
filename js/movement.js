@@ -22,6 +22,7 @@ import {
 import { isOnline } from './multiplayer.js';
 import { DUAL, isDualCur, updateWorldWeapons } from './pickups.js';
 import { WEED } from './weed.js';
+import { YARIS } from './yaris.js';
 import { camera, coilLight } from './render.js';
 import { finishReload, playerTryFire } from './shooting.js';
 import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
@@ -56,6 +57,7 @@ export function updatePlayer(dt, t) {
         yaw: player.yaw, pitch: player.pitch, hp: 0, alive: false,
         weapon: player.cur, aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false,
         reloading: false, helix: 0, nuke: false,
+        ydrv: false, yx: YARIS.pos.x, yz: YARIS.pos.z, yyaw: YARIS.yaw, yspd: 0, yhk: YARIS._honkN, ybf: YARIS._fireN,
       });
     } catch {}
     return;
@@ -151,7 +153,7 @@ export function updatePlayer(dt, t) {
     player.vel.x += (mx - player.vel.x) * Math.min(1, accel * dt);
     player.vel.z += (mz - player.vel.z) * Math.min(1, accel * dt);
     // gravity / jump (blocked while frozen — CS freeze time)
-    if (player.onGround && spaceDown) { player.vel.y = 5.2; player.onGround = false; try { AudioSys.jump(); } catch (e) {} }
+    if (player.onGround && spaceDown && !player.driving) { player.vel.y = 5.2; player.onGround = false; try { AudioSys.jump(); } catch (e) {} }
     // latch onto a wall: airborne, holding W, moving fast enough, not crouched
     if (!player.onGround && canAct && keys['KeyW'] && !player.crouching && player.wallCd <= 0) {
       const floorY = supportHeightAt(player.pos.x, player.pos.z, player.pos.y, player.radius);
@@ -451,6 +453,10 @@ export function updatePlayer(dt, t) {
       helix: player.cur === 'helix' ? Math.round(clamp(vmRig.helixRate / 48, 0, 1) * 100) / 100 : 0,
       nuke: !!player.carryingNuke, // live-bomb carry prop for remotes
       yell: !!player._yelling, // machete-sprint Tarzan loop for remotes
+      // beater Yaris: owner-simulated car pose + event counters so remotes see/hear it
+      ydrv: !!YARIS.driving, yx: YARIS.pos.x, yz: YARIS.pos.z, yyaw: YARIS.yaw,
+      yspd: Math.round(clamp(Math.abs(YARIS.speed) / 10.5, 0, 1) * 100) / 100,
+      yhk: YARIS._honkN, ybf: YARIS._fireN,
     });
   } catch {}
 }

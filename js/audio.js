@@ -9,6 +9,7 @@ import { SET, opts } from './settings.js';
 
 // Runtime scene hooks (avoid main.js <-> audio import cycle).
 const _env = { getCamera: null, getPlayer: null, hasLOS: null };
+const _auA = new THREE.Vector3(), _auB = new THREE.Vector3();
 export function bindAudioEnv(e) { Object.assign(_env, e || {}); }
 
 // ---------------- Audio (procedural WebAudio, full 3D) ----------------
@@ -355,10 +356,10 @@ export const AudioSys = {
     let occluded = false;
     try {
       const hasLOS = _env.hasLOS || null;
-      if (dist > 3 && hasLOS) {
-        const a = new THREE.Vector3(lp0.x, lp0.y, lp0.z);
-        const b = new THREE.Vector3(pos.x, (pos.y ?? 1.4), pos.z);
-        if (!hasLOS(a, b)) occluded = true;
+      if (dist > 3 && dist <= 30 && hasLOS) {
+        _auA.set(lp0.x, lp0.y, lp0.z);
+        _auB.set(pos.x, (pos.y ?? 1.4), pos.z);
+        if (!hasLOS(_auA, _auB)) occluded = true;
       }
     } catch (e) {}
     if (occluded) { vol *= 0.30; lpF *= 0.36; }
@@ -644,6 +645,102 @@ export const AudioSys = {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     this._tone({ type: 'sine', f0: 880, dur: 0.12, peak: 0.3, decay: 0.11, pos, kind: 'helix', verb: 0.15 });
     this._tone({ type: 'sine', f0: 1320, dur: 0.18, peak: 0.28, decay: 0.16, pos, kind: 'helix', verb: 0.15, at: 0.09 });
+  },
+  yarisEngine(k) {
+    // Beater engine loop: one persistent voice, pitch/gain follow speed 0..1.
+    // Call every frame while driving; k=0 coasts it silent and frees the nodes.
+    if (!this.ctx) return;
+    k = (!opts.sound || this.muted) ? 0 : clamp(k || 0, 0, 1);
+    const t = this.now();
+    let h = this._yarisEng;
+    if (!h) {
+      if (k <= 0.001) return;
+      try {
+        const o = this.ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 48;
+        const o2 = this.ctx.createOscillator(); o2.type = 'square'; o2.frequency.value = 24;
+        const g2 = this.ctx.createGain(); g2.gain.value = 0.5;
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        o.connect(g); o2.connect(g2); g2.connect(g); g.connect(this.master);
+        o.start(); o2.start();
+        h = this._yarisEng = { o, o2, g };
+      } catch (e) { return; }
+    }
+    try {
+      // misfiring idle: uneven wobble so it never sounds healthy
+      const wob = 1 + 0.13 * Math.sin(t * 23) + 0.07 * Math.sin(t * 41);
+      h.o.frequency.setTargetAtTime((48 + k * 110) * wob, t, 0.03);
+      h.o2.frequency.setTargetAtTime((24 + k * 55) * wob, t, 0.03);
+      h.g.gain.setTargetAtTime(0.05 + k * 0.11, t, 0.06);
+    } catch (e) {}
+    if (k <= 0.001 && h) {
+      const { o, o2, g } = h;
+      this._yarisEng = null;
+      try {
+        o.stop(t + 0.5); o2.stop(t + 0.5);
+        setTimeout(() => { try { o.disconnect(); o2.disconnect(); g.disconnect(); } catch (e) {} }, 700);
+      } catch (e) {}
+    }
+  },
+  yarisRemote(id, k, pos) {
+    // Per-remote beater loop driven by snapshot yaris state. Call every frame;
+    // k<=0 frees the voice. Positioned, loud enough to hear coming.
+    if (!this.ctx) return;
+    if (!opts.sound || this.muted) k = 0;
+    k = clamp(k || 0, 0, 1);
+    if (!this._yarisRem) this._yarisRem = {};
+    let h = this._yarisRem[id];
+    if (!h) {
+      if (k <= 0.01 || !pos) return;
+      try {
+        const o = this.ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 48;
+        const o2 = this.ctx.createOscillator(); o2.type = 'square'; o2.frequency.value = 24;
+        const g2 = this.ctx.createGain(); g2.gain.value = 0.5;
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        const pan = this._pan(0);
+        o.connect(g); o2.connect(g2); g2.connect(g); g.connect(pan);
+        o.start(); o2.start();
+        h = this._yarisRem[id] = { o, o2, g, pan };
+      } catch (e) { return; }
+    }
+    const t = this.now();
+    try {
+      if (pos && k > 0.01) {
+        const s = this._spatial(pos, 'helix');
+        const wob = 1 + 0.13 * Math.sin(t * 23 + id) + 0.07 * Math.sin(t * 41);
+        h.o.frequency.setTargetAtTime((48 + k * 110) * wob, t, 0.05);
+        h.o2.frequency.setTargetAtTime((24 + k * 55) * wob, t, 0.05);
+        h.g.gain.setTargetAtTime((0.05 + k * 0.11) * 2.2 * s.vol, t, 0.08);
+        try { if (h.pan && h.pan.pan) h.pan.pan.setTargetAtTime(clamp(s.pan, -1, 1), t, 0.08); } catch (e) {}
+      } else {
+        h.g.gain.setTargetAtTime(0, t, 0.08);
+      }
+    } catch (e) {}
+    if ((k <= 0.01 || !pos) && h) {
+      const { o, o2, g, pan } = h;
+      delete this._yarisRem[id];
+      try {
+        o.stop(t + 0.4); o2.stop(t + 0.4);
+        setTimeout(() => { try { o.disconnect(); o2.disconnect(); g.disconnect(); if (pan !== this.master) pan.disconnect(); } catch (e) {} }, 600);
+      } catch (e) {}
+    }
+  },
+  yarisHonkAt(pos) {
+    // dual-tone beater horn, positional so you hear whose it is
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._tone({ type: 'triangle', f0: 620, dur: 0.28, peak: 0.30, decay: 0.26, pos, kind: 'beep', verb: 0.1 });
+    this._tone({ type: 'triangle', f0: 780, dur: 0.28, peak: 0.30, decay: 0.26, pos, kind: 'beep', verb: 0.1 });
+  },
+  yarisBackfireAt(pos) {
+    // rich-running backfire: sharp crack + low thump, positional
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.06, type: 'highpass', freq: 2000, peak: 0.5, decay: 0.05, rate: 1.3, pos, kind: 'gun' });
+    this._tone({ type: 'sine', f0: 120, f1: 40, dur: 0.22, peak: 0.4, decay: 0.2, pos, kind: 'gun' });
+  },
+  yarisDoorAt(pos) {
+    // door slam: dull clunk + rattle
+    if (!this.ctx || !opts.sound || this.muted) return;
+    this._noise({ dur: 0.07, type: 'lowpass', freq: 500, peak: 0.35, decay: 0.06, rate: 0.8, pos, kind: 'sfx' });
+    this._noise({ dur: 0.09, type: 'bandpass', freq: 1800, Q: 2, peak: 0.12, decay: 0.08, rate: 1.2, pos, kind: 'sfx', at: 0.03 });
   },
   click(freq = 2000, dur = 0.05, vol = 0.25, pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;

@@ -4,6 +4,7 @@
 // Ownership: opts, SET, load/save/apply, settings menu UI, lookSens/swayK/shakeK.
 
 import { $ } from './utils.js';
+import { keys } from './state.js';
 
 // Live runtime hooks (main.js provides real objects; safe no-ops until bound).
 const _hooks = { getRenderer: null, getSunLight: null, getAudio: null, getGame: null, pauseGame: null };
@@ -62,6 +63,11 @@ export const SETTINGS_SPEC = {
 };
 let _setTab = 'mouse';
 
+const _specFor = (k) => {
+  for (const t of Object.values(SETTINGS_SPEC)) for (const r of t) if (r.k === k) return r;
+  return null;
+};
+
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -70,10 +76,19 @@ export function loadSettings() {
     for (const k of Object.keys(SETTINGS_DEFAULTS)) {
       if (saved[k] === undefined) continue;
       const d = SETTINGS_DEFAULTS[k];
-      if (typeof d === 'boolean') SET[k] = !!saved[k];
-      else if (typeof d === 'number') { const n = parseFloat(saved[k]); if (isFinite(n)) SET[k] = n; }
-      if (k === 'fpsCap') SET.fpsCap = Math.max(30, Math.min(500, SET.fpsCap));
-      else if (typeof saved[k] === 'string') SET[k] = saved[k];
+      if (typeof d === 'boolean') {
+        SET[k] = typeof saved[k] === 'string' ? /^(true|1|yes|on)$/i.test(saved[k].trim()) : !!saved[k];
+      } else if (typeof d === 'number') {
+        const s = saved[k];
+        const n = typeof s === 'number' ? s
+          : typeof s === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(s) ? parseFloat(s) : NaN;
+        if (!Number.isFinite(n)) continue;
+        const sp = _specFor(k);
+        if (sp && sp.type === 'select' && !sp.choices.some((c) => c[0] === n)) continue;
+        SET[k] = sp && sp.type === 'range' ? Math.min(sp.max, Math.max(sp.min, n)) : n;
+      } else if (typeof d === 'string') {
+        if (typeof saved[k] === 'string') SET[k] = saved[k];
+      }
     }
   } catch (e) { /* private window / storage disabled — defaults are fine */ }
 }
@@ -166,6 +181,7 @@ export function buildSettingsUI() {
 export function settingsOpen() { const el = $('settings-menu'); return !!el && !el.classList.contains('hidden'); }
 export function openSettings() {
   // Opening mid-match pauses first, so the pause menu is what you fall back to.
+  for (const k of Object.keys(keys)) delete keys[k]; // no stuck movement keys under the menu
   try { const g = _hooks.getGame ? _hooks.getGame() : null; if (g && g.phase === 'playing' && _hooks.pauseGame) _hooks.pauseGame(); } catch (e) {}
   $('settings-menu').classList.remove('hidden');
   buildSettingsUI();

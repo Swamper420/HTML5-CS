@@ -242,10 +242,11 @@ function botShoot(bot, t, targetPos) {
   const interval = rand(0.35, 0.7) / diff;
   if (t < bot.nextShot) return;
   // Magazines: bots now run dry and reload, which is where the reload pose comes from.
+  if (bot.reloadUntil && t >= bot.reloadUntil) { bot.ammo = 30; bot.reloadUntil = 0; }
   if (t < (bot.reloadUntil || 0)) return;
   if (bot.ammo <= 0) {
     bot.reloadUntil = t + rand(2.1, 2.6);
-    bot.ammo = 30; bot.burstLeft = 0;
+    bot.burstLeft = 0;
     try { AudioSys.step(new THREE.Vector3(bot.pos.x, 1.0, bot.pos.z), false); } catch (e) {}
     return;
   }

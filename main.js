@@ -30,6 +30,7 @@ import {
 } from './js/multiplayer.js';
 import { updatePlayerBody } from './js/playerbody.js';
 import { updateWeed, buildWeed } from './js/weed.js';
+import { buildYaris, updateYaris } from './js/yaris.js';
 import { camera, initThree, renderer, scene, sunLight } from './js/render.js';
 import { lockPointer, pauseGame, resumeGame, startMatch, updateRoundTimers } from './js/rounds.js';
 import { G, bots, player } from './js/state.js';
@@ -101,6 +102,7 @@ function loop() {
     try { if (isOnline()) updateRemoteMeshes(dt, t); } catch {}
     updateBomb(dt, t);
     try { updateWeed(dt, t); } catch (e) { console.warn('weed', e); }
+    try { updateYaris(dt, t); } catch (e) { console.warn('yaris', e); }
     try { updateNades(dt, t); } catch (e) { console.warn('nades', e); }
     updateEffects(dt, t);
     try { updateDamageReport(t); } catch (e) {}
@@ -111,7 +113,7 @@ function loop() {
     const hudGap = (G.freezeLeft > 0 || BOMB.planted) ? 1 / 30 : G.buyLeft > 0 ? 1 / 15 : 0.25;
     if (t - _hudAt >= hudGap) { _hudAt = t; updateHUD(); updateBuyTimer(); }
     else if (G.buyOpen) updateBuyTimer(); // smooth timer bar while shopping
-    if (t - _mmAt >= 1 / 60) { _mmAt = t; drawMinimap(t); }
+    if (t - _mmAt >= 0.125) { _mmAt = t; drawMinimap(t); }
     if (!player.alive) { /* CS: dead until next round — no respawn */ }
   } else if (G.phase === 'paused' || G.phase === 'over' || G.phase === 'menu') {
     // idle menu camera orbit
@@ -119,7 +121,7 @@ function loop() {
       const a = t * 0.12;
       camera.position.set(Math.sin(a) * 30, 14, Math.cos(a) * 30);
       camera.lookAt(0, 1, 0);
-      camera.fov = 60; camera.updateProjectionMatrix();
+      if (camera.fov !== 60) { camera.fov = 60; camera.updateProjectionMatrix(); }
       for (const b of bots) { // idle bots wander for menu backdrop
         if (!b.alive) continue;
         if (t >= b.nextThink) botThink(b, t);
@@ -176,6 +178,7 @@ function boot() {
   initThree();
   buildMap();
   buildWeed();
+  buildYaris();
   buildViewmodel('deagle');
   if (viewmodel) viewmodel.visible = false; // hidden until match starts
   for (let i = 0; i < 4; i++) makeBot('ct', i);

@@ -193,6 +193,25 @@ const cleanText = (s, max) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u00
 let nextId = 1;
 const RATE_PER_SEC = 120; // sustained messages/second per client
 const RATE_BURST = 240;
+// Per-type caps (sliding 1s window): grief primitives get tight budgets, bulk flow keeps global bucket.
+const TYPE_CAPS = { killed: 3, hit: 30, shot: 12, nade: 5, bomb: 6, weapon: 6, state: 60, chat: 2, dmg: 20, helix: 8, yell: 3 };
+function typeAllowed(client, type) {
+  const cap = TYPE_CAPS[type];
+  if (!cap) return true;
+  const now = Date.now();
+  let a = client.typeTimes.get(type);
+  if (!a) { a = []; client.typeTimes.set(type, a); }
+  while (a.length && now - a[0] > 1000) a.shift();
+  if (a.length >= cap) return false;
+  a.push(now);
+  return true;
+}
+const distXZ = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+// Owner-simulated car coordinate: in-bounds and near the driver, else the driver's own pos.
+const clampCar = (fallback, v) => {
+  if (!Number.isFinite(v) || Math.abs(v) > 45) return fallback;
+  return Math.abs(v - fallback) > 8 ? fallback : v;
+};
 // Dropped weapons on the floor: wid -> { wid, key, mag, reserve, x, y, z, ry, at }.
 // The server arbitrates pickups so two players can never grab the same gun.
 const drops = new Map();
@@ -247,7 +266,7 @@ wss.on('connection', (ws, req) => {
   ipCounts.set(ip, (ipCounts.get(ip) || 0) + 1);
   const id = nextId++;
   const client = { ws, id, ip, name: `Player${id}`, team: null, state: null, lastSeen: Date.now(), alive: true, lastStateAt: 0, lastChatAt: 0, lastPos: null, kills: 0, deaths: 0, assists: 0, mAlive: false,
-    tokens: RATE_BURST, lastRefill: Date.now(), strikes: 0 };
+    tokens: RATE_BURST, lastRefill: Date.now(), strikes: 0, typeTimes: new Map() };
   try { ws._socket.setNoDelay(true); } catch {} // never let Nagle batch game packets
   ws.on('pong', () => { client.alive = true; });
   clients.set(id, client);
@@ -266,6 +285,7 @@ wss.on('connection', (ws, req) => {
     let m;
     try { m = JSON.parse(buf.toString()); } catch { return; }
     if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.type !== 'string') return;
+    if (!typeAllowed(client, m.type)) { if (++client.strikes > 200) { try { ws.close(1008, 'rate limit'); } catch {} } return; }
     client.lastSeen = nowR;
 
     switch (m.type) {
@@ -293,20 +313,29 @@ wss.on('connection', (ws, req) => {
           if (drops.size >= 32) { const oldest = drops.keys().next().value; drops.delete(oldest); }
           const cx = +m.x || 0, cy = +m.y || 0, cz = +m.z || 0;
           if (!Number.isFinite(cx + cy + cz) || Math.abs(cx) > 45 || Math.abs(cz) > 45) break;
+          // Drop must land near the dropper — reject teleport-across-map drops.
+          if (client.lastPos && distXZ({ x: cx, z: cz }, client.lastPos) > 4) break;
           const d = { wid, key: m.key, mag: Math.max(0, Math.min(50, m.mag | 0)), reserve: Math.max(0, Math.min(250, m.reserve | 0)),
-            x: cx, y: Math.max(-1, Math.min(12, cy)), z: cz, ry: +m.ry || 0, at: Date.now() };
+            x: cx, y: Math.max(-1, Math.min(12, cy)), z: cz, ry: +m.ry || 0, at: Date.now(), ownerId: id };
           drops.set(wid, d);
           broadcast({ type: 'weapon', action: 'drop', ...d, vx: +m.vx || 0, vy: +m.vy || 0, vz: +m.vz || 0, fromId: id }, id);
         } else if (m.action === 'rest') {
           const d = drops.get(wid);
           if (!d) break;
+          if (!client.lastPos) break;
           const rx = +m.x || 0, ry2 = +m.y || 0, rz = +m.z || 0;
           if (!Number.isFinite(rx + ry2 + rz) || Math.abs(rx) > 45 || Math.abs(rz) > 45) break;
+          // Owner or nearby player only, and no teleporting someone else's gun across the map.
+          if (d.ownerId !== id && distXZ(client.lastPos, d) > 4) break;
+          if (distXZ(client.lastPos, { x: rx, z: rz }) > 4) break;
+          if (distXZ(d, { x: rx, z: rz }) > 6) break;
           d.x = rx; d.y = Math.max(-1, Math.min(12, ry2)); d.z = rz; d.ry = +m.ry || 0;
           broadcast({ type: 'weapon', action: 'rest', wid, x: d.x, y: d.y, z: d.z, ry: d.ry }, id);
         } else if (m.action === 'pickup') {
           const d = drops.get(wid);
           if (!d) { send(ws, { type: 'weapon', action: 'deny', wid }); break; }
+          // Must stand next to the gun to grab it.
+          if (!client.lastPos || distXZ(client.lastPos, d) > 3.5) { send(ws, { type: 'weapon', action: 'deny', wid }); break; }
           drops.delete(wid);
           // everyone (including the winner) learns who got it
           broadcast({ type: 'weapon', action: 'pickup', wid, key: d.key, mag: d.mag, reserve: d.reserve, byId: id });
@@ -344,6 +373,12 @@ wss.on('connection', (ws, req) => {
           helix: Math.max(0, Math.min(1, +m.helix || 0)), // coil energy 0..1 (wind-up whine)
           yell: !!m.yell,                            // machete-sprint Tarzan loop
           nuke: !!m.nuke,                          // live-bomb carry prop
+          // beater Yaris: car pose is owner-simulated — must stay in-bounds and near the driver
+          ydrv: !!m.ydrv,
+          yx: clampCar(sx, +m.yx), yz: clampCar(sz, +m.yz),
+          yyaw: Number.isFinite(+m.yyaw) ? +m.yyaw : 0,
+          yspd: Math.max(0, Math.min(1, +m.yspd || 0)),
+          yhk: Math.max(0, Math.min(1e9, m.yhk | 0)), ybf: Math.max(0, Math.min(1e9, m.ybf | 0)),
           ping: Math.max(0, Math.min(9999, Math.round(+m.ping) || 0)),
         };
         if (client.team) {
@@ -370,15 +405,32 @@ wss.on('connection', (ws, req) => {
         }
         if (m.type === 'killed') {
           if (m.victimId !== id) break; // only the victim reports its own death
-          m.killerName = cleanText(m.killerName, 16); m.victimName = client.name;
+          // Server truth overwrites victim-supplied killer claims (match.onKilled also
+          // drops forged killerId/assistId with no supporting 'hit' — death still counts).
+          const kc = Number.isInteger(m.killerId) ? clients.get(m.killerId) : null;
+          if (kc && kc !== client && kc.team && kc.team !== client.team) {
+            m.killerName = kc.name; m.killerTeam = kc.team;
+          } else {
+            m.killerId = null; delete m.killerTeam;
+            m.killerName = cleanText(m.killerName, 16);
+          }
+          const ac = Number.isInteger(m.assistId) ? clients.get(m.assistId) : null;
+          if (!(ac && ac !== client && kc && ac !== kc && ac.team && ac.team !== client.team)) m.assistId = null;
+          m.victimName = client.name;
           m.weapon = cleanText(m.weapon, 24); m.victimTeam = client.team;
-          if (m.killerTeam !== 'ct' && m.killerTeam !== 't') delete m.killerTeam;
           match.onKilled(client, m);
         }
         if (m.type === 'hit' && m.dmg !== undefined) {
           const d = +m.dmg;
           if (!Number.isFinite(d)) break;
           m.dmg = Math.max(0, Math.min(100, d));
+          // Ledger for killer validation: sender id is server-stamped, target id is claimed.
+          if (Number.isInteger(m.targetId)) {
+            const v = clients.get(m.targetId);
+            if (v && v !== client && v.team && client.team && v.team !== client.team) {
+              try { match.noteHit(m.targetId, id); } catch {}
+            }
+          }
         }
         if ((m.type === 'nade' || m.type === 'shot' || m.type === 'helix' || m.type === 'yell') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
           if (!Number.isFinite(+m.x + +m.y + +m.z)) break;

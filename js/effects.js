@@ -175,6 +175,10 @@ export function clearDecals() {
   decals.length = 0;
 }
 
+// shared unit tracer geos (scaled per shot — no per-shot geometry alloc)
+const _beamGeo = new THREE.CylinderGeometry(0.625, 1, 1, 5, 1, true);
+const _coreGeo = new THREE.CylinderGeometry(0.6875, 1, 1, 5, 1, true);
+const _tDir = new THREE.Vector3(), _tMid = new THREE.Vector3(), _tUp = new THREE.Vector3(0, 1, 0), _tN = new THREE.Vector3();
 export function spawnTracer(a, b, color, wide = 1) {
   const len = a.distanceTo(b);
   if (len < 0.5) return;
@@ -185,26 +189,26 @@ export function spawnTracer(a, b, color, wide = 1) {
   }
   // volumetric-feel beam: thin additive cylinder + hot core line + glow head
   const g = new THREE.Group();
-  const dir = b.clone().sub(a);
-  const mid = a.clone().addScaledVector(dir, 0.5);
+  _tDir.copy(b).sub(a);
   const beamLen = Math.min(len, 26);
   const rad = (0.012 + Math.min(0.02, len * 0.0006)) * wide;
-  const beamGeo = new THREE.CylinderGeometry(rad, rad * 1.6, beamLen, 5, 1, true);
   const beamMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
-  const beam = new THREE.Mesh(beamGeo, beamMat);
+  const beam = new THREE.Mesh(_beamGeo, beamMat);
   // cylinder Y-axis -> align to shot dir, anchor beam start at muzzle
-  const start = a.clone();
-  const beamMid = start.clone().addScaledVector(dir.clone().normalize(), beamLen * 0.5);
-  beam.position.copy(beamMid);
-  beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize().negate());
+  _tN.copy(_tDir).normalize();
+  _tMid.copy(a).addScaledVector(_tN, beamLen * 0.5);
+  beam.position.copy(_tMid);
+  beam.scale.set(rad * 1.6, beamLen, rad * 1.6);
+  _tMid.copy(_tN).negate();
+  beam.quaternion.setFromUnitVectors(_tUp, _tMid);
   beam.frustumCulled = false;
   g.add(beam);
   // hot white-hot core (short, near muzzle — reads as powder burn)
   const coreLen = Math.min(3.2, beamLen * 0.4);
-  const coreGeo = new THREE.CylinderGeometry(rad * 0.55, rad * 0.8, coreLen, 5, 1, true);
   const coreMat = new THREE.MeshBasicMaterial({ color: 0xfff6e0, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
-  const core = new THREE.Mesh(coreGeo, coreMat);
-  core.position.copy(start.clone().addScaledVector(dir.clone().normalize(), coreLen * 0.5));
+  const core = new THREE.Mesh(_coreGeo, coreMat);
+  core.position.copy(a).addScaledVector(_tN, coreLen * 0.5);
+  core.scale.set(rad * 0.8, coreLen, rad * 0.8);
   core.quaternion.copy(beam.quaternion);
   core.frustumCulled = false;
   g.add(core);
@@ -365,9 +369,8 @@ export function updateEffects(dt, t = 0) {
     if (tr.life <= 0) {
       try {
         scene.remove(tr.mesh);
-        // NOTE: sprite geometry is shared in three — only dispose materials for sprites
+        // beam/core geos are shared — materials only
         tr.mesh.traverse((o) => {
-          try { if (o.isMesh) o.geometry.dispose(); } catch (e) {}
           try { if (o.isMesh || o.isSprite) o.material.dispose(); } catch (e) {}
         });
       } catch (e) { try { scene.remove(tr.mesh); } catch (e2) {} }
