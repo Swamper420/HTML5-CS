@@ -154,6 +154,7 @@ export function buildViewmodel(key, opts = {}) {
     // First-person: hi-def version of third-person silhouette, easy to tell apart.
     const nm = makeFirstPersonNadeMesh(key);
     nm.position.set(0, -0.02, -0.30);
+    if (key === 'nuke') nm.position.set(0, -0.035, -0.36); // long Fat Man body sits forward so the tail crate doesn't fill the screen
     vmKickG.add(nm);
     // hand holding it
     B(vmKickG, 0.075, 0.080, 0.085, M.glove, 0, -0.115, -0.24, 0.35);

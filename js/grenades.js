@@ -55,16 +55,23 @@ export function makeNadeMesh(type) {
     const dark = new THREE.MeshStandardMaterial({ color: 0x1f2226, roughness: 0.5, metalness: 0.6 });
     const steel = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.35, metalness: 0.85 });
     if (type === 'nuke') {
-      // Hand-carried atomic bomb: black sphere, yellow warning band, pulsing core glow.
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12),
-        new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.4, metalness: 0.7 }));
-      ball.castShadow = true; g.add(ball);
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.016, 8, 24),
-        new THREE.MeshStandardMaterial({ color: 0xffd21f, roughness: 0.6, emissive: 0x7a5c00, emissiveIntensity: 0.4 }));
-      band.rotation.x = Math.PI / 2; g.add(band);
+      // Fat Man-style: mustard egg body, blunt nose, boxy tail-fin crate, black bands, armed blink.
+      const caseM = new THREE.MeshStandardMaterial({ color: 0xc79a3a, roughness: 0.5, metalness: 0.3 });
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), caseM);
+      ball.scale.set(0.85, 0.85, 1.45); ball.castShadow = true; g.add(ball);
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), dark);
+      nose.position.z = -0.15; g.add(nose);
+      for (const [w, h, d, z] of [[0.02, 0.16, 0.12, 0.17], [0.16, 0.02, 0.12, 0.17], [0.14, 0.14, 0.02, 0.23]]) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), dark);
+        fin.position.z = z; g.add(fin);
+      }
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.096, 0.01, 8, 24), dark);
+      band.position.z = -0.02; g.add(band);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.01, 0.05, 8), dark);
+      mast.position.set(0, 0.11, 0.02); g.add(mast);
       const T = decalTextures();
       const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff3b1f, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
-      gl.scale.setScalar(0.34); g.add(gl);
+      gl.scale.setScalar(0.22); gl.position.set(0, 0.15, 0.02); g.add(gl);
       g.userData.blink = gl;
       return g;
     }
@@ -135,17 +142,22 @@ export function makeFirstPersonNadeMesh(type) {
       const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff9a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
       gl.scale.setScalar(0.22); gl.position.y = 0.24; g.add(gl);
     } else if (type === 'nuke') {
-      // First-person hand nuke: fat black bomb with yellow band + blinking red core light.
-      const ball = mesh(new THREE.SphereGeometry(0.11, 28, 20), new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.35, metalness: 0.75 }));
-      ball.scale.y = 1.1;
-      const band = mesh(new THREE.TorusGeometry(0.11, 0.016, 8, 32), new THREE.MeshStandardMaterial({ color: 0xffd21f, roughness: 0.5, emissive: 0x7a5c00, emissiveIntensity: 0.5 }));
-      band.rotation.x = Math.PI / 2;
-      mesh(new THREE.CylinderGeometry(0.02, 0.026, 0.05, 12), dark, 0, 0.125, 0);
+      // First-person Fat Man: mustard egg, blunt nose, boxy tail-fin crate, black bands, armed blink.
+      const caseM = new THREE.MeshStandardMaterial({ color: 0xc79a3a, roughness: 0.45, metalness: 0.35 });
+      const ball = mesh(new THREE.SphereGeometry(0.11, 28, 20), caseM);
+      ball.scale.set(0.85, 0.85, 1.45);
+      const nose = mesh(new THREE.SphereGeometry(0.05, 20, 14), dark, 0, 0, -0.15);
+      nose.scale.set(1, 1, 0.7);
+      mesh(new THREE.BoxGeometry(0.02, 0.17, 0.13), dark, 0, 0, 0.17);
+      mesh(new THREE.BoxGeometry(0.17, 0.02, 0.13), dark, 0, 0, 0.17);
+      mesh(new THREE.BoxGeometry(0.15, 0.15, 0.025), dark, 0, 0, 0.235);
+      mesh(new THREE.TorusGeometry(0.095, 0.008, 8, 32), dark, 0, 0, -0.02);
+      mesh(new THREE.TorusGeometry(0.082, 0.007, 8, 32), dark, 0, 0, 0.09);
+      mesh(new THREE.CylinderGeometry(0.008, 0.01, 0.05, 12), dark, 0, 0.11, 0.02);
       const T = decalTextures();
       const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow, color: 0xff3b1f, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
-      gl.scale.setScalar(0.3); gl.position.y = 0.16; g.add(gl);
+      gl.scale.setScalar(0.2); gl.position.set(0, 0.15, 0.02); g.add(gl);
       g.userData.blink = gl;
-      pinLever(0.155);
     } else if (type === 'he') {
       const body = mesh(new THREE.SphereGeometry(0.062, 28, 20), new THREE.MeshStandardMaterial({ color: 0x4d7c3a, roughness: 0.5, metalness: 0.3 }));
       body.scale.y = 1.15;
