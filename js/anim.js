@@ -181,6 +181,16 @@ export function animateSoldier(mesh, inp, dt, t) {
   r.shoulderR.rotation.x = -0.55 + gunBob * 0.6 + A.fire * 0.16 - 0.18 * kneelK;
   r.shoulderR.rotation.z = -0.10 * gaitK * Math.sin(p);
   r.elbowR.rotation.x = -0.85 - A.fire * 0.10;
+  // ---- MACHETE CARRY: no rifle-aim pose for an edged slab — right hand hangs
+  //      the blade low, left arm swings free. The chop below overrides mid-swing.
+  if (inp.blade && A.slash <= 0) {
+    r.shoulderR.rotation.x = 0.12 + gunBob * 0.5;
+    r.shoulderR.rotation.z = -0.08;
+    r.elbowR.rotation.x = -0.30;
+    r.shoulderL.rotation.x = 0.10 + Math.sin(p) * 0.30 * gaitK;
+    r.shoulderL.rotation.z = 0.06;
+    r.elbowL.rotation.x = -0.35;
+  }
   // ---- MACHETE CHOP: right arm sweeps a full diagonal, torso twists into it,
   //      blade follows the hand. Alternates sides per swing. ----
   if (A.slash > 0) {
@@ -194,7 +204,13 @@ export function animateSoldier(mesh, inp, dt, t) {
   }
 
   // ---- WEAPON: barrel tracks the aim line, kicks on fire, dips on reload/kneel ----
-  if (r.gun) {
+  if (r.gun && inp.blade && A.slash <= 0) {
+    // blade hangs from the lowered hand, tip down-forward (forward is -Z world,
+    // so X-rotation dips it) — never aimed like a barrel
+    r.gun.rotation.x = 0.55 - A.pitch * 0.15;
+    r.gun.rotation.y = -A.turn * 0.12;
+    r.gun.rotation.z = 0.15;
+  } else if (r.gun) {
     r.gun.rotation.x = -A.pitch * 0.55 - A.fire * 0.22 + 0.25 * rl + 0.30 * kneelK;
     r.gun.rotation.z = 0.55 * rl + 0.35 * kneelK;
     r.gun.rotation.y = -A.turn * 0.12;

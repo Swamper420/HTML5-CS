@@ -342,6 +342,7 @@ wss.on('connection', (ws, req) => {
           harvesting: !!m.harvesting,               // kneel anim while working the weed farm
           reloading: !!m.reloading,                // reload anim + sound cue
           helix: Math.max(0, Math.min(1, +m.helix || 0)), // coil energy 0..1 (wind-up whine)
+          yell: !!m.yell,                            // machete-sprint Tarzan loop
           nuke: !!m.nuke,                          // live-bomb carry prop
           ping: Math.max(0, Math.min(9999, Math.round(+m.ping) || 0)),
         };

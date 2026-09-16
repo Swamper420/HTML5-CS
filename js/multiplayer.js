@@ -61,6 +61,7 @@ export function removeRemoteMesh(id) {
   if (!e) return;
   try { if (e.nukeMesh) scene.remove(e.nukeMesh); } catch {}
   try { AudioSys.helixRemote(id, 0); } catch {}
+  try { AudioSys.tarzanRemote(id, false); } catch {}
   try { coilRemote(id, 0, 0, -99, 0, 0); } catch {}
   try { scene.remove(e.mesh); } catch {}
   try { if (e.blob) scene.remove(e.blob); } catch {}
@@ -228,6 +229,7 @@ export function updateRemoteMeshes(dt, t) {
             vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: (e.pitch !== undefined ? e.pitch : (r.pitch || 0)),
             grounded: r.gnd !== undefined ? (!!r.gnd || !!wallSide) : (r.y || 0) < 0.06, crouch: !!r.crouch,
             kneel: !!r.planting || !!r.defusing || !!r.harvesting, reloading: !!r.reloading, wall: wallSide,
+            blade: r.weapon === 'machete',
           }, dt, t);
         } catch (err) {}
         if (Math.abs(m.rotation.x) > 0.01) m.rotation.x *= Math.max(0, 1 - dt * 6);
@@ -265,6 +267,12 @@ export function updateRemoteMeshes(dt, t) {
       const hk = (r.weapon === 'helix' && r.alive) ? (+r.helix || 0) : 0;
       if (hk > 0.01) AudioSys.helixRemote(id, hk, { x: e.pos.x, y: e.pos.y + 1.4, z: e.pos.z });
       else AudioSys.helixRemote(id, 0);
+    } catch {}
+    // Remote machete-sprint yell loop: exact sender flag from snapshot state.
+    try {
+      const wantT = !!r.yell && r.weapon === 'machete' && !!r.alive;
+      if (wantT) AudioSys.tarzanRemote(id, true, { x: e.pos.x, y: e.pos.y + 1.4, z: e.pos.z });
+      else AudioSys.tarzanRemote(id, false);
     } catch {}
     // Remote coil glow + dynamic light wash, driven by the same relayed 0..1 state.
     try {
@@ -431,7 +439,9 @@ export function wireMultiplayer() {
       };
       let dmg = Number(m.dmg);
       if (!isFinite(dmg)) return;
-      dmg = clamp(dmg, 0, 100); // per-hit cap — no remote one-shots via spoofed dmg
+      // per-hit cap — no remote one-shots via spoofed dmg (machete needs headroom: 150×1.05 roll)
+      const cap = String(m.weapon || '').toUpperCase().includes('MACHETE') ? 160 : 100;
+      dmg = clamp(dmg, 0, cap);
       // damagePlayer reports our death (once) to the server; don't send a second 'killed' here.
       damagePlayer(dmg, shooter, !!m.head);
       // Hit direction arrow from remote position.

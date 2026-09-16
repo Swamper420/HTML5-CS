@@ -11,7 +11,7 @@ import { updateInteractHUD } from './bomb.js';
 import { rayWallDist } from './collision.js';
 import { fireHitscan, damageBot, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
 import { spawnBurst, spawnDecal, spawnFireball, spawnShell, spawnShockwave, spawnSmoke, spawnTracer } from './effects.js';
-import { announce, flashExplosionOverlay, updateHUD } from './hud.js';
+import { announce, flashExplosionOverlay, playerHitmark, updateHUD } from './hud.js';
 import { mouseJustDown, rmbJustDown, setCrossGap, setMouseJustDown, setRmbJustDown } from './input.js';
 import { isOnline, remotes } from './multiplayer.js';
 import { DUAL } from './pickups.js';

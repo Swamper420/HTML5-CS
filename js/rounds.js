@@ -191,6 +191,7 @@ function startRound(first = false, fromNet = false) {
   player.hp = 100;
   player.alive = true; player.reloading = 0; player.spectatorOnly = false;
   try { AudioSys.helixWhine(0); vmRig.helixRate = 0; } catch {}
+  try { AudioSys.tarzanLoop(false); } catch {}
   player.specTarget = null;
   player.hasBomb = false;
   player.bloom = 0; player.sprayIdx = 0; player.lastShotT = -9; player.aiming = false;
@@ -345,6 +346,7 @@ export function updateRoundTimers(dt, t) {
 function endMatch() {
   G.phase = 'over';
   try { AudioSys.helixWhine(0); vmRig.helixRate = 0; } catch {}
+  try { AudioSys.tarzanLoop(false); } catch {}
   try { if (coilLight) coilLight.intensity = 0; } catch {}
   try { killCoilLights(); } catch {}
   updateInteractHUD(null);
@@ -368,6 +370,7 @@ function endMatch() {
 export function pauseGame() {
   if (G.phase !== 'playing') return;
   try { AudioSys.helixWhine(0); } catch {} // never drone under the menu
+  try { AudioSys.tarzanLoop(false); } catch {}
   const online = isOnline();
   const title = document.querySelector('#pause-menu h2'), note = document.querySelector('#pause-menu p');
   if (title) title.textContent = online ? 'MENU' : 'PAUSED';

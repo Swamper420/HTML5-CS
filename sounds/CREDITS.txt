@@ -25,6 +25,7 @@ Mixkit Sound Effects License (free for commercial use, no attribution required):
 - glass.mp3 — "Glass break with hammer thud" (trimmed) https://mixkit.co/free-sound-effects/glass/
 - thud.mp3 — "Body impact falling into the sand" (trimmed) https://mixkit.co/free-sound-effects/thud/
 - punch.mp3 — "Body punch quick hit" (trimmed) https://mixkit.co/free-sound-effects/punch/
+- tarzan.mp3 — user-supplied yell, VAD-trimmed (0.9–4.25s voice only), mono 22kHz; seamless loop while sprinting with machete
 
 Classical Music Stings (Round ends, Victory, Defeat, Bomb detonate):
 - music_beethoven.mp3 — Ludwig van Beethoven: Symphony No. 5 in C minor, Op. 67 (I. Allegro con brio)

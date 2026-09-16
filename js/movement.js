@@ -41,6 +41,7 @@ function endWallRun() {
 export function updatePlayer(dt, t) {
   if (!player.alive) {
     try { AudioSys.helixWhine(0); } catch {} // never drone while dead
+    try { AudioSys.tarzanLoop(false); } catch {}
     try { if (coilLight) coilLight.intensity = 0; } catch {}
     _helixWindSent = false;
     // CS: dead until round ends — spectate a living teammate instead of a
@@ -211,16 +212,9 @@ export function updatePlayer(dt, t) {
   // footsteps (own boots, L/R alternating + sprint weight) — crouch-walking is silent
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
   if (player.onGround && hSpeed > 2 && t > stepAt && player.crouch < 0.5) { stepAt = t + (sprint ? 0.3 : 0.42); AudioSys.step(null, sprint); }
-  // machete sprint: Tarzan war cry every few seconds, relayed so everyone hears it
-  if (player.cur === 'machete' && sprint && hSpeed > 3 && player.alive && G.phase === 'playing' && !isFreeze()) {
-    if (t - (player._tarzanAt || -99) > 5) {
-      player._tarzanAt = t;
-      try { AudioSys.tarzan(); } catch {}
-      try {
-        if (isOnline()) Net.sendYell({ x: Math.round(player.pos.x * 100) / 100, y: Math.round((player.pos.y + 1.4) * 100) / 100, z: Math.round(player.pos.z * 100) / 100 });
-      } catch {}
-    }
-  }
+  // machete sprint: seamless Tarzan yell loop; relayed via snapshot `yell` so remotes match exactly
+  player._yelling = player.cur === 'machete' && sprint && hSpeed > 3 && player.alive && G.phase === 'playing' && !isFreeze();
+  try { AudioSys.tarzanLoop(player._yelling); } catch {}
   void wr;
 
   const def = WEAPONS[player.cur] || { bloomDecay: 0.05, auto: false, zoomFov: 75 };
@@ -456,6 +450,7 @@ export function updatePlayer(dt, t) {
       reloading: player.reloading > 0,
       helix: player.cur === 'helix' ? Math.round(clamp(vmRig.helixRate / 48, 0, 1) * 100) / 100 : 0,
       nuke: !!player.carryingNuke, // live-bomb carry prop for remotes
+      yell: !!player._yelling, // machete-sprint Tarzan loop for remotes
     });
   } catch {}
 }

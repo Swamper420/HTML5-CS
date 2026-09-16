@@ -128,7 +128,7 @@ export const AudioSys = {
     click: 'sounds/click.mp3', steps: 'sounds/steps.mp3', crack: 'sounds/crack.mp3',
     impact: 'sounds/impact.mp3', clang: 'sounds/clang.mp3',
     cash: 'sounds/cash.mp3', whistle: 'sounds/whistle.mp3', glass: 'sounds/glass.mp3',
-    thud: 'sounds/thud.mp3', punch: 'sounds/punch.mp3',
+    thud: 'sounds/thud.mp3', punch: 'sounds/punch.mp3', tarzan: 'sounds/tarzan.mp3',
     music_beethoven: 'sounds/music_beethoven.mp3',
     music_valkyrie: 'sounds/music_valkyrie.mp3',
     music_chopin: 'sounds/music_chopin.mp3',
@@ -781,9 +781,9 @@ export const AudioSys = {
     }
   },
   tarzan(pos = null) {
-    // sprinting-machete war cry: ululating "ah-ah-ah-ah-AAA" that carries across
-    // the map. Alternating-pitch chest-voice syllables over a rising wail.
+    // sprinting-machete war cry: recorded yell looped every ~5s by movement.js.
     if (!this.ctx || !opts.sound || this.muted) return;
+    if (this._sample({ name: 'tarzan', peak: 0.6, dur: 3.35, pos, kind: 'yell' })) return;
     const K = 'yell';
     // rising opening wail
     this._tone({ type: 'triangle', f0: 300, f1: 640, dur: 0.5, peak: 0.34, decay: 0.45, pos, kind: K, at: 0 });
@@ -798,6 +798,77 @@ export const AudioSys = {
     // closing chest-beat cry, held long
     this._tone({ type: 'triangle', f0: 520, f1: 380, dur: 0.55, peak: 0.4, decay: 0.5, pos, kind: K, at: 0.42 + n * 0.16 });
     this._tone({ type: 'sine', f0: 260, f1: 190, dur: 0.55, peak: 0.22, decay: 0.5, pos, kind: K, at: 0.42 + n * 0.16 });
+  },
+  tarzanLoop(on) {
+    // Machete-sprint loop: one persistent looped voice, seamless yell.
+    // Call every frame; on=false fades out and frees the nodes.
+    if (!this.ctx) return;
+    on = !!on && !!opts.sound && !this.muted;
+    const t = this.now();
+    let h = this._tarzanLp;
+    if (!h) {
+      if (!on) return;
+      const buf = this._buf && this._buf.tarzan;
+      if (!buf) return; // not decoded yet — caller retries next frame
+      try {
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf; src.loop = true;
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        src.connect(g); g.connect(this.master);
+        src.start();
+        h = this._tarzanLp = { src, g };
+      } catch (e) { return; }
+    }
+    try { h.g.gain.setTargetAtTime(on ? 0.55 : 0, t, on ? 0.1 : 0.08); } catch (e) {}
+    if (!on) {
+      const { src, g } = h;
+      this._tarzanLp = null;
+      try {
+        src.stop(t + 0.4);
+        setTimeout(() => { try { src.disconnect(); g.disconnect(); } catch (e) {} }, 600);
+      } catch (e) {}
+    }
+  },
+  tarzanRemote(id, on, pos) {
+    // Per-remote yell loop driven by snapshot state (machete + sprint speed).
+    // Call every frame; on=false frees the voice. Positioned, carries map-wide.
+    if (!this.ctx) return;
+    if (!opts.sound || this.muted) on = false;
+    if (!this._tarzanRem) this._tarzanRem = {};
+    let h = this._tarzanRem[id];
+    if (!h) {
+      if (!on || !pos) return;
+      const buf = this._buf && this._buf.tarzan;
+      if (!buf) return;
+      try {
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf; src.loop = true;
+        src.playbackRate.value = rand(0.96, 1.04);
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        const pan = this._pan(0);
+        src.connect(g); g.connect(pan);
+        src.start();
+        h = this._tarzanRem[id] = { src, g, pan };
+      } catch (e) { return; }
+    }
+    const t = this.now();
+    try {
+      if (on && pos) {
+        const s = this._spatial(pos, 'yell');
+        h.g.gain.setTargetAtTime(0.6 * s.vol, t, 0.1);
+        try { if (h.pan && h.pan.pan) h.pan.pan.setTargetAtTime(clamp(s.pan, -1, 1), t, 0.1); } catch (e) {}
+      } else {
+        h.g.gain.setTargetAtTime(0, t, 0.08);
+      }
+    } catch (e) {}
+    if ((!on || !pos) && h) {
+      const { src, g, pan } = h;
+      delete this._tarzanRem[id];
+      try {
+        src.stop(t + 0.4);
+        setTimeout(() => { try { src.disconnect(); g.disconnect(); if (pan !== this.master) pan.disconnect(); } catch (e) {} }, 600);
+      } catch (e) {}
+    }
   },
   land(hard = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
