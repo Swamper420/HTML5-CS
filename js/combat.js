@@ -12,7 +12,7 @@ import { soldierFlinch } from './anim.js';
 import { BOMB, bombDropAt, bombDroppedHit, explodeBomb, isInSite, updateInteractHUD } from './bomb.js';
 import { botChest, botsHearShot, objectiveWaypoint } from './bots.js';
 import { toggleBuy } from './buymenu.js';
-import { rayWallDist } from './collision.js';
+import { tracePortalPath } from './portals.js';
 import {
   decalTextures, spawnBloodPool, spawnBurst, spawnDebris, spawnDecal, spawnSmoke, spawnTracer,
   spawnWorldFlash, worldFlashes,
@@ -38,15 +38,15 @@ const _dir = new THREE.Vector3();
 export function fireHitscan(shooter, origin, dir, wdef, t) {
   try { botsHearShot(shooter, origin, t); } catch (e) {}
   const maxD = wdef.range;
-  const wallD = rayWallDist(origin, dir, maxD);
-  let bestT = wallD, hitBot = null, hitPlayer = false, head = false;
+  // Portal-bent path: bullets travel through linked portals (all shooters, online too).
+  const path = tracePortalPath(origin, dir, maxD);
+  let bestTravel = 0;
+  for (const S of path.segs) bestTravel += S.len;
+  let hitBot = null, hitPlayer = false, head = false;
 
-  // Ray vs person approximation: head sphere + two body spheres.
-  const checkPerson = (px, pz, feetY, crouchK = 0) => {
-    // returns {d, head} or null — ray-sphere for head + body; crouchK (0..1) sinks the head and chest
-    const o = origin, d = dir;
-    const ck = clamp(crouchK || 0, 0, 1);
-    // head sphere
+  // Ray vs person approximation, along one segment: head sphere + two body spheres.
+  const checkSeg = (O, D, px, pz, feetY, ck, segBest) => {
+    const o = O, d = D;
     const hx = px, hy = feetY + 1.7 - CROUCH_EYE_DROP * ck, hz = pz;
     const hr = 0.30;
     let best = null;
@@ -58,7 +58,7 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
     if (disc >= 0) {
       const sq = Math.sqrt(disc);
       let tt = -b - sq;
-      if (tt > 0.3 && tt < bestT && tt < maxD) best = { d: tt, head: true };
+      if (tt > 0.3 && tt < segBest) best = { d: tt, head: true };
     }
     // body: approximate as sphere at chest r=0.55 + lower sphere r=0.5
     for (const [by, br] of [[feetY + 1.05 - 0.36 * ck, 0.62 - 0.06 * ck], [feetY + 0.45 - 0.08 * ck, 0.5]]) {
@@ -68,8 +68,23 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
       const disc2 = b2 * b2 - c2;
       if (disc2 >= 0) {
         const tt = -b2 - Math.sqrt(disc2);
-        if (tt > 0.3 && tt < bestT && tt < maxD && (!best || tt < best.d)) best = { d: tt, head: false };
+        if (tt > 0.3 && tt < segBest && (!best || tt < best.d)) best = { d: tt, head: false };
       }
+    }
+    return best;
+  };
+  // Nearest person hit along the whole bent path (travel = distance along path).
+  const checkPerson = (px, pz, feetY, crouchK = 0) => {
+    const ck = clamp(crouchK || 0, 0, 1);
+    let best = null, travel = 0;
+    for (const S of path.segs) {
+      const span = Math.min(S.len, bestTravel - travel);
+      if (span > 0.3) {
+        const r = checkSeg(S.o, S.d, px, pz, feetY, ck, span);
+        if (r) { bestTravel = travel + r.d; best = { travel: bestTravel, head: r.head }; }
+      }
+      travel += S.len;
+      if (travel >= bestTravel) break;
     }
     return best;
   };
@@ -86,7 +101,7 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
       if (b.team === myTeam) continue;
     }
     const r = checkPerson(b.pos.x, b.pos.z, b.pos.y, b.crouching ? 1 : 0);
-    if (r && r.d < bestT) { bestT = r.d; hitBot = b; head = r.head; hitPlayer = false; }
+    if (r) { hitBot = b; head = r.head; hitPlayer = false; }
   }
   // Remote real players as hit targets (PvP, team-based, no friendly fire).
   let hitRemote = null;
@@ -97,7 +112,7 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
         const rd = e.data; if (!rd || !rd.alive) continue;
         if ((rd.team || 't') === myTeam) continue; // no friendly fire
         const r = checkPerson(e.pos.x, e.pos.z, e.pos.y, e.crouchK || 0);
-        if (r && r.d < bestT) { bestT = r.d; hitRemote = { id: rid, entry: e }; hitBot = null; head = r.head; hitPlayer = false; }
+        if (r) { hitRemote = { id: rid, entry: e }; hitBot = null; head = r.head; hitPlayer = false; }
       }
     } catch {}
   }
@@ -106,16 +121,49 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
     // Bots only damage the local player when on opposite teams (solo CT vs T).
     // Remote shooters never reach here — they send 'hit' msgs applied victim-side.
     const r = checkPerson(player.pos.x, player.pos.z, player.pos.y, player.crouch || 0);
-    if (r && r.d < bestT) { bestT = r.d; hitPlayer = true; hitBot = null; hitRemote = null; head = r.head; }
+    if (r) { hitPlayer = true; hitBot = null; hitRemote = null; head = r.head; }
   }
   // teammates (CT bots) can be hit by... nobody (no friendly fire) — skip.
 
+  // Position / disjoint legs at a travel distance along the bent path.
+  // Legs break at portal hops (teleport jumps are not drawn as lines).
+  const pathPoint = (travel) => {
+    let td = travel;
+    for (const S of path.segs) { if (td <= S.len) return S.o.clone().addScaledVector(S.d, td); td -= S.len; }
+    const L = path.segs[path.segs.length - 1];
+    return L.o.clone().addScaledVector(L.d, L.len);
+  };
+  const pathLegsUpTo = (travel) => {
+    const out = [];
+    let td = travel;
+    for (const S of path.segs) {
+      if (td <= 0) break;
+      const k = Math.min(S.len, td);
+      out.push([S.o.clone(), S.o.clone().addScaledVector(S.d, k)]);
+      td -= S.len;
+    }
+    return out;
+  };
+
   // Dropped C4 is shoot-to-detonate (planted C4 is bulletproof — bombDroppedHit
   // returns null when planted). Closest-hit wins: body/wall in front still blocks.
-  const bombT = bombDroppedHit(origin, dir, bestT);
-  if (bombT !== null) {
-    const bombEnd = origin.clone().add(dir.clone().multiplyScalar(bombT));
-    spawnTracer(origin.clone(), bombEnd.clone(), wdef.tracer);
+  let bombAt = -1;
+  {
+    let travel = 0;
+    for (const S of path.segs) {
+      const span = Math.min(S.len, bestTravel - travel);
+      if (span > 0.05) {
+        const bt = bombDroppedHit(S.o, S.d, span);
+        if (bt !== null) { bombAt = travel + bt; break; }
+      }
+      travel += S.len;
+      if (travel >= bestTravel) break;
+    }
+  }
+  if (bombAt >= 0) {
+    const bombEnd = pathPoint(bombAt);
+    const bombLegs = pathLegsUpTo(bombAt);
+    for (const [a, b] of bombLegs) spawnTracer(a, b, wdef.tracer);
     if (shooter.isPlayer) {
       muzzleLight.position.copy(origin).add(dir.clone().multiplyScalar(0.6));
       muzzleLight.intensity = wdef.sound === 'sniper' ? 5 : 3.2;
@@ -128,18 +176,26 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
     const shooterTeam = shooter.isPlayer ? (player.team || 'ct') : shooter.team;
     addKillfeed(shooterName, shooterTeam, 'DROPPED BOMB', 't', '💥 C4', false);
     explodeBomb(t, '💥 C4 SHOT — DETONATED');
-    return { hit: true, d: bombT, bombDetonated: true };
+    return { hit: true, d: bombAt, bombDetonated: true, points: bombLegs };
   }
 
-  const end = origin.clone().add(dir.clone().multiplyScalar(bestT));
+  const end = pathPoint(bestTravel);
+  const legs = pathLegsUpTo(bestTravel);
+  const legDir = (li, out) => out.copy(legs[li][1]).sub(legs[li][0]).normalize();
   if (tacticalSmokes.length) {
     let dent = null, dentK = 0;
     const pts = [];
-    for (let i = 1; i <= 6; i++) {
-      _smokePt.lerpVectors(origin, end, i / 6);
-      const k = smokePushAt(_smokePt, dir.x * 12, dir.z * 12, 0.7); // supersonic tunnel through the cloud
-      if (k > 0) pts.push(Math.round(_smokePt.x * 100) / 100, Math.round(_smokePt.y * 100) / 100, Math.round(_smokePt.z * 100) / 100);
-      if (k > dentK) { dentK = k; dent = _smokePt.clone(); }
+    const _ld = new THREE.Vector3();
+    for (let li = 0; li < legs.length; li++) {
+      legDir(li, _ld);
+      const a = legs[li][0], b = legs[li][1];
+      if (a.distanceTo(b) < 0.3) continue;
+      for (let i = 1; i <= 3; i++) {
+        _smokePt.lerpVectors(a, b, i / 3);
+        const k = smokePushAt(_smokePt, _ld.x * 12, _ld.z * 12, 0.7); // supersonic tunnel through the cloud
+        if (k > 0) pts.push(Math.round(_smokePt.x * 100) / 100, Math.round(_smokePt.y * 100) / 100, Math.round(_smokePt.z * 100) / 100);
+        if (k > dentK) { dentK = k; dent = _smokePt.clone(); }
+      }
     }
     if (dent && dentK > 0.2) {
       try { spawnSmoke(dent, 0.55, 0.8, 0xd8d4cb); } catch (e) {} // visible punch mark
@@ -148,36 +204,41 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
     }
   }
   // effects
-  spawnTracer(origin.clone(), end.clone(), wdef.tracer);
+  for (const [a, b] of legs) spawnTracer(a, b, wdef.tracer);
   if (shooter.isPlayer) {
     muzzleLight.position.copy(origin).add(dir.clone().multiplyScalar(0.6));
     muzzleLight.intensity = wdef.sound === 'sniper' ? 5 : 3.2;
     muzzleLight.distance = wdef.sound === 'sniper' ? 20 : 14;
-  } else if (bestT < 60) {
+  } else if (bestTravel < 60) {
     muzzleLight.position.copy(origin); muzzleLight.intensity = Math.max(muzzleLight.intensity, 1.5);
     spawnWorldFlash(origin, wdef.tracer || 0xffc36b, wdef.sound === 'sniper' ? 1.5 : 0.85);
   }
   if (shooter.isPlayer) AudioSys.shoot(wdef.sound);
   else AudioSys.shoot(wdef.sound, origin);
-  // supersonic snap when an enemy round whizzes past the camera (near miss)
+  // supersonic snap when an enemy round whizzes past the camera (near miss, every leg)
   if (!shooter.isPlayer && !hitBot && !hitPlayer && player.alive && camera) {
     try {
       const lp = camera.position;
-      const ox = lp.x - origin.x, oy = lp.y - origin.y, oz = lp.z - origin.z;
-      const along = ox * dir.x + oy * dir.y + oz * dir.z;
-      if (along > 0 && along < 45) {
-        const px = origin.x + dir.x * along - lp.x;
-        const py = origin.y + dir.y * along - lp.y;
-        const pz = origin.z + dir.z * along - lp.z;
-        const miss = Math.sqrt(px * px + py * py + pz * pz);
-        if (miss < 2.6 && Math.random() < 0.85) setTimeout(() => AudioSys.crack(), along / 343 * 1000);
+      const _cd = new THREE.Vector3();
+      for (let li = 0; li < legs.length; li++) {
+        legDir(li, _cd);
+        const a = legs[li][0];
+        const ox = lp.x - a.x, oy = lp.y - a.y, oz = lp.z - a.z;
+        const along = ox * _cd.x + oy * _cd.y + oz * _cd.z;
+        if (along > 0 && along < 45) {
+          const px = a.x + _cd.x * along - lp.x;
+          const py = a.y + _cd.y * along - lp.y;
+          const pz = a.z + _cd.z * along - lp.z;
+          const miss = Math.sqrt(px * px + py * py + pz * pz);
+          if (miss < 2.6 && Math.random() < 0.85) setTimeout(() => AudioSys.crack(), along / 343 * 1000);
+        }
       }
     } catch (e) {}
   }
 
   // damage falloff with distance (keeps AWP lethal far, rifles fade)
   const fall = wdef.falloff !== undefined ? wdef.falloff : 0.35;
-  const fallK = 1 - fall * clamp(bestT / wdef.range, 0, 1);
+  const fallK = 1 - fall * clamp(bestTravel / wdef.range, 0, 1);
   if (hitRemote) {
     // PvP: shooter predicts the hit locally for feedback, victim applies it.
     let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.9, 1.1);
@@ -191,27 +252,27 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
       });
     } catch {}
     // Optimistic local feedback; authoritative death arrives via 'killed' or snapshot.
-    return { hit: true, d: bestT };
+    return { hit: true, d: bestTravel, points: legs };
   } else if (hitBot) {
     let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.9, 1.1);
     try {
       const wk = (wdef && wdef.name) || currentWeaponName(shooter);
       damageBot(hitBot, dmg, shooter, head, end, { dir: dir.clone(), weapon: wk });
     } catch (e) { damageBot(hitBot, dmg, shooter, head, end); }
-    return { hit: true, d: bestT };
+    return { hit: true, d: bestTravel, points: legs };
   } else if (hitPlayer) {
     let dmg = wdef.damage * fallK * (head ? wdef.headMult : 1) * rand(0.85, 1.1);
     damagePlayer(dmg, shooter, head);
     spawnBurst(end, 0xaa0000, 6, 3, 0.4);
-    return { hit: true, d: bestT };
-  } else if (bestT < maxD - 0.01) {
+    return { hit: true, d: bestTravel, points: legs };
+  } else if (bestTravel < maxD - 0.01) {
     // wall impact: spark + dust + chip + smoke wisp + positional thwack/ring
     spawnBurst(end, 0xffd27a, 8, 5, 0.3, 0.07);
     spawnBurst(end, 0x9a8f7a, 5, 2.2, 0.55, 0.08);
     spawnSmoke(end, 0.22, 0.6);
     if (opts.quality) spawnDebris(end, 2, 3, 3);
-    // persistent bullet hole facing back along the shot
-    try { spawnDecal('hole', end, dir.clone().negate(), 0.22 + Math.random() * 0.14); } catch (e) {}
+    // persistent bullet hole facing back along the shot (last leg through portals)
+    try { spawnDecal('hole', end, legDir(legs.length - 1, new THREE.Vector3()).negate(), 0.22 + Math.random() * 0.14); } catch (e) {}
     // hot impact glint so far hits read at distance
     try {
       const T = decalTextures();
@@ -221,9 +282,9 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
       worldFlashes.push({ mesh: glint, life: 0.08, max: 0.08 });
     } catch (e) {}
     AudioSys.impact(end, wdef.sound === 'sniper');
-    return { hit: false, d: bestT };
+    return { hit: false, d: bestTravel, points: legs };
   }
-  return { hit: false, d: bestT };
+  return { hit: false, d: bestTravel, points: legs };
 }
 
 export function damageBot(bot, dmg, shooter, head, hitPos, gore = {}) {

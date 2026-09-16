@@ -435,8 +435,29 @@ export function wireMultiplayer() {
       if (!(dl > 0.01) || dl > 2) return; // finite unit-ish dir, no NaN/garbage vectors
       const from = new THREE.Vector3(ox, oy, oz);
       const dir = new THREE.Vector3(m.dx, m.dy, m.dz).normalize();
-      const end = from.clone().addScaledVector(dir, 30);
-      spawnTracer(from, end, m.tracer || 0xff9a5c);
+      // Portal-bent shots carry disjoint legs — draw each, validated like any relayed pos.
+      let via = null;
+      if (Array.isArray(m.via) && m.via.length >= 1 && m.via.length <= 4) {
+        via = [];
+        for (const q of m.via) {
+          if (!Array.isArray(q) || q.length < 6) { via = null; break; }
+          const ax = +q[0], ay = +q[1], az = +q[2], bx = +q[3], by = +q[4], bz = +q[5];
+          if (!isFinite(ax + ay + az + bx + by + bz)) { via = null; break; }
+          if (Math.abs(ax) > MAP_HALF + 6 || Math.abs(az) > MAP_HALF + 6 || ay < -1 || ay > 12 ||
+              Math.abs(bx) > MAP_HALF + 6 || Math.abs(bz) > MAP_HALF + 6 || by < -1 || by > 12) { via = null; break; }
+          const a = new THREE.Vector3(ax, ay, az), b = new THREE.Vector3(bx, by, bz);
+          if (a.distanceToSquared(b) < 0.04) continue; // zero-length leg
+          via.push([a, b]);
+          if (via.length > 4) { via = null; break; }
+        }
+        if (via && !via.length) via = null;
+      }
+      if (via) {
+        for (const [a, b] of via) spawnTracer(a, b, m.tracer || 0xff9a5c);
+      } else {
+        const end = from.clone().addScaledVector(dir, 30);
+        spawnTracer(from, end, m.tracer || 0xff9a5c);
+      }
       spawnWorldFlash(from, m.tracer || 0xff9a5c, m.sound === 'sniper' ? 1.5 : 0.85);
       AudioSys.shoot(m.sound || 'rifle', from);
       if (e) {
@@ -444,17 +465,24 @@ export function wireMultiplayer() {
         if (m.sound === 'machete') soldierSlash(e.mesh); // visible chop, not a gun kick
         else soldierFireKick(e.mesh, 0.85);
       }
-      // Near-miss crack for remote shots.
+      // Near-miss crack for remote shots (every leg of a bent path).
       if (player.alive && camera) {
         const lp = camera.position;
-        const rx = lp.x - from.x, ry = lp.y - from.y, rz = lp.z - from.z;
-        const along = rx * dir.x + ry * dir.y + rz * dir.z;
-        if (along > 0 && along < 45) {
-          const px = from.x + dir.x * along - lp.x;
-          const py = from.y + dir.y * along - lp.y;
-          const pz = from.z + dir.z * along - lp.z;
-          if (Math.sqrt(px * px + py * py + pz * pz) < 2.6 && Math.random() < 0.85)
-            setTimeout(() => AudioSys.crack(), along / 343 * 1000);
+        const _cd = new THREE.Vector3();
+        const legs = [];
+        if (via) for (const [a, b] of via) legs.push([a, b]);
+        else legs.push([from, from.clone().addScaledVector(dir, 30)]);
+        for (const [a, b] of legs) {
+          _cd.copy(b).sub(a).normalize();
+          const rx = lp.x - a.x, ry = lp.y - a.y, rz = lp.z - a.z;
+          const along = rx * _cd.x + ry * _cd.y + rz * _cd.z;
+          if (along > 0 && along < 45) {
+            const px = a.x + _cd.x * along - lp.x;
+            const py = a.y + _cd.y * along - lp.y;
+            const pz = a.z + _cd.z * along - lp.z;
+            if (Math.sqrt(px * px + py * py + pz * pz) < 2.6 && Math.random() < 0.85)
+              setTimeout(() => AudioSys.crack(), along / 343 * 1000);
+          }
         }
       }
     } catch {}

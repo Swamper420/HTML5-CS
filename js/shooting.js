@@ -94,6 +94,12 @@ export function meleeSlash(t, wkey, def) {
   }
   updateHUD();
 }
+// Portal-bent tracer legs for the `shot` relay (receivers draw each leg).
+function packVia(legs) {
+  if (!legs || !legs.length) return undefined;
+  const r = (v) => Math.round(v * 100) / 100;
+  return legs.slice(0, 4).map(([a, b]) => [r(a.x), r(a.y), r(a.z), r(b.x), r(b.y), r(b.z)]);
+}
 // PORTAL GUN: infinite ammo, zero damage — LMB places blue (A), RMB orange (B).
 function firePortal(t, hand = 'R') {
   const def = WEAPONS.portal;
@@ -107,17 +113,19 @@ function firePortal(t, hand = 'R') {
   const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
   const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE - CROUCH_EYE_DROP * (player.crouch || 0), player.pos.z);
   const slot = hand === 'L' ? 'B' : 'A';
-  const wallD = rayWallDist(eye, dir, def.range);
   const muzzleWorld = new THREE.Vector3();
   if (vmMuzzle) vmMuzzle.getWorldPosition(muzzleWorld);
   else muzzleWorld.copy(eye);
-  spawnTracer(muzzleWorld, eye.clone().addScaledVector(dir, Math.min(wallD, def.range)), def.tracer, 2);
-  firePortalSlot(eye, dir, slot, 'local', false, def.range);
+  const placed = firePortalSlot(eye, dir, slot, 'local', false, def.range);
+  const beamLegs = (placed && placed.points) || [[eye, eye.clone().addScaledVector(dir, Math.min(rayWallDist(eye, dir, def.range), def.range))]];
+  spawnTracer(muzzleWorld, eye.clone().add(dir.clone().multiplyScalar(2.2)), def.tracer, 2);
+  for (const [a, b] of beamLegs) spawnTracer(a, b, def.tracer, 2);
   try {
     if (isOnline()) Net.sendShot({
       ox: eye.x, oy: eye.y, oz: eye.z,
       dx: dir.x, dy: dir.y, dz: dir.z,
       weapon: def.name, tracer: def.tracer, sound: def.sound,
+      via: packVia(beamLegs),
     });
   } catch {}
   vmRig.kickV += def.vmKick * 15;
@@ -224,6 +232,7 @@ export function playerTryFire(t, hand = 'R') {
       ox: origin.x, oy: origin.y, oz: origin.z,
       dx: dir.x, dy: dir.y, dz: dir.z,
       weapon: def.name, tracer: def.tracer, sound: def.sound,
+      via: packVia(hitRet && hitRet.points),
     });
   } catch {}
   // --- heat up ---
