@@ -11,7 +11,7 @@ import { BOMB, applyRemoteBomb, bombResetRound, spawnBombMesh, updateBombHUD } f
 import { resetBot } from './bots.js';
 import { damagePlayer } from './combat.js';
 import { onDamageAck } from './dmgreport.js';
-import { spawnBloodPool, spawnBurst, spawnSmoke, spawnTracer, spawnWorldFlash } from './effects.js';
+import { spawnBloodPool, spawnBurst, spawnSmoke, spawnTracer, spawnWorldFlash, setRope } from './effects.js';
 import { restoreSoldierMesh } from './gibs.js';
 import {
   corpseK, goreRemoteDeath, pickFallParams, poseCorpseLimbs, slideCorpseOut, updateRagdoll,
@@ -23,6 +23,7 @@ import { addKillfeed, announce, playerHitmark, updateHUD } from './hud.js';
 import { igniteMolotov } from './molotov.js';
 import { applyRemoteWeapon } from './pickups.js';
 import { camera, scene } from './render.js';
+import { rayWallDist } from './collision.js';
 import { applyMatchState, checkRoundEnd } from './rounds.js';
 import { renderScoreboard, scoreboardVisible } from './scoreboard.js';
 import { deploySmoke, smokePushAt, _smokePt } from './smoke.js';
@@ -143,6 +144,7 @@ export function remoteEye(e) { return new THREE.Vector3(e.pos.x, e.pos.y + 1.55 
 function remoteChest(e) { return new THREE.Vector3(e.pos.x, e.pos.y + 1.1 - 0.36 * (e.crouchK || 0), e.pos.z); }
 
 const _remSample = {};
+const _ropeA = new THREE.Vector3(), _ropeB = new THREE.Vector3();
 export function updateRemoteMeshes(dt, t) {
   syncRemoteMeshes();
   const nowMs = performance.now();
@@ -273,6 +275,18 @@ export function updateRemoteMeshes(dt, t) {
         m.visible = !(player.specTarget && player.specTarget.__remoteId === id && player.specMode === 'first' && !player.alive);
       }
       updateBlob(e, e.pos.x, e.pos.z, !!r.alive, moving);
+    } catch {}
+    // Lasso rope (third-person): shooter's chest along the shot dir, reeling bead.
+    try {
+      if (e._ropeUntil && t < e._ropeUntil && r.alive) {
+        const ox = e.pos.x, oy = e.pos.y + 1.45, oz = e.pos.z;
+        _ropeA.set(ox, oy, oz);
+        _ropeB.set(e._ropeDx || 0, e._ropeDy || 0, e._ropeDz || -1);
+        const len = Math.min(WEAPONS.lasso.range, rayWallDist(_ropeA, _ropeB, WEAPONS.lasso.range));
+        setRope('lasso-' + id, ox, oy, oz,
+          ox + _ropeB.x * len, oy + _ropeB.y * len, oz + _ropeB.z * len,
+          Math.max(0.05, e._ropeUntil - t));
+      } else if (e._ropeUntil) e._ropeUntil = 0;
     } catch {}
     // Continuous coil sound from snapshot sound state (helix 0..1 + reload anim).
     try {
@@ -460,6 +474,12 @@ export function wireMultiplayer() {
       }
       spawnWorldFlash(from, m.tracer || 0xff9a5c, m.sound === 'sniper' ? 1.5 : 0.85);
       AudioSys.shoot(m.sound || 'rifle', from);
+      // lasso rope (third-person): remember the shot dir, rope drawn per-frame below
+      if (String(m.weapon || '').toUpperCase() === 'LASSO' && e) {
+        e._ropeDx = dir.x; e._ropeDy = dir.y; e._ropeDz = dir.z;
+        e._ropeUntil = performance.now() / 1000 + 1.0;
+        AudioSys.lassoReel(from); // positional throw + ratchet for everyone else
+      }
       if (e) {
         e.flashAt = performance.now() / 1000 + 0.05;
         if (m.sound === 'machete') soldierSlash(e.mesh); // visible chop, not a gun kick
@@ -523,6 +543,23 @@ export function wireMultiplayer() {
       // Never trust the sender's claimed team — the snapshot roster owns it.
       const realTeam = e && e.data && (e.data.team === 'ct' || e.data.team === 't') ? e.data.team : null;
       const fromTeam = realTeam || (m.fromTeam === 'ct' || m.fromTeam === 't' ? m.fromTeam : 't');
+      // LASSO: zero damage — the rope tows us toward the shooter for ~1.2s.
+      // Victim-side, so it works with no server change. No dmg ack (nothing to report).
+      if (String(m.weapon || '').toUpperCase().includes('LASSO')) {
+        try {
+          if (e && player.alive && G.phase === 'playing' && realTeam && realTeam !== (player.team || 'ct')) {
+            const sx = e.pos.x - player.pos.x, sz = e.pos.z - player.pos.z;
+            const dd = Math.hypot(sx, sz);
+            if (dd > 0.5 && dd < 160) { // range guard: ropes don't reach across the map
+              player._lassoTow = { id: m.fromId, until: performance.now() / 1000 + 1.2 };
+              player.vel.y = Math.max(player.vel.y, 1.2);
+              AudioSys.lassoReel(); // victim hears the tug + ratchet
+            }
+            if (typeof flashDamageRemote === 'function') flashDamageRemote(e.pos);
+          }
+        } catch {}
+        return;
+      }
       const shooter = {
         isPlayer: false, team: fromTeam,
         bot: null, remote: e || null,

@@ -108,7 +108,7 @@
   </div>
 
   <div id="announce" class="hidden"></div>
-  <div id="hint-bar">WASD move · SHIFT sprint · <b>C</b> crouch · SPACE jump · <b>W+jump at a wall</b> wall run (SPACE to wall-jump) · R reload · <b>X</b> drop gun / disarm Nuke · <b>E</b> pick up / dual wield · 1 primary · 2 pistol · 3 machete (free, press 3 again for helix) · 4/5/6/7 throw · 8 carry NUKE (touch = boom) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · <b>TAB</b> scores · M mute · 🌿 mid farm: hold <b>E</b> harvest +$100/s (trips stack) · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
+  <div id="hint-bar">WASD move · SHIFT sprint · <b>C</b> crouch · SPACE jump · <b>W+jump at a wall</b> wall run (SPACE to wall-jump) · R reload · <b>X</b> drop gun / disarm Nuke · <b>E</b> pick up / dual wield · 1 primary · 2 pistol / lasso · 3 machete (free, press 3 again for helix) · 4/5/6/7 throw · 8 carry NUKE (touch = boom) · G cycle nade · RMB aim · <b>E</b> plant/defuse · B buy · <b>TAB</b> scores · M mute · 🌿 mid farm: hold <b>E</b> harvest +$100/s (trips stack) · Dead: CLICK / SPACE spectate next, RMB / F camera</div>
 </div>
 
 <!-- Buy menu (keeps pointer lock — virtual cursor, no mouse yank) -->
@@ -126,6 +126,7 @@
       <button class="buy-item" data-buy="helix" data-key="H"><kbd>H</kbd><b>HELIX ARC</b><em class="bi-price"></em><span class="bi-sub">Coilgun · 1-shot · cell</span><i class="bi-state"></i></button>
       <button class="buy-item" data-buy="portal" data-key="P"><kbd>P</kbd><b>PORTAL GUN</b><em class="bi-price"></em><span class="bi-sub">LMB blue · RMB orange · step through</span><i class="bi-state"></i></button>
       <button class="buy-item" data-buy="deagle" data-key="4"><kbd>4</kbd><b>Desert Eagle</b><em class="bi-price"></em><span class="bi-sub">Pistol</span><i class="bi-state"></i></button>
+      <button class="buy-item" data-buy="lasso" data-key="L"><kbd>L</kbd><b>Lasso</b><em class="bi-price"></em><span class="bi-sub">Pull enemy to you · long range</span><i class="bi-state"></i></button>
     </div>
     <div class="bm-col"><h4>GEAR</h4>
       <button class="buy-item" data-buy="armor" data-key="5"><kbd>5</kbd><b>Kevlar + Helmet</b><em class="bi-price"></em><span class="bi-sub">Armor 100</span><i class="bi-state"></i></button>
@@ -159,7 +160,7 @@
           <li><b>Wall run</b>: jump alongside a wall holding <b>W</b> · <b>SPACE</b> wall-jump · <b>C</b> drop off</li>
           <li><b>RMB</b> aim / AWP scope · <b>R</b> reload</li>
           <li><b>X</b> drop gun · walk over / <b>E</b> pick up · grab or <b>buy</b> a 2nd copy to <b>dual wield</b> (LMB right · RMB left, very wild)</li>
-          <li><b>1</b> primary · <b>2</b> pistol · <b>3</b> machete (free, huge, bisects — press 3 again for helix, sprint with it to Tarzan-yell) · <b>4/5/6/7</b> HE / Flash / Smoke / Moly (throw on release) · <b>8</b> Nuke (two-hand carry — walls and players set it off) · <b>G</b> cycle</li>
+          <li><b>1</b> primary · <b>2</b> pistol / lasso · <b>3</b> machete (free, huge, bisects — press 3 again for helix, sprint with it to Tarzan-yell) · <b>4/5/6/7</b> HE / Flash / Smoke / Moly (throw on release) · <b>8</b> Nuke (two-hand carry — walls and players set it off) · <b>G</b> cycle</li>
           <li>Grenades throw on release: <b>LMB</b> far · <b>RMB</b> short · <b>both</b> medium · <b>X</b> disarms the Nuke</li>
           <li><b>B</b> buy menu (first 20s) · <b>ESC</b> pause</li>
           <li>3s freeze, then <b>GO</b> · first to <b>win 7 rounds</b> takes the match</li>
@@ -170,6 +171,7 @@
         <ul class="loadout">
           <li><b>AK-47</b> — balanced rifle, $2500</li>
           <li><b>Desert Eagle</b> — heavy pistol, $700</li>
+          <li><b>Lasso</b> — secondary, $500, no damage: yanks the target toward you (long range, works online)</li>
           <li><b>P90</b> — 50-round SMG, accurate on the move, $2350</li>
           <li><b>AWP</b> — 1-shot sniper, scope on RMB</li>
           <li><b>MACHETE</b> — free on <b>3</b>, insanely massive, cuts enemies in half diagonally</li>

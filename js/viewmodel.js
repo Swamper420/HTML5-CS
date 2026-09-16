@@ -34,6 +34,7 @@ export const VM_AIM = {
   p90: new THREE.Vector3(0.0, -0.100, -0.30),
   helix: new THREE.Vector3(0.0, -0.095, -0.34),
   portal: new THREE.Vector3(0.0, -0.095, -0.34),
+  lasso: new THREE.Vector3(0.0, -0.10, -0.32),
   machete: new THREE.Vector3(0.0, -0.16, -0.42),
   he: new THREE.Vector3(0.0, -0.10, -0.32),
   flash: new THREE.Vector3(0.0, -0.10, -0.32),

@@ -48,10 +48,18 @@ export function initInput() {
       if (e.code === 'KeyR') { if (!e.repeat) buyByKey('R'); return; }
       if (e.code === 'KeyH') { if (!e.repeat) buyItem('helix'); return; }
       if (e.code === 'KeyP') { if (!e.repeat) buyItem('portal'); return; }
+      if (e.code === 'KeyL') { if (!e.repeat) buyItem('lasso'); return; }
       if (e.code === 'KeyN') { if (!e.repeat) buyItem('nuke'); return; }
     }
     if (e.code === 'Digit1') { const pk = primaryKey(); if (pk) switchWeapon(pk); else announce('NO PRIMARY — PRESS B', 1100); }
-    if (e.code === 'Digit2') switchWeapon('deagle');
+    if (e.code === 'Digit2') {
+      // secondary slot: Deagle + Lasso share it — toggle when both owned
+      const hasL = !!(player.weapons.lasso && player.weapons.lasso.owned);
+      if (player.cur === 'deagle' && hasL) switchWeapon('lasso');
+      else if (player.cur === 'lasso') switchWeapon('deagle');
+      else if (hasL && !player.weapons.deagle.owned) switchWeapon('lasso');
+      else switchWeapon('deagle');
+    }
     if (e.code === 'Digit3') {
       // MACHETE lives on 3 (free, always owned); HELIX shares the slot behind it.
       if (player.cur !== 'machete') switchWeapon('machete');
@@ -105,7 +113,7 @@ export function initInput() {
       return;
     }
     if (e.button === 0) { mouseDown = true; mouseJustDown = true; }
-    if (e.button === 2) { if (isDualCur() || player.cur === 'portal') { rmbDown = true; rmbJustDown = true; } else if (WEAPONS[player.cur] && !WEAPONS[player.cur].melee) player.aiming = true; }
+    if (e.button === 2) { if (isDualCur() || player.cur === 'portal') { rmbDown = true; rmbJustDown = true; } else if (WEAPONS[player.cur] && !WEAPONS[player.cur].melee && !WEAPONS[player.cur].lasso) player.aiming = true; }
   });
   document.addEventListener('mouseup', (e) => {
     if (e.button === 0) {

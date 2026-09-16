@@ -142,7 +142,7 @@ export function updateHUD() {
     _setText(_el('ammo-mag'), w.mag > 0 ? '⚡' : '○');
     _setText(_el('ammo-reserve'), w.mag > 0 ? 'CELL' : (player.reloading > 0 ? player.reloading.toFixed(1) + 's' : '…'));
     _setText(_el('weapon-name'), def.name.toUpperCase());
-  } else if (WEAPONS[player.cur] && (WEAPONS[player.cur].melee || WEAPONS[player.cur].portal)) {
+  } else if (WEAPONS[player.cur] && (WEAPONS[player.cur].melee || WEAPONS[player.cur].portal || WEAPONS[player.cur].lasso)) {
     _setText(_el('ammo-mag'), '—'); _setText(_el('ammo-reserve'), '∞');
     _setText(_el('weapon-name'), WEAPONS[player.cur].name);
   } else {
@@ -154,8 +154,11 @@ export function updateHUD() {
   _wsl().forEach((el) => {
     const k = el.dataset.slot === 'primary' ? (primaryKey() || null) : 'deagle';
     if (el.dataset.slot === 'primary') { const sp = el.querySelector('span'); if (sp) sp.textContent = k ? WEAPONS[k].name : 'PRIMARY'; }
-    el.classList.toggle('active', !!k && k === player.cur);
-    el.classList.toggle('locked', !k || !player.weapons[k].owned);
+    else { const sp = el.querySelector('span'); if (sp) sp.textContent = player.cur === 'lasso' ? 'Lasso' : 'Deagle'; }
+    el.classList.toggle('active', el.dataset.slot === 'primary' ? (!!k && k === player.cur) : (player.cur === 'deagle' || player.cur === 'lasso'));
+    el.classList.toggle('locked', el.dataset.slot === 'primary'
+      ? (!k || !player.weapons[k].owned)
+      : !(player.weapons.deagle.owned || (player.weapons.lasso && player.weapons.lasso.owned)));
   });
   // nade slots (4-7) with counts
   _nsl().forEach((el) => {

@@ -208,6 +208,7 @@ function startRound(first = false, fromNet = false) {
     player.yaw = spawnYawPlayer(team, player.pos);
   }
   player.vel.set(0, 0, 0); player.pitch = 0;
+  player._lassoRope = null; player._lassoTow = null; // ropes never carry over
   player.crouching = false; player.crouch = 0; player.exploded = false;
   player.airTuck = false; player.crouchWant = false; player.wallRun = null; player.wallCd = 0; player.lastWallBox = null; player.wallRoll = 0; player.wallLean = 0;
   player.onGround = true;

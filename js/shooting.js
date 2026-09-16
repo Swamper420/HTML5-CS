@@ -8,7 +8,7 @@ import { CROUCH_EYE_DROP, EYE, NADE_DEFS, SPRAY_AK, WEAPONS, isNadeKey } from '.
 import { $, clamp, rand } from './utils.js';
 import { soldierFireKick, soldierSlash } from './anim.js';
 import { updateInteractHUD } from './bomb.js';
-import { rayWallDist } from './collision.js';
+import { moveWithCollision, rayWallDist } from './collision.js';
 import { fireHitscan, damageBot, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
 import { spawnBurst, spawnDecal, spawnFireball, spawnShell, spawnShockwave, spawnSmoke, spawnTracer } from './effects.js';
 import { announce, flashExplosionOverlay, playerHitmark, updateHUD } from './hud.js';
@@ -94,6 +94,100 @@ export function meleeSlash(t, wkey, def) {
   }
   updateHUD();
 }
+// LASSO: zero-damage rope on the secondary slot. A hit drags the victim toward
+// you (bots: yanked locally; online: victim applies it from the 'hit' relay).
+export function fireLasso(t) {
+  const def = WEAPONS.lasso;
+  if (!player.alive || t < (player.nextShot || 0)) return;
+  if (isFreeze()) return;
+  player.nextShot = t + def.fireInterval;
+  player.lastShotT = t;
+  player.sprayIdx = 0;
+  G.shots++;
+  AudioSys.shoot(def.sound);
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE - CROUCH_EYE_DROP * (player.crouch || 0), player.pos.z);
+  const range = def.range || 100;
+  const wallD = rayWallDist(eye, dir, range);
+  vmRig.kickV += def.vmKick * 4;
+  vmRig.punchP += def.punch * 0.5;
+  vmRig.fovKick += def.fovPunch;
+  vmRig.shake += def.shake;
+  soldierFireKick(playerMesh, 0.5);
+  setMouseJustDown(false);
+  setCrossGap(8);
+  const myTeam = player.team || 'ct';
+  const inArc = (cx, cy, cz) => {
+    const tx = cx - eye.x, ty = cy - eye.y, tz = cz - eye.z;
+    const along = tx * dir.x + ty * dir.y + tz * dir.z;
+    if (along < 0.1 || along > range || along > wallD - 0.15) return -1;
+    const px = tx - dir.x * along, py = ty - dir.y * along, pz = tz - dir.z * along;
+    if (Math.sqrt(px * px + py * py + pz * pz) > 1.6) return -1; // generous rope
+    return along;
+  };
+  // nearest enemy wins (bots offline, remotes online — no friendly fire either way)
+  let best = null;
+  for (const b of bots) {
+    if (!b.alive || b.team === myTeam) continue;
+    const along = inArc(b.pos.x, b.pos.y + 1.0, b.pos.z);
+    if (along < 0 || (best && along >= best.along)) continue;
+    best = { kind: 'bot', bot: b, along };
+  }
+  try {
+    for (const [rid, e] of remotes) {
+      const rd = e.data; if (!rd || !rd.alive) continue;
+      if ((rd.team || 't') === myTeam) continue;
+      const along = inArc(e.pos.x, e.pos.y + 1.0, e.pos.z);
+      if (along < 0 || (best && along >= best.along)) continue;
+      best = { kind: 'remote', id: rid, entry: e, along };
+    }
+  } catch {}
+  const muzzleWorld = new THREE.Vector3();
+  if (vmMuzzle) vmMuzzle.getWorldPosition(muzzleWorld);
+  else muzzleWorld.copy(eye);
+  const ropeEnd = best ? eye.clone().addScaledVector(dir, best.along) : eye.clone().addScaledVector(dir, wallD);
+  spawnTracer(muzzleWorld, eye.clone().add(dir.clone().multiplyScalar(2.2)), def.tracer, 1);
+  spawnTracer(eye.clone(), ropeEnd, def.tracer, 2);
+  try {
+    if (isOnline()) Net.sendShot({
+      ox: eye.x, oy: eye.y, oz: eye.z,
+      dx: dir.x, dy: dir.y, dz: dir.z,
+      weapon: 'LASSO', tracer: def.tracer, sound: def.sound,
+    });
+  } catch {}
+  if (!best) {
+    if (wallD < range - 0.01) {
+      spawnBurst(ropeEnd, 0xd8a75a, 6, 3, 0.3, 0.07);
+      AudioSys.impact(ropeEnd, false);
+    }
+    updateHUD();
+    return;
+  }
+  G.hits++; playerHitmark(false, false); AudioSys.hit(false);
+  AudioSys.lassoReel(); // snap + winch ratchet, first-person
+  spawnBurst(ropeEnd, 0xd8a75a, 10, 4, 0.5);
+  if (best.kind === 'bot') {
+    // drag the bot all the way to us, walls respected, stopping at arm's length
+    const b = best.bot;
+    const dx = player.pos.x - b.pos.x, dz = player.pos.z - b.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 0.5) {
+      const k = Math.min(14, Math.max(0, d - 1.0)) / d;
+      moveWithCollision(b.pos, dx * k, dz * k, 0.45, 1.7);
+      try { b.vel.set(0, 0, 0); } catch {}
+    }
+  } else {
+    try { Net.sendHit({ targetId: best.id, dmg: 0, head: false, weapon: 'LASSO' }); } catch {}
+  }
+  // rope visual follows the live target (refreshed per-frame in movement.js)
+  player._lassoRope = {
+    until: t + 1.4,
+    ex: ropeEnd.x, ey: ropeEnd.y, ez: ropeEnd.z,
+    bot: best.kind === 'bot' ? best.bot : null,
+    remoteId: best.kind === 'remote' ? best.id : null,
+  };
+  updateHUD();
+}
 // Portal-bent tracer legs for the `shot` relay (receivers draw each leg).
 function packVia(legs) {
   if (!legs || !legs.length) return undefined;
@@ -154,6 +248,7 @@ export function playerTryFire(t, hand = 'R') {
   if (keys['KeyE'] && playerNearPlantedBomb()) return; // hands busy defusing
   if (keys['KeyE'] && playerInPlantSite()) return; // hands busy planting (PvP T)
   if (def.melee) { meleeSlash(t, wkey, def); return; }
+  if (def.lasso) { if (!def.auto && !mouseJustDown) return; fireLasso(t); return; }
   if (def.portal) { firePortal(t, hand); return; }
   if (wkey === 'helix') {
     // HELIX ARC: battery cell (mag 1, no reserve — recharges via reload clock).
@@ -303,7 +398,7 @@ export function startReload() {
   if (isNadeKey(player.cur)) return;
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) return;
-  if (def.melee || def.portal) return; // nothing to reload — the blade is always ready, portals are infinite
+  if (def.melee || def.portal || def.lasso) return; // nothing to reload — the blade is always ready, portals are infinite, the rope never runs out
   if (wkey === 'helix') {
     // Battery recharge: no reserve, 5s cell cycle. Manual R restarts it.
     if (player.reloading > 0 || w.mag >= def.magSize || !player.alive) return;
@@ -329,7 +424,7 @@ export function finishReload() {
   if (isNadeKey(player.cur)) { player.reloading = 0; return; }
   const wkey = player.cur, w = player.weapons[wkey], def = WEAPONS[wkey];
   if (!w || !def) { player.reloading = 0; return; }
-  if (def.melee || def.portal) { player.reloading = 0; return; }
+  if (def.melee || def.portal || def.lasso) { player.reloading = 0; return; }
   if (wkey === 'helix') {
     w.mag = def.magSize; w.reserve = 0;
     player.reloading = 0; player.bloom = 0; player._helixSpin = 0;

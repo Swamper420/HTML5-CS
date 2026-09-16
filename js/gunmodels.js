@@ -239,6 +239,15 @@ export function buildGunModel(key, M, root, magG, opts = {}) {
     out.spinner = spinG;
     out.rear = mark(0.10, 0.09); out.front = mark(0.86, 0.065);
     out.muzzle = mark(1.24, 0.01);
+  } else if (key === 'lasso') {
+    // LASSO: coiled rope + stick handle. Loop reads at a glance, cheap torus.
+    P(root, [[-0.10, -0.025], [0.10, -0.025], [0.10, 0.025], [-0.10, 0.025]], 0.035, M.rubber);
+    const loop = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.013, 8, 22), M.bakelite || M.polymer);
+    loop.position.set(0, 0.03, -0.30); root.add(loop);
+    const loop2 = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.011, 8, 20), M.bakelite || M.polymer);
+    loop2.position.set(0, 0.03, -0.29); loop2.rotation.x = 0.3; root.add(loop2);
+    Cy(root, 0.006, 0.16, M.blued, 0.20, 0.0);
+    out.muzzle = mark(0.30, 0.03);
   } else if (key === 'portal') {
     // PORTAL GUN: stubby emitter shroud, barrel, fork prongs, blue/orange charge vials.
     P(root, [[-0.14, -0.045], [0.30, -0.045], [0.32, 0.045], [-0.14, 0.05]], 0.07, M.polymer);

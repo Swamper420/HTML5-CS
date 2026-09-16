@@ -19,13 +19,14 @@ import {
   crossGap, mouseDown, mouseJustDown, rmbDown, rmbJustDown, setCrossGap, setMouseJustDown,
   setRmbDown, setRmbJustDown,
 } from './input.js';
-import { isOnline } from './multiplayer.js';
+import { isOnline, remotes } from './multiplayer.js';
 import { DUAL, isDualCur, updateWorldWeapons } from './pickups.js';
 import { onPee, stopPee, PEE } from './pee.js';
 import { WEED } from './weed.js';
 import { YARIS } from './yaris.js';
 import { camera, coilLight } from './render.js';
 import { finishReload, playerTryFire } from './shooting.js';
+import { setRope } from './effects.js';
 import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
 import { updateSpectate, updateSpectateOverlay } from './spectate.js';
 import { G, isFreeze, keys, player } from './state.js';
@@ -66,7 +67,7 @@ export function updatePlayer(dt, t) {
   }
   if (viewmodel && viewmodel.userData.spec) buildViewmodel(player.cur); // back from spectating
   const frozen = isFreeze();
-  const speedBase = player.cur === 'helix' ? 4.0 : player.cur === 'machete' ? 6.0 : player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
+  const speedBase = player.cur === 'helix' ? 4.0 : player.cur === 'machete' ? 6.0 : player.cur === 'lasso' ? 4.6 : player.cur === 'awp' && player.aiming ? 2.2 : 5.2;
   // Crouch: hold C (or toggle it, per settings). Blocks sprint, cuts speed, and
   // tightens the spread — the CS trade of mobility for accuracy.
   // The hull shrinks while crouched; you can't stand back up under an overhang.
@@ -103,7 +104,7 @@ export function updatePlayer(dt, t) {
   player.crouch = damp(player.crouch || 0, player.crouching ? 1 : 0, 11, dt);
   const wr = player.wallRun;
   const sprint = !frozen && keys['ShiftLeft'] && !player.aiming && !player.crouching && player.vel.lengthSq() > 0.1;
-  const speed = frozen ? 0 : (player.aiming ? speedBase * 0.55 : speedBase) * (sprint ? 1.45 : 1) * (1 - 0.55 * player.crouch) * (isDualCur() ? DUAL.speedMul : 1) * smokeSlowAt(_smokePt.set(player.pos.x, player.pos.y + 1, player.pos.z));
+  const speed = frozen ? 0 : (player.aiming ? speedBase * 0.55 : speedBase) * (sprint ? 1.45 : 1) * (1 - 0.55 * player.crouch) * (isDualCur() ? DUAL.speedMul : 1) * (1 - 0.3 * (vmRig.lassoK || 0)) * smokeSlowAt(_smokePt.set(player.pos.x, player.pos.y + 1, player.pos.z));
   let ix = 0, iz = 0;
   if (canAct) {
     if (keys['KeyW']) iz -= 1; if (keys['KeyS']) iz += 1;
@@ -173,6 +174,23 @@ export function updatePlayer(dt, t) {
     }
   }
   if (!player.wallRun) player.vel.y -= 13.5 * dt;
+  // lasso tow (victim-side): the rope drags us toward the shooter, tracks them live
+  try {
+    const tow = player._lassoTow;
+    if (tow && t < tow.until && player.alive && G.phase === 'playing') {
+      const se = remotes.get(tow.id);
+      if (se && se.data && se.data.alive) {
+        const sx = se.pos.x - player.pos.x, sz = se.pos.z - player.pos.z;
+        const dd = Math.hypot(sx, sz);
+        if (dd > 1.0 && dd < 160) {
+          player.vel.x = sx / dd * 14; player.vel.z = sz / dd * 14;
+          if (player.vel.y < 1) player.vel.y = 1;
+          vmRig.shake = Math.min(0.03, vmRig.shake + dt * 0.15); // heavy drag rattles the view
+          endWallRun();
+        } else tow.until = 0;
+      } else tow.until = 0;
+    }
+  } catch {}
   const fallV = player.vel.y;
   const preX = player.pos.x, preZ = player.pos.z;
   moveWithCollision(player.pos, player.vel.x * dt, player.vel.z * dt, player.radius, hull);
@@ -249,6 +267,30 @@ export function updatePlayer(dt, t) {
   camera.rotation.x = player.pitch + vmRig.punchP + shX + breathe;
   vmRig.roll += (0 - vmRig.roll) * Math.min(1, dt * 7);
   camera.rotation.z = clamp(-ix * 0.012, -0.02, 0.02) + (player.wallRoll || 0) + vmRig.roll + (shk > 0.0005 ? (Math.random() - 0.5) * shk : 0);
+  // lasso rope (first-person): gun tip to the live target, refreshed every frame
+  try {
+    const rp = player._lassoRope;
+    if (rp && t < rp.until && player.alive && G.phase === 'playing') {
+      let live = false;
+      if (rp.bot && rp.bot.alive) { rp.ex = rp.bot.pos.x; rp.ey = rp.bot.pos.y + 1.0; rp.ez = rp.bot.pos.z; live = true; }
+      else if (rp.remoteId != null) {
+        const te = remotes.get(rp.remoteId);
+        if (te && te.data && te.data.alive) { rp.ex = te.pos.x; rp.ey = te.pos.y + 1.0; rp.ez = te.pos.z; live = true; }
+      }
+      if (live) {
+        const cf = Math.cos(player.pitch);
+        setRope('lasso-local',
+          camera.position.x - Math.sin(player.yaw) * cf * 0.6,
+          camera.position.y + Math.sin(player.pitch) * 0.6 - 0.15,
+          camera.position.z - Math.cos(player.yaw) * cf * 0.6,
+          rp.ex, rp.ey, rp.ez, Math.max(0.05, rp.until - t));
+      }
+      vmRig.lassoK = clamp((rp.until - t) / 1.2, 0, 1);
+    } else {
+      vmRig.lassoK = Math.max(0, (vmRig.lassoK || 0) - dt * 4);
+      if (player._lassoRope) player._lassoRope = null;
+    }
+  } catch {}
 
   // reload progress
   if (player.reloading > 0) {
@@ -362,6 +404,11 @@ export function updatePlayer(dt, t) {
     pz += vmRig.busyK * 0.05;
     rx -= vmRig.busyK * 1.05;
     rz += vmRig.busyK * 0.25;
+    // reeling a lasso: gun lunges forward toward the victim
+    const lassoK = vmRig.lassoK || 0;
+    py += lassoK * 0.02;
+    pz -= lassoK * 0.12;
+    rx += lassoK * 0.08;
     // sprint lowers gun
     if (sprint && hSpeed > 3) { py -= 0.03; rx -= 0.35; ry += 0.15; }
     // wall run: gun shifts away from the wall and cants level, steps up the bob

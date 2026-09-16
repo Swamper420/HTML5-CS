@@ -41,6 +41,13 @@ export const WEAPONS = {
              kickUp: 0.004, kickSide: 0.002, punch: 0.008, shake: 0.002, vmKick: 0.05, fovPunch: 0.8,
              bloomAdd: 0, bloomMax: 0, bloomDecay: 0.055, tracer: 0x66d9ff, sound: 'portal', falloff: 0,
              portal: true },
+  // LASSO: zero-damage rope on the secondary slot. LMB reels the target all the way
+  // to you (bots: instant drag; online: 1.2s victim-side tow). Infinite uses.
+  lasso:   { name: 'LASSO', slot: 1, damage: 0, headMult: 1.0, magSize: 0, startReserve: 0, fireInterval: 0.35, reloadTime: 0,
+             spreadHip: 0.004, spreadAim: 0.002, range: 160, auto: false, zoomFov: 70, price: 500,
+             kickUp: 0.008, kickSide: 0.004, punch: 0.02, shake: 0.005, vmKick: 0.12, fovPunch: 1.0,
+             bloomAdd: 0, bloomMax: 0, bloomDecay: 0.055, tracer: 0xd8a75a, sound: 'lasso', falloff: 0,
+             lasso: true },
 };
 
 // Extension point: agents add weapons without editing combat/shooting code.
@@ -58,7 +65,7 @@ export const SPRAY_AK = [
   [0.9, 0.9], [-1.0, 0.85], [0.7, 0.9], [-0.6, 0.9], [0.5, 0.9], [-0.5, 0.9],
 ];
 
-export const SLOT_ORDER = ['ak', 'deagle', 'awp', 'p90', 'helix', 'machete', 'portal'];
+export const SLOT_ORDER = ['ak', 'deagle', 'lasso', 'awp', 'p90', 'helix', 'machete', 'portal'];
 export const PRIMARIES = ['ak', 'p90', 'awp', 'helix', 'portal']; // CS: one primary at a time — buying another replaces it
 
 // ---------------- Tactical grenades ----------------

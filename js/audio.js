@@ -511,6 +511,12 @@ export const AudioSys = {
     const firstPerson = !pos;
     const dry = firstPerson ? 0.035 : null; // FP stays dry, world uses distance verb
     const lv = legacyVol;
+    if (kind === 'lasso') {
+      // rope throw: whistle-out + leather snap. The winch ratchet comes from lassoReel() on hit.
+      this._noise({ dur: 0.3, type: 'bandpass', freq: 1800, sweepTo: 4200, Q: 1.4, peak: 0.4 * lv, decay: 0.26, rate: 1.0, pos, kind: 'sfx', verb: dry });
+      this._noise({ dur: 0.08, type: 'highpass', freq: 3600, peak: 0.2 * lv, decay: 0.06, rate: 1.2, pos, kind: 'sfx', verb: dry, at: 0.22 });
+      return;
+    }
     if (kind === 'machete') {
       // massive blade swing: air whoosh + faint edge ring. Flesh impact comes from gib()/headpop() on hit.
       this._noise({ dur: 0.22, type: 'bandpass', freq: 2600, sweepTo: 500, Q: 1.1, peak: 0.5 * lv, decay: 0.18, rate: 1.0, pos, kind: 'sfx', verb: dry });
@@ -688,6 +694,17 @@ export const AudioSys = {
     if (!this.ctx || !opts.sound || this.muted || !pos) return;
     this._tone({ type: 'sine', f0: 880, dur: 0.12, peak: 0.3, decay: 0.11, pos, kind: 'helix', verb: 0.15 });
     this._tone({ type: 'sine', f0: 1320, dur: 0.18, peak: 0.28, decay: 0.16, pos, kind: 'helix', verb: 0.15, at: 0.09 });
+  },
+  lassoReel(pos = null) {
+    // rope connects + winch ratchet: snap crack, heavy thud, 5 tightening clicks.
+    // pos = null: first-person; Vector3: positional for everyone else.
+    if (!this.ctx || !opts.sound || this.muted) return;
+    const vb = pos ? 0.1 : 0.03;
+    this._noise({ dur: 0.05, type: 'highpass', freq: 2400, peak: 0.5, decay: 0.04, rate: 1.4, pos, kind: 'sfx', verb: vb });
+    this._tone({ type: 'sine', f0: 160, f1: 60, dur: 0.14, peak: 0.4, decay: 0.12, pos, kind: 'sfx', verb: vb });
+    for (let i = 0; i < 5; i++) {
+      this._noise({ dur: 0.03, type: 'bandpass', freq: 1500 + i * 220, Q: 2.2, peak: 0.3, decay: 0.025, rate: 1.3, pos, kind: 'sfx', verb: pos ? 0.08 : 0.02, at: 0.12 + i * 0.2 });
+    }
   },
   yarisEngine(k) {
     // Beater engine loop: one persistent voice, pitch/gain follow speed 0..1.

@@ -357,6 +357,50 @@ export function spawnShell(worldPos, right, up, fwd) {
   scene.add(m);
   shells.push({ mesh: m, vel, angVel, life: 1.1 });
 }
+// ---- lasso ropes: one stretched cylinder + reeling bead per key, refreshed per-frame by owners ----
+const _ropes = new Map();
+const _ropeUp = new THREE.Vector3(0, 1, 0);
+const _ropeDir = new THREE.Vector3(), _ropeMid = new THREE.Vector3(), _ropeA = new THREE.Vector3(), _ropeB = new THREE.Vector3();
+export function setRope(key, ax, ay, az, bx, by, bz, dur) {
+  const now = performance.now() / 1000;
+  let r = _ropes.get(key);
+  if (!r) {
+    const g = new THREE.Group();
+    const line = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.025, 1, 6),
+      new THREE.MeshBasicMaterial({ color: 0xc9a06a }));
+    const bead = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffe9c4 }));
+    g.add(line); g.add(bead); scene.add(g);
+    r = { g, line, bead, since: 0, dur: 0 };
+    _ropes.set(key, r);
+  }
+  if (!r.since) { r.since = now; r.dur = Math.max(0.05, dur); } // bead reels once per throw
+  r.until = now + Math.max(0.05, dur);
+  r.ax = ax; r.ay = ay; r.az = az; r.bx = bx; r.by = by; r.bz = bz;
+  r.g.visible = true;
+}
+function updateRopes() {
+  const now = performance.now() / 1000;
+  for (const [, r] of _ropes) {
+    if (now >= r.until) { r.g.visible = false; r.since = 0; r.dur = 0; continue; }
+    try {
+      _ropeA.set(r.ax, r.ay, r.az); _ropeB.set(r.bx, r.by, r.bz);
+      _ropeDir.copy(_ropeB).sub(_ropeA);
+      const len = _ropeDir.length();
+      if (len < 0.05) { r.g.visible = false; continue; }
+      _ropeDir.multiplyScalar(1 / len);
+      _ropeMid.copy(_ropeA).add(_ropeB).multiplyScalar(0.5);
+      r.line.position.copy(_ropeMid);
+      r.line.quaternion.setFromUnitVectors(_ropeUp, _ropeDir);
+      r.line.scale.set(1, len, 1);
+      const k = clamp(1 - (r.until - now) / (r.dur || 1), 0, 1); // bead reels victim -> attacker
+      r.bead.position.lerpVectors(_ropeB, _ropeA, k);
+      r.g.visible = true;
+    } catch (e) { r.g.visible = false; }
+  }
+}
 export function updateEffects(dt, t = 0) {
   for (let i = tracers.length - 1; i >= 0; i--) {
     const tr = tracers[i]; tr.life -= dt;
@@ -512,6 +556,7 @@ export function updateEffects(dt, t = 0) {
   } catch (e) {}
   try { updateDeadBots(dt); } catch (e) {}
   try { updateGibs(dt); } catch (e) {}
+  try { updateRopes(); } catch (e) {}
   // ---- viewmodel springs (recoil feel) ----
   if (vmBase && vmKickG) {
     // kick spring: stiff spring back to 0
