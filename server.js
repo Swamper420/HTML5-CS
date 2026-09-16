@@ -339,6 +339,8 @@ wss.on('connection', (ws, req) => {
           dual: !!m.dual,                          // dual wielding the current weapon
           planting: !!m.planting,                  // kneel anim while working the bomb
           defusing: !!m.defusing,
+          reloading: !!m.reloading,                // reload anim + sound cue
+          helix: Math.max(0, Math.min(1, +m.helix || 0)), // coil energy 0..1 (wind-up whine)
           ping: Math.max(0, Math.min(9999, Math.round(+m.ping) || 0)),
         };
         if (client.team) {
@@ -351,6 +353,7 @@ wss.on('connection', (ws, req) => {
         match.handleBomb(client, m);
         break;
       case 'shot':
+      case 'helix':
       case 'hit':
       case 'killed':
       case 'nade':
@@ -373,7 +376,7 @@ wss.on('connection', (ws, req) => {
           if (!Number.isFinite(d)) break;
           m.dmg = Math.max(0, Math.min(100, d));
         }
-        if ((m.type === 'nade' || m.type === 'shot') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
+        if ((m.type === 'nade' || m.type === 'shot' || m.type === 'helix') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
           if (!Number.isFinite(+m.x + +m.y + +m.z)) break;
           if (Math.abs(+m.x) > 45 || Math.abs(+m.z) > 45) break;
         }

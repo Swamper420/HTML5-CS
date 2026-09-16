@@ -258,6 +258,7 @@ export function spawnShockwave(p, maxR = 9, life = 0.5, color = 0xffe0b0) {
     if (shockwaves.length > 6) {
       const old = shockwaves.shift();
       try { scene.remove(old.mesh); old.mesh.geometry.dispose(); old.mesh.material.dispose(); } catch (e) {}
+      try { if (old.sphere) { scene.remove(old.sphere); old.sphere.geometry.dispose(); old.sphere.material.dispose(); } } catch (e) {}
     }
     const geo = new THREE.RingGeometry(0.85, 1.0, 40);
     const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
@@ -265,7 +266,17 @@ export function spawnShockwave(p, maxR = 9, life = 0.5, color = 0xffe0b0) {
     m.rotation.x = -Math.PI / 2;
     m.position.set(p.x, Math.max(0.12, p.y - 0.55), p.z);
     scene.add(m);
-    shockwaves.push({ mesh: m, life, max: life, maxR });
+    // volumetric blast ball: the same wavefront as a sphere so the boom
+    // reads from every angle, not just as a flat ground ring
+    let sphere = null;
+    try {
+      const sgeo = new THREE.SphereGeometry(1, 20, 14);
+      const smat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+      sphere = new THREE.Mesh(sgeo, smat);
+      sphere.position.set(p.x, Math.max(0.6, p.y), p.z);
+      scene.add(sphere);
+    } catch (e) { sphere = null; }
+    shockwaves.push({ mesh: m, sphere, life, max: life, maxR });
   } catch (e) {}
 }
 export function spawnDebris(p, n = 10, spread = 8, up = 7) {
@@ -381,8 +392,13 @@ export function updateEffects(dt, t = 0) {
       const r = 0.5 + k * s.maxR;
       s.mesh.scale.set(r, r, 1);
       s.mesh.material.opacity = 0.85 * (1 - k);
+      if (s.sphere) {
+        const rs = 0.5 + k * s.maxR * 0.6;
+        s.sphere.scale.setScalar(Math.max(0.001, rs));
+        s.sphere.material.opacity = 0.45 * (1 - k);
+      }
     } catch (e) {}
-    if (s.life <= 0) { try { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); } catch (e) {} shockwaves.splice(i, 1); }
+    if (s.life <= 0) { try { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); } catch (e) {} try { if (s.sphere) { scene.remove(s.sphere); s.sphere.geometry.dispose(); s.sphere.material.dispose(); } } catch (e) {} shockwaves.splice(i, 1); }
   }
   for (let i = debrisChunks.length - 1; i >= 0; i--) {
     const d = debrisChunks[i]; d.life -= dt;

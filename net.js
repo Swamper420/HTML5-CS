@@ -1,9 +1,9 @@
 // HTML5-CS client net layer — WebSocket relay protocol.
 // No three.js here: main.js owns all meshes and passes snapshots through.
 // Protocol (JSON, see server.js):
-//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock, rid} | shot | hit | killed{rid} | bomb (requests) | nade | chat | ping
+//   c->s: hello{name,wantTeam} | state{...30Hz, ct=sender clock, rid} | shot | helix | hit | killed{rid} | bomb (requests) | nade | chat | ping
 //   s->c: welcome{match} | roster | player_joined | player_left | snapshot | match (server-authoritative round/score/bomb, see server-match.js)
-//         | team | shot|hit|killed|bomb|nade|chat
+//         | team | shot|helix|hit|killed|bomb|nade|chat
 //
 // Smoothness: every remote keeps a short buffer of timestamped states (stamped with the
 // SENDER's clock, so relay/network jitter never distorts the motion) and is rendered a
@@ -162,6 +162,7 @@ export const Net = {
         break;
       }
       case 'shot': this.emit('shot', m); break;
+      case 'helix': this.emit('helix', m); break;
       case 'hit': this.emit('hit', m); break;
       case 'dmg': this.emit('dmg', m); break;
       case 'killed': this.emit('killed', m); break;
@@ -299,6 +300,7 @@ export const Net = {
     });
   },
   sendShot(shot) { this._send({ type: 'shot', ...shot }); },
+  sendHelix(h) { this._send({ type: 'helix', ...h }); },
   sendHit(hit) { this._send({ type: 'hit', ...hit }); },
   sendKilled(k) { this._send({ type: 'killed', ...k, rid: this.roundId }); },
   sendBomb(b) { this._send({ type: 'bomb', ...b }); },

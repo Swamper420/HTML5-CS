@@ -264,6 +264,7 @@ export const AudioSys = {
     let vol;
     if (kind === 'gun') vol = 1 / (1 + dist * 0.135);
     else if (kind === 'explosion') vol = 1 / (1 + dist * 0.042);
+    else if (kind === 'helix') vol = 1 / (1 + dist * 0.042); // coilgun carries map-wide like a blast
     else if (kind === 'step') {
       vol = 1 / (1 + dist * 0.5);
       if (dist > 24) vol *= Math.max(0, 1 - (dist - 24) / 9); // footsteps fade fast
@@ -413,13 +414,14 @@ export const AudioSys = {
     const lv = legacyVol;
     if (kind === 'helix') {
       // HELIX ARC: pure synth — coil whine snap, plasma crack, sub slam, shimmer tail. No samples.
-      this._tone({ type: 'sine', f0: 1400, f1: 2200, dur: 0.09, peak: 0.30 * lv, decay: 0.08, pos, kind: 'gun', verb: dry });
-      this._noise({ dur: 0.05, type: 'highpass', freq: 4200, peak: 0.5 * lv, decay: 0.04, rate: 1.6, pos, kind: 'gun', verb: dry });
-      this._noise({ dur: 0.3, type: 'bandpass', freq: 2400, Q: 0.8, peak: 0.55 * lv, decay: 0.22, rate: 1.1, pos, kind: 'gun', verb: dry, echo: firstPerson ? 0.05 : 0.12 });
-      this._tone({ type: 'sine', f0: 220, f1: 28, dur: 0.7, peak: 0.65 * lv, decay: 0.6, pos, kind: 'gun', verb: dry });
-      this._tone({ type: 'sine', f0: 1750, dur: 0.5, peak: 0.14 * lv, decay: 0.45, pos, kind: 'gun', verb: 0.2 });
-      this._tone({ type: 'sine', f0: 2620, dur: 0.7, peak: 0.10 * lv, decay: 0.6, pos, kind: 'gun', verb: 0.25, at: 0.05 });
-      this._noise({ dur: 0.9, type: 'lowpass', freq: 600, sweepTo: 70, peak: 0.4 * lv, decay: 0.8, rate: 0.7, pos, kind: 'gun', verb: 0.3, echo: 0.3, at: 0.08, brown: true });
+      // kind 'helix' carries map-wide so the release reads at long distance.
+      this._tone({ type: 'sine', f0: 1400, f1: 2200, dur: 0.09, peak: 0.30 * lv, decay: 0.08, pos, kind: 'helix', verb: dry });
+      this._noise({ dur: 0.05, type: 'highpass', freq: 4200, peak: 0.5 * lv, decay: 0.04, rate: 1.6, pos, kind: 'helix', verb: dry });
+      this._noise({ dur: 0.3, type: 'bandpass', freq: 2400, Q: 0.8, peak: 0.55 * lv, decay: 0.22, rate: 1.1, pos, kind: 'helix', verb: dry, echo: firstPerson ? 0.05 : 0.12 });
+      this._tone({ type: 'sine', f0: 220, f1: 28, dur: 0.7, peak: 0.65 * lv, decay: 0.6, pos, kind: 'helix', verb: dry });
+      this._tone({ type: 'sine', f0: 1750, dur: 0.5, peak: 0.14 * lv, decay: 0.45, pos, kind: 'helix', verb: 0.2 });
+      this._tone({ type: 'sine', f0: 2620, dur: 0.7, peak: 0.10 * lv, decay: 0.6, pos, kind: 'helix', verb: 0.25, at: 0.05 });
+      this._noise({ dur: 0.9, type: 'lowpass', freq: 600, sweepTo: 70, peak: 0.4 * lv, decay: 0.8, rate: 0.7, pos, kind: 'helix', verb: 0.3, echo: 0.3, at: 0.08, brown: true });
       return;
     }
     if (kind === 'smg') {
@@ -508,12 +510,73 @@ export const AudioSys = {
       } catch (e) {}
     }
   },
+  helixRemote(id, k, pos) {
+    // Per-remote coil loop driven by snapshot sound state (helix 0..1).
+    // Call every frame; k<=0 frees the voice. Positioned, map-wide loud.
+    if (!this.ctx) return;
+    if (!opts.sound || this.muted) k = 0;
+    k = clamp(k || 0, 0, 1);
+    if (!this._helixRem) this._helixRem = {};
+    let h = this._helixRem[id];
+    if (!h) {
+      if (k <= 0.01 || !pos) return;
+      try {
+        const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 80;
+        const o2 = this.ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = 160;
+        const g2 = this.ctx.createGain(); g2.gain.value = 0.3;
+        const g = this.ctx.createGain(); g.gain.value = 0;
+        const pan = this._pan(0);
+        o.connect(g); o2.connect(g2); g2.connect(g); g.connect(pan);
+        o.start(); o2.start();
+        h = this._helixRem[id] = { o, o2, g, pan };
+      } catch (e) { return; }
+    }
+    const t = this.now();
+    try {
+      if (pos && k > 0.01) {
+        const s = this._spatial(pos, 'helix');
+        h.o.frequency.setTargetAtTime(80 + k * 1320, t, 0.05);
+        h.o2.frequency.setTargetAtTime(160 + k * 2640, t, 0.05);
+        h.g.gain.setTargetAtTime(k * 0.5 * s.vol, t, 0.08);
+        try { if (h.pan && h.pan.pan) h.pan.pan.setTargetAtTime(clamp(s.pan, -1, 1), t, 0.08); } catch (e) {}
+      } else {
+        h.g.gain.setTargetAtTime(0, t, 0.08);
+      }
+    } catch (e) {}
+    if ((k <= 0.01 || !pos) && h) {
+      const { o, o2, g, pan } = h;
+      delete this._helixRem[id];
+      try {
+        o.stop(t + 0.4); o2.stop(t + 0.4);
+        setTimeout(() => { try { o.disconnect(); o2.disconnect(); g.disconnect(); if (pan !== this.master) pan.disconnect(); } catch (e) {} }, 600);
+      } catch (e) {}
+    }
+  },
   helixReady() {
     // cell recharged: bright double-chime + soft thunk.
     if (!this.ctx || !opts.sound || this.muted) return;
     this._tone({ type: 'sine', f0: 880, dur: 0.12, peak: 0.22, decay: 0.11, verb: 0.08 });
     this._tone({ type: 'sine', f0: 1320, dur: 0.18, peak: 0.20, decay: 0.16, verb: 0.08, at: 0.09 });
     this._noise({ dur: 0.05, type: 'lowpass', freq: 700, peak: 0.18, decay: 0.045, rate: 0.9 });
+  },
+  helixWindupAt(pos) {
+    // Remote coil wind-up: one-shot rising whine (~1s spool), map-wide loud.
+    // ponytail: one-shot, resend per trigger hold — no per-frame net spam.
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    this._tone({ type: 'sine', f0: 80, f1: 1400, dur: 1.1, peak: 0.5, decay: 1.0, pos, kind: 'helix' });
+    this._tone({ type: 'triangle', f0: 160, f1: 2800, dur: 1.1, peak: 0.16, decay: 1.0, pos, kind: 'helix' });
+  },
+  helixReloadAt(pos) {
+    // Remote cell recharge: handling clack + rising recharge hum, map-wide loud.
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    this._noise({ dur: 0.055, type: 'bandpass', freq: 950, Q: 1.8, peak: 0.35, decay: 0.05, rate: 1.1, pos, kind: 'helix' });
+    this._tone({ type: 'sine', f0: 100, f1: 800, dur: 1.6, peak: 0.3, decay: 1.5, pos, kind: 'helix', at: 0.1 });
+  },
+  helixReadyAt(pos) {
+    // Remote cell charged: bright double-chime, map-wide loud.
+    if (!this.ctx || !opts.sound || this.muted || !pos) return;
+    this._tone({ type: 'sine', f0: 880, dur: 0.12, peak: 0.3, decay: 0.11, pos, kind: 'helix', verb: 0.15 });
+    this._tone({ type: 'sine', f0: 1320, dur: 0.18, peak: 0.28, decay: 0.16, pos, kind: 'helix', verb: 0.15, at: 0.09 });
   },
   click(freq = 2000, dur = 0.05, vol = 0.25, pos = null) {
     if (!this.ctx || !opts.sound || this.muted) return;

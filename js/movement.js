@@ -31,6 +31,7 @@ import {
 } from './viewmodel.js';
 
 let stepAt = 0;
+let _helixWindSent = false;
 function endWallRun() {
   if (!player.wallRun) return;
   player.wallRun = null;
@@ -39,6 +40,7 @@ function endWallRun() {
 export function updatePlayer(dt, t) {
   if (!player.alive) {
     try { AudioSys.helixWhine(0); } catch {} // never drone while dead
+    _helixWindSent = false;
     // CS: dead until round ends — spectate a living teammate instead of a
     // static death cam. Auto-advances when the target dies (spectateCurrent).
     const before = player.specTarget;
@@ -50,6 +52,7 @@ export function updatePlayer(dt, t) {
         x: player.pos.x, y: player.pos.y, z: player.pos.z,
         yaw: player.yaw, pitch: player.pitch, hp: 0, alive: false,
         weapon: player.cur, aiming: false, moving: false, crouch: false, gnd: true, wr: 0, dual: false,
+        reloading: false, helix: 0,
       });
     } catch {}
     return;
@@ -347,6 +350,14 @@ export function updatePlayer(dt, t) {
       const isH = player.cur === 'helix';
       const hw = isH && player.weapons.helix;
       const holding = isH && mouseDown && player._helixSpin && player.reloading <= 0 && hw && hw.mag > 0 && player.alive;
+      // Broadcast wind-up once per trigger hold so remotes hear the spool-up.
+      try {
+        const winding = isH && mouseDown && player.reloading <= 0 && hw && hw.mag > 0 && player.alive && G.phase === 'playing';
+        if (winding && !_helixWindSent) {
+          _helixWindSent = true;
+          if (isOnline()) Net.sendHelix({ action: 'windup', x: player.pos.x, y: player.pos.y + 1.4, z: player.pos.z });
+        } else if (!winding) _helixWindSent = false;
+      } catch {}
       const tgt = !isH ? 0 : player.reloading > 0 ? 6 : holding ? 48 : 2;
       const kk = tgt > vmRig.helixRate ? 2.6 : 1.4; // spool up quick, coast down slow
       vmRig.helixRate += (tgt - vmRig.helixRate) * Math.min(1, dt * kk);
@@ -391,6 +402,9 @@ export function updatePlayer(dt, t) {
       wr: player.wallRun ? player.wallRun.side : 0,
       planting: !!(player.alive && keys['KeyE'] && playerInPlantSite()),
       defusing: !!(player.alive && keys['KeyE'] && playerNearPlantedBomb()),
+      // sound state: reload + coil energy so remotes hear wind-up/recharge in time
+      reloading: player.reloading > 0,
+      helix: player.cur === 'helix' ? Math.round(clamp(vmRig.helixRate / 48, 0, 1) * 100) / 100 : 0,
     });
   } catch {}
 }

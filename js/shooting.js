@@ -186,6 +186,10 @@ export function startReload() {
     player.reloading = def.reloadTime; player.reloadDur = def.reloadTime;
     player.sprayIdx = 0; player._helixSpin = 0;
     AudioSys.click(500, 0.15, 0.3);
+    AudioSys.reload();
+    try {
+      if (isOnline()) Net.sendHelix({ action: 'reload', x: player.pos.x, y: player.pos.y + 1.4, z: player.pos.z });
+    } catch {}
     const tip = $('reload-tip'); tip.textContent = 'RECHARGING…'; tip.classList.remove('hidden');
     return;
   }
@@ -206,6 +210,9 @@ export function finishReload() {
     player.reloading = 0; player.bloom = 0; player._helixSpin = 0;
     const tip = $('reload-tip'); tip.textContent = 'RELOADING…'; tip.classList.add('hidden');
     try { AudioSys.helixReady(); } catch {}
+    try {
+      if (isOnline()) Net.sendHelix({ action: 'ready', x: player.pos.x, y: player.pos.y + 1.4, z: player.pos.z });
+    } catch {}
     try { announce('HELIX CHARGED ⚡', 800); } catch {}
     updateHUD();
     return;

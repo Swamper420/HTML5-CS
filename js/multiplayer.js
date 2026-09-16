@@ -59,6 +59,7 @@ function addRemoteMesh(r) {
 export function removeRemoteMesh(id) {
   const e = remotes.get(id);
   if (!e) return;
+  try { AudioSys.helixRemote(id, 0); } catch {}
   try { scene.remove(e.mesh); } catch {}
   try { if (e.blob) scene.remove(e.blob); } catch {}
   remotes.delete(id);
@@ -234,6 +235,12 @@ export function updateRemoteMeshes(dt, t) {
       }
       updateBlob(e, e.pos.x, e.pos.z, !!r.alive, moving);
     } catch {}
+    // Continuous coil sound from snapshot sound state (helix 0..1 + reload anim).
+    try {
+      const hk = (r.weapon === 'helix' && r.alive) ? (+r.helix || 0) : 0;
+      if (hk > 0.01) AudioSys.helixRemote(id, hk, { x: e.pos.x, y: e.pos.y + 1.4, z: e.pos.z });
+      else AudioSys.helixRemote(id, 0);
+    } catch {}
   }
 }
 
@@ -307,6 +314,20 @@ export function wireMultiplayer() {
             setTimeout(() => AudioSys.crack(), along / 343 * 1000);
         }
       }
+    } catch {}
+  });
+
+  Net.on('helix', (m) => {
+    // Remote coilgun tells: wind-up spool, cell recharge, charged chime. Release
+    // already arrives via 'shot' (helix kind carries map-wide).
+    try {
+      if (G.phase !== 'playing') return;
+      if (m.fromId != null && !remotes.get(m.fromId)) return; // unknown sender
+      const at = new THREE.Vector3(+m.x || 0, +m.y || 1.4, +m.z || 0);
+      if (!isFinite(at.x + at.y + at.z) || Math.abs(at.x) > 45 || Math.abs(at.z) > 45) return;
+      if (m.action === 'windup') AudioSys.helixWindupAt(at);
+      else if (m.action === 'reload') AudioSys.helixReloadAt(at);
+      else if (m.action === 'ready') AudioSys.helixReadyAt(at);
     } catch {}
   });
 
