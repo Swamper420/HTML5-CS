@@ -6,7 +6,7 @@ import { Net } from '../net.js';
 import { AudioSys } from './audio.js';
 import { CROUCH_EYE_DROP, EYE, NADE_DEFS, SPRAY_AK, WEAPONS, isNadeKey } from './config.js';
 import { $, clamp, rand } from './utils.js';
-import { soldierFireKick } from './anim.js';
+import { soldierFireKick, soldierSlash } from './anim.js';
 import { updateInteractHUD } from './bomb.js';
 import { rayWallDist } from './collision.js';
 import { fireHitscan, damageBot, playerInPlantSite, playerNearPlantedBomb } from './combat.js';
@@ -33,13 +33,16 @@ export function meleeSlash(t, wkey, def) {
   const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE - CROUCH_EYE_DROP * (player.crouch || 0), player.pos.z);
   const range = def.range || 3.4;
   const wallD = rayWallDist(eye, dir, range);
-  // heavy diagonal swing feel: big viewmodel sweep + sideways roll
-  vmRig.kickV += def.vmKick * 15;
-  vmRig.punchP += def.punch;
+  // the slash itself is animated in movement.js (vmRig.swingT) — here just a
+  // light wrist snap, no gun-style kickback
+  vmRig.swingT = 0;
+  vmRig.swingFlip = -(vmRig.swingFlip || 1);
+  vmRig.kickV += def.vmKick * 4;
+  vmRig.punchP += def.punch * 0.5;
   vmRig.roll += rand(-0.06, 0.06);
   vmRig.fovKick += def.fovPunch;
   vmRig.shake += def.shake;
-  soldierFireKick(playerMesh, 0.6);
+  soldierSlash(playerMesh); // own shadow-body chops with you
   setMouseJustDown(false);
   setCrossGap(clamp(6 + Math.hypot(player.vel.x, player.vel.z) * 1.3, 6, 46));
   const myTeam = player.team || 'ct';

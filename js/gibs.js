@@ -84,6 +84,7 @@ export function spawnGibMesh(mesh, pos, vel, go = {}) {
     flesh: !!go.flesh,
     helmet: !!go.helmet,
     silent: !!go.silent,
+    slow: !!go.slow, // dreamy low-gravity fall (machete halves) instead of flung debris
   });
   capGibs();
   return mesh;
@@ -297,9 +298,9 @@ export function tearLimbGib(mesh, pos, shotDir, team, big = false, part = null) 
     try { AudioSys.gib(origin, big); } catch (e) {}
   } catch (e) {}
 }
-// Diagonal bisection (MACHETE): the body comes apart shoulder-to-opposite-hip
-// into two big halves that tumble away from the cut. The corpse mesh is gone —
-// halves + mess are physical gibs, so no ragdoll runs afterwards.
+// Diagonal bisection (MACHETE): one clean cut, shoulder to opposite hip. The
+// two halves part slowly and topple to the ground — no explosion, no popcorn
+// gibs. The corpse mesh is gone; halves + a clean blood arc are all that remain.
 export function bisectDiagonal(mesh, pos, shotDir, team) {
   if (!pos) return;
   try {
@@ -310,7 +311,8 @@ export function bisectDiagonal(mesh, pos, shotDir, team) {
     dir.normalize();
     const side = new THREE.Vector3(-dir.z, 0, dir.x); // across the cut
     const oy = pos.y || 0;
-    // upper half (shoulder side) flies up + along the swing, lower half drops + back
+    const yaw = Math.atan2(dir.x, dir.z);
+    // upper half (head + chest + one arm): leans away, sinks slow
     const upper = new THREE.Group();
     {
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.55, 0.30), cloth);
@@ -320,8 +322,10 @@ export function bisectDiagonal(mesh, pos, shotDir, team) {
       const arm = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.5, 0.16), cloth);
       arm.position.set(0.28, 0.25, 0); upper.add(arm);
       const cut = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.08, 0.32), M.flesh);
-      cut.position.y = -0.02; cut.rotation.z = 0.6; upper.add(cut);
+      cut.position.y = -0.02; cut.rotation.z = 0.6; upper.add(cut); // the diagonal wound face
     }
+    upper.rotation.y = yaw;
+    // lower half (hips + legs): stays near standing, then crumples
     const lower = new THREE.Group();
     {
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.6, 0.28), cloth);
@@ -333,22 +337,23 @@ export function bisectDiagonal(mesh, pos, shotDir, team) {
       const cut = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.08, 0.30), M.flesh);
       cut.position.y = 0.02; cut.rotation.z = 0.6; lower.add(cut);
     }
-    const uv = dir.clone().multiplyScalar(rand(1.5, 3)).addScaledVector(side, rand(0.5, 1.5)); uv.y = rand(2.5, 4.5);
-    const lv = dir.clone().multiplyScalar(rand(-2.5, -1)).addScaledVector(side, rand(-1.5, -0.5)); lv.y = rand(0.5, 1.5);
-    spawnGibMesh(upper, new THREE.Vector3(pos.x, oy + 1.2, pos.z), uv, { flesh: true, restY: 0.25, radius: 0.35, rest: 0.3, fric: 0.75 });
-    spawnGibMesh(lower, new THREE.Vector3(pos.x, oy + 0.6, pos.z), lv, { flesh: true, restY: 0.3, radius: 0.35, rest: 0.25, fric: 0.8 });
+    lower.rotation.y = yaw;
+    // gentle parting: upper slides along the swing and tips, lower sags straight down
+    const uv = dir.clone().multiplyScalar(rand(0.4, 0.8)).addScaledVector(side, rand(0.2, 0.5)); uv.y = rand(0.2, 0.5);
+    const lv = dir.clone().multiplyScalar(rand(-0.2, 0.1)); lv.y = rand(-0.1, 0.1);
+    spawnGibMesh(upper, new THREE.Vector3(pos.x, oy + 1.2, pos.z), uv,
+      { flesh: true, slow: true, restY: 0.3, radius: 0.35, rest: 0.12, fric: 0.9,
+        ang: new THREE.Vector3(rand(-0.8, 0.8), rand(-0.5, 0.5), rand(0.8, 1.6)) });
+    spawnGibMesh(lower, new THREE.Vector3(pos.x, oy + 0.6, pos.z), lv,
+      { flesh: true, slow: true, restY: 0.35, radius: 0.35, rest: 0.1, fric: 0.9,
+        ang: new THREE.Vector3(rand(-0.4, 0.4), rand(-0.3, 0.3), rand(-0.7, 0.7)) });
+    // one clean arterial arc + a single spreading pool — the mess, not a blast
     const mid = new THREE.Vector3(pos.x, oy + 1.0, pos.z);
-    spawnBloodSpray(mid, dir, 2.2);
-    spawnBurst(mid, 0xa00d10, opts.quality ? 22 : 10, 7, 0.8, 0.14);
-    try { bloodPoolBig(pos); } catch {}
-    try { AudioSys.gib(mid, true); } catch (e) {}
-    try { AudioSys.headpop(mid); } catch (e) {}
+    spawnBloodSpray(mid, dir, 1.4);
+    spawnBloodPool(pos.x, pos.z, true);
+    try { AudioSys.gib(mid, false); } catch (e) {}
     try { if (mesh) mesh.visible = false; } catch (e) {}
   } catch (e) {}
-}
-function bloodPoolBig(pos) {
-  spawnBloodPool(pos.x, pos.z, true);
-  for (let i = 0; i < 3; i++) spawnBloodPool(pos.x + rand(-1.2, 1.2), pos.z + rand(-1.2, 1.2), Math.random() < 0.6);
 }
 export function restoreSoldierMesh(mesh) {
   try {
@@ -395,7 +400,7 @@ export function updateGibs(dt) {
   for (let i = 0; i < gibs.length; i++) {
     const gib = gibs[i];
     try {
-      gib.vel.y -= 20 * dt;
+      gib.vel.y -= (gib.slow ? 4.5 : 20) * dt; // slow halves drift down like a held breath
       gib.vel.multiplyScalar(Math.max(0, 1 - 0.12 * dt)); // air drag
       gib.mesh.position.addScaledVector(gib.vel, dt);
       gib.mesh.rotation.x += gib.ang.x * dt;

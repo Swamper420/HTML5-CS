@@ -23,6 +23,7 @@ export const vmRig = {
   swayX: 0, swayY: 0, bobT: 0, aimK: 0, drawT: 1, landK: 0, busyK: 0,
   fovKick: 0, punchP: 0, punchY: 0, shake: 0,
   muzzleT: 0, boltT: 0,
+  swingT: 1, swingFlip: 1, // machete slash progress 0..1 (1 = idle) + alternating side
   helixRate: 0, // HELIX rotor angular speed (rad/s) — spools with inertia, drives whine + coil pulse
 };
 export const VM_HIP = new THREE.Vector3(0.24, -0.235, -0.42);
@@ -203,6 +204,7 @@ export function buildViewmodel(key, opts = {}) {
 
   // rig reset + draw animation
   vmRig.kickZ = 0; vmRig.kickV = 0; vmRig.kickRot = 0; vmRig.kickRotV = 0;
+  vmRig.swingT = 1; // a fresh blade rests, mid-swing never carries across swaps
   vmRig.drawT = 0; vmRig.aimK = player && player.aiming ? 1 : 0;
   vmBase.position.copy(VM_HIP);
   vmBase.position.y -= 0.22; vmBase.rotation.x = 0.55;

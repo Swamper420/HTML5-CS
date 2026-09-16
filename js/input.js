@@ -100,7 +100,7 @@ export function initInput() {
       return;
     }
     if (e.button === 0) { mouseDown = true; mouseJustDown = true; }
-    if (e.button === 2) { if (isDualCur()) { rmbDown = true; rmbJustDown = true; } else player.aiming = true; }
+    if (e.button === 2) { if (isDualCur()) { rmbDown = true; rmbJustDown = true; } else if (WEAPONS[player.cur] && !WEAPONS[player.cur].melee) player.aiming = true; }
   });
   document.addEventListener('mouseup', (e) => {
     if (e.button === 0) {

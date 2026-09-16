@@ -6,7 +6,7 @@ import { Net } from '../net.js';
 import { AudioSys } from './audio.js';
 import { CROUCH_EYE_DROP, MAP_HALF, MONEY_KILL, NADE_DEFS, WALLRUN, WEAPONS } from './config.js';
 import { $, clamp, rand } from './utils.js';
-import { animateSoldier, damp, soldierFireKick } from './anim.js';
+import { animateSoldier, damp, soldierFireKick, soldierSlash } from './anim.js';
 import { BOMB, applyRemoteBomb, bombResetRound, spawnBombMesh, updateBombHUD } from './bomb.js';
 import { resetBot } from './bots.js';
 import { damagePlayer } from './combat.js';
@@ -369,7 +369,11 @@ export function wireMultiplayer() {
       spawnTracer(from, end, m.tracer || 0xff9a5c);
       spawnWorldFlash(from, m.tracer || 0xff9a5c, m.sound === 'sniper' ? 1.5 : 0.85);
       AudioSys.shoot(m.sound || 'rifle', from);
-      if (e) { e.flashAt = performance.now() / 1000 + 0.05; soldierFireKick(e.mesh, 0.85); }
+      if (e) {
+        e.flashAt = performance.now() / 1000 + 0.05;
+        if (m.sound === 'machete') soldierSlash(e.mesh); // visible chop, not a gun kick
+        else soldierFireKick(e.mesh, 0.85);
+      }
       // Near-miss crack for remote shots.
       if (player.alive && camera) {
         const lp = camera.position;
@@ -397,6 +401,17 @@ export function wireMultiplayer() {
       if (m.action === 'windup') AudioSys.helixWindupAt(at);
       else if (m.action === 'reload') AudioSys.helixReloadAt(at);
       else if (m.action === 'ready') AudioSys.helixReadyAt(at);
+    } catch {}
+  });
+
+  Net.on('yell', (m) => {
+    // Remote Tarzan war cry: positional, carries across the map.
+    try {
+      if (G.phase !== 'playing') return;
+      if (m.fromId != null && !remotes.get(m.fromId)) return; // unknown sender
+      const at = new THREE.Vector3(+m.x || 0, +m.y || 1.4, +m.z || 0);
+      if (!isFinite(at.x + at.y + at.z) || Math.abs(at.x) > 45 || Math.abs(at.z) > 45) return;
+      AudioSys.tarzan(at);
     } catch {}
   });
 

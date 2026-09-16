@@ -1,5 +1,5 @@
 // js/anim.js — AGENTS: Procedural character animation: locomotion gait, aim layer, recoil/flinch impulses, wall-run pose.
-// Ownership: newAnimState, animateSoldier, soldierFireKick, soldierFlinch.
+// Ownership: newAnimState, animateSoldier, soldierFireKick, soldierFlinch, soldierSlash.
 
 import { clamp } from './utils.js';
 
@@ -18,6 +18,7 @@ function newAnimState() {
     spd: 0, fwd: 0, side: 0,      // smoothed body-space motion
     pitch: 0, crouch: 0, kneel: 0,
     fire: 0, flinch: 0, reload: 0,
+    slash: 0, slashDir: 1, // machete chop progress 1..0 + alternating side
     land: 0, air: 0, wall: 0,
     breathe: Math.random() * TAU,
     yawPrev: null, turn: 0,
@@ -30,6 +31,11 @@ export function soldierFireKick(mesh, amt = 1) {
 }
 export function soldierFlinch(mesh, amt = 1) {
   const a = mesh && mesh.userData && mesh.userData.anim; if (a) a.flinch = Math.min(1, a.flinch + amt);
+}
+// Third-person machete chop: full-arm diagonal slash, alternating sides.
+export function soldierSlash(mesh) {
+  const a = mesh && mesh.userData && mesh.userData.anim;
+  if (a) { a.slash = 1; a.slashDir = -(a.slashDir || 1); }
 }
 
 // inp: { vx, vz, yaw, pitch, grounded, crouch, kneel, reloading, moving, wall }
@@ -75,6 +81,7 @@ export function animateSoldier(mesh, inp, dt, t) {
   A.land = Math.max(0, A.land - dt * 3.2);
   A.fire = Math.max(0, A.fire - dt * 7);
   A.flinch = Math.max(0, A.flinch - dt * 4.5);
+  A.slash = Math.max(0, A.slash - dt * 2.2); // one chop ≈ 0.45s, matches the first-person swing
   A.breathe += dt * 1.5;
 
   // ---- gait clock ----
@@ -174,12 +181,28 @@ export function animateSoldier(mesh, inp, dt, t) {
   r.shoulderR.rotation.x = -0.55 + gunBob * 0.6 + A.fire * 0.16 - 0.18 * kneelK;
   r.shoulderR.rotation.z = -0.10 * gaitK * Math.sin(p);
   r.elbowR.rotation.x = -0.85 - A.fire * 0.10;
+  // ---- MACHETE CHOP: right arm sweeps a full diagonal, torso twists into it,
+  //      blade follows the hand. Alternates sides per swing. ----
+  if (A.slash > 0) {
+    const sk = clamp(1 - A.slash, 0, 1), f = A.slashDir || 1;
+    const chop = Math.sin(sk * Math.PI);
+    r.shoulderR.rotation.x = -0.55 - 1.5 * chop;
+    r.shoulderR.rotation.z = -0.9 * f * chop;
+    r.elbowR.rotation.x = -0.85 - 0.5 * chop;
+    r.chest.rotation.y += f * 0.3 * chop;
+    r.spine.rotation.x += 0.18 * chop;
+  }
 
   // ---- WEAPON: barrel tracks the aim line, kicks on fire, dips on reload/kneel ----
   if (r.gun) {
     r.gun.rotation.x = -A.pitch * 0.55 - A.fire * 0.22 + 0.25 * rl + 0.30 * kneelK;
     r.gun.rotation.z = 0.55 * rl + 0.35 * kneelK;
     r.gun.rotation.y = -A.turn * 0.12;
+    if (A.slash > 0) { // blade rides the chop, not the aim line
+      const chop = Math.sin(clamp(1 - A.slash, 0, 1) * Math.PI), f = A.slashDir || 1;
+      r.gun.rotation.x += -0.4 * chop;
+      r.gun.rotation.z += f * -0.7 * chop;
+    }
     r.gun.position.y = (r.gun.userData.baseY !== undefined ? r.gun.userData.baseY : (r.gun.userData.baseY = r.gun.position.y))
       - 0.05 * rl - A.fire * 0.015;
     r.gun.position.z = (r.gun.userData.baseZ !== undefined ? r.gun.userData.baseZ : (r.gun.userData.baseZ = r.gun.position.z))

@@ -34,6 +34,8 @@ export function gunMats() {
   M.bakelite = new THREE.MeshStandardMaterial({ color: 0x5b2a17, roughness: 0.55, metalness: 0.05 });
   M.blued = new THREE.MeshStandardMaterial({ color: 0x3b3e44, roughness: 0.42, metalness: 0.55 });
   M.awpGreen = new THREE.MeshStandardMaterial({ color: 0x4f6b3c, roughness: 0.7, metalness: 0.05 });
+  // machete slab: bright enough to read as steel with no envmap (pure metals go black)
+  M.blade = new THREE.MeshStandardMaterial({ color: 0x9aa2ab, roughness: 0.32, metalness: 0.55, emissive: 0x14181d });
   M.magClear = new THREE.MeshStandardMaterial({ color: 0x55554c, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.35, depthWrite: false });
   M.glowR = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
   M.sleeve = new THREE.MeshStandardMaterial({ color: 0x3d4654, roughness: 0.95 });
@@ -194,7 +196,7 @@ export function buildGunModel(key, M, root, magG, opts = {}) {
     if (hi) for (let i = 0; i < 4; i++) Bx(root, 0.057, 0.008, 0.02, M.dark, -0.19 + i * 0.045, 0.0);
     P(root, [[-0.02, -0.045], [0.03, -0.045], [0.03, 0.07], [-0.02, 0.07]], 0.09, M.brass);
     // the slab: clipped point, swedge, fuller groove
-    P(root, [[0.03, -0.10], [1.28, -0.10], [1.52, 0.02], [1.50, 0.10], [0.03, 0.10]], 0.022, M.steel);
+    P(root, [[0.03, -0.10], [1.28, -0.10], [1.52, 0.02], [1.50, 0.10], [0.03, 0.10]], 0.022, M.blade || M.steel);
     if (hi) Bx(root, 0.024, 0.018, 1.05, M.dark, 0.62, 0.045);
     if (hi) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.012, 1.30), M.chrome || M.steel); e.position.set(0, -0.095, -0.75); root.add(e); }
     out.muzzle = mark(1.52, 0.02);

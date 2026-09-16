@@ -211,6 +211,16 @@ export function updatePlayer(dt, t) {
   // footsteps (own boots, L/R alternating + sprint weight) — crouch-walking is silent
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
   if (player.onGround && hSpeed > 2 && t > stepAt && player.crouch < 0.5) { stepAt = t + (sprint ? 0.3 : 0.42); AudioSys.step(null, sprint); }
+  // machete sprint: Tarzan war cry every few seconds, relayed so everyone hears it
+  if (player.cur === 'machete' && sprint && hSpeed > 3 && player.alive && G.phase === 'playing' && !isFreeze()) {
+    if (t - (player._tarzanAt || -99) > 5) {
+      player._tarzanAt = t;
+      try { AudioSys.tarzan(); } catch {}
+      try {
+        if (isOnline()) Net.sendYell({ x: Math.round(player.pos.x * 100) / 100, y: Math.round((player.pos.y + 1.4) * 100) / 100, z: Math.round(player.pos.z * 100) / 100 });
+      } catch {}
+    }
+  }
   void wr;
 
   const def = WEAPONS[player.cur] || { bloomDecay: 0.05, auto: false, zoomFov: 75 };
@@ -272,7 +282,10 @@ export function updatePlayer(dt, t) {
   try { updateWorldWeapons(dt, t); } catch (e) { console.warn('world weapons', e); }
 
   // --- ADS blend + viewmodel motion (bob / sway / draw / reload) ---
-  const wantAim = (player.aiming && player.alive && player.reloading <= 0) ? 1 : 0;
+  const isBlade = player.cur === 'machete';
+  const wantAim = (!isBlade && player.aiming && player.alive && player.reloading <= 0) ? 1 : 0;
+  // slash clock: one diagonal sweep per trigger pull, alternating sides
+  if (isBlade && vmRig.swingT < 1) vmRig.swingT = Math.min(1, vmRig.swingT + dt / 0.45);
   vmRig.aimK += (wantAim - vmRig.aimK) * Math.min(1, dt * 13);
   const aimE = vmRig.aimK * vmRig.aimK * (3 - 2 * vmRig.aimK); // smoothstep
   // stock/butt sit under the cheek in ADS — hide them so they don't fill the bottom of the screen
@@ -297,6 +310,23 @@ export function updatePlayer(dt, t) {
     let rz = 0;
     // the solved tilt that levels the sight line, faded in with the ADS blend
     if (solved) { rx += solved.pitch * aimE; ry += solved.yaw * aimE; }
+    if (isBlade) {
+      // held like a blade, not a gun: low-right grip, tip UP and angled across
+      // the screen so the full length reads (a forward-pointing blade foreshortens
+      // to a nub and every swing looks like a stab).
+      px += 0.05; py -= 0.05; pz += 0.06;
+      rx += 0.32; ry -= 0.35; rz -= 0.45;
+      if (vmRig.swingT < 1) {
+        // lateral slash across the screen, alternating sides — never a downward stab
+        const sk = vmRig.swingT, f = vmRig.swingFlip || 1;
+        const sw = Math.sin(sk * Math.PI); // 0 → 1 → 0 across one swing
+        px += f * 0.28 * sw;
+        py += -0.06 * sw;
+        ry += f * 1.05 * sw;
+        rz += f * -0.85 * sw;
+        rx += 0.12 * sw;
+      }
+    }
     // Reload, staged the way hands actually work it: cant the weapon inboard, drop
     // the empty, bring the fresh mag up and slap it home, run the charging handle,
     // settle. One sine dip (what this was) reads as a shrug.

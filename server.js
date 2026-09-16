@@ -356,6 +356,7 @@ wss.on('connection', (ws, req) => {
         break;
       case 'shot':
       case 'helix':
+      case 'yell':
       case 'hit':
       case 'killed':
       case 'nade':
@@ -378,7 +379,7 @@ wss.on('connection', (ws, req) => {
           if (!Number.isFinite(d)) break;
           m.dmg = Math.max(0, Math.min(100, d));
         }
-        if ((m.type === 'nade' || m.type === 'shot' || m.type === 'helix') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
+        if ((m.type === 'nade' || m.type === 'shot' || m.type === 'helix' || m.type === 'yell') && (m.x !== undefined || m.y !== undefined || m.z !== undefined)) {
           if (!Number.isFinite(+m.x + +m.y + +m.z)) break;
           if (Math.abs(+m.x) > 45 || Math.abs(+m.z) > 45) break;
         }

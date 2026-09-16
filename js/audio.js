@@ -325,6 +325,7 @@ export const AudioSys = {
     if (kind === 'gun') vol = 1 / (1 + dist * 0.135);
     else if (kind === 'explosion') vol = 1 / (1 + dist * 0.042);
     else if (kind === 'helix') vol = 1 / (1 + dist * 0.042); // coilgun carries map-wide like a blast
+    else if (kind === 'yell') vol = 1 / (1 + dist * 0.055); // war cry carries across the map
     else if (kind === 'step') {
       vol = 1 / (1 + dist * 0.5);
       if (dist > 24) vol *= Math.max(0, 1 - (dist - 24) / 9); // footsteps fade fast
@@ -778,6 +779,25 @@ export const AudioSys = {
       if (this._sample({ name: 'steps', peak: (sprint ? 0.5 : 0.36), offset: slice + rand(-0.03, 0.03), dur: 0.3, pos, kind: 'step' })) return;
       this._noise({ dur: 0.085, type: 'lowpass', freq: rand(360, 600), peak: (sprint ? 0.42 : 0.3), decay: 0.07, rate: 0.85, pos, kind: 'step' });
     }
+  },
+  tarzan(pos = null) {
+    // sprinting-machete war cry: ululating "ah-ah-ah-ah-AAA" that carries across
+    // the map. Alternating-pitch chest-voice syllables over a rising wail.
+    if (!this.ctx || !opts.sound || this.muted) return;
+    const K = 'yell';
+    // rising opening wail
+    this._tone({ type: 'triangle', f0: 300, f1: 640, dur: 0.5, peak: 0.34, decay: 0.45, pos, kind: K, at: 0 });
+    // yodel syllables: fast high-low alternation = the Tarzan ululation
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+      const at = 0.42 + i * 0.16;
+      const hi = i % 2 === 0;
+      this._tone({ type: 'triangle', f0: hi ? 660 : 470, f1: hi ? 590 : 520, dur: 0.14, peak: 0.42, decay: 0.13, pos, kind: K, at });
+      this._noise({ dur: 0.12, type: 'bandpass', freq: hi ? 1400 : 1000, Q: 2.5, peak: 0.10, decay: 0.11, rate: 1.1, pos, kind: K, at }); // breath
+    }
+    // closing chest-beat cry, held long
+    this._tone({ type: 'triangle', f0: 520, f1: 380, dur: 0.55, peak: 0.4, decay: 0.5, pos, kind: K, at: 0.42 + n * 0.16 });
+    this._tone({ type: 'sine', f0: 260, f1: 190, dur: 0.55, peak: 0.22, decay: 0.5, pos, kind: K, at: 0.42 + n * 0.16 });
   },
   land(hard = false) {
     if (!this.ctx || !opts.sound || this.muted) return;
