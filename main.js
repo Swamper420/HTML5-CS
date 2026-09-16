@@ -248,6 +248,7 @@ function boot() {
   $('again-btn').addEventListener('click', () => { if (isOnline()) return; AudioSys.stopMusic(0.2); startMatch(); });
 
   $('loading-note').textContent = 'Ready. Click DEPLOY.';
+  addEventListener('beforeunload', (e) => { if (G.phase === 'playing') { e.preventDefault(); e.returnValue = ''; } });
   pace();
 }
 
