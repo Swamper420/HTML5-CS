@@ -225,7 +225,7 @@ export function updateRemoteMeshes(dt, t) {
           animateSoldier(m, {
             vx: e.vx, vz: e.vz, yaw: m.rotation.y, pitch: (e.pitch !== undefined ? e.pitch : (r.pitch || 0)),
             grounded: r.gnd !== undefined ? (!!r.gnd || !!wallSide) : (r.y || 0) < 0.06, crouch: !!r.crouch,
-            kneel: !!r.planting || !!r.defusing, reloading: !!r.reloading, wall: wallSide,
+            kneel: !!r.planting || !!r.defusing || !!r.harvesting, reloading: !!r.reloading, wall: wallSide,
           }, dt, t);
         } catch (err) {}
         if (Math.abs(m.rotation.x) > 0.01) m.rotation.x *= Math.max(0, 1 - dt * 6);

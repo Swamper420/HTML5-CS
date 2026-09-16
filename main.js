@@ -29,6 +29,7 @@ import {
   wireMultiplayer,
 } from './js/multiplayer.js';
 import { updatePlayerBody } from './js/playerbody.js';
+import { updateWeed, buildWeed } from './js/weed.js';
 import { camera, initThree, renderer, scene, sunLight } from './js/render.js';
 import { lockPointer, pauseGame, resumeGame, startMatch, updateRoundTimers } from './js/rounds.js';
 import { G, bots, player } from './js/state.js';
@@ -99,6 +100,7 @@ function loop() {
     }
     try { if (isOnline()) updateRemoteMeshes(dt, t); } catch {}
     updateBomb(dt, t);
+    try { updateWeed(dt, t); } catch (e) { console.warn('weed', e); }
     try { updateNades(dt, t); } catch (e) { console.warn('nades', e); }
     updateEffects(dt, t);
     try { updateDamageReport(t); } catch (e) {}
@@ -173,6 +175,7 @@ function boot() {
   $('loading-note').textContent = 'Building map…';
   initThree();
   buildMap();
+  buildWeed();
   buildViewmodel('deagle');
   if (viewmodel) viewmodel.visible = false; // hidden until match starts
   for (let i = 0; i < 4; i++) makeBot('ct', i);

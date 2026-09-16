@@ -65,9 +65,10 @@ grep -ln "\bupdateBot\b" js/*.js main.js         # who uses it
 | `js/hud.js` | 179 | `updateHUD`, announcements, killfeed, screen feel |
 | `js/scoreboard.js` | 56 | TAB scoreboard |
 | `js/minimap.js` | 148 | Minimap |
+| `js/weed.js` | | Mid-map weed farm: hold-E harvest ($100/s), trip hallucination |
 
 ## Frame order (`loop()` in main.js, while playing)
-timers → `updatePlayer` → `updatePlayerBody` → bots (`updateBot`, `animateBotMesh`; skipped in PvP) → `updateRemoteMeshes` → `updateBomb` → `updateNades` → `updateEffects` → `updateScreenFeel` → `updateGoreScreen` → `updateHUD`/`updateBuyTimer` → `drawMinimap` → render.
+timers → `updatePlayer` → `updatePlayerBody` → bots (`updateBot`, `animateBotMesh`; skipped in PvP) → `updateRemoteMeshes` → `updateBomb` → `updateWeed` → `updateNades` → `updateEffects` → `updateScreenFeel` → `updateGoreScreen` → `updateHUD`/`updateBuyTimer` → `drawMinimap` → render.
 
 Boot order: `initThree` → `buildMap` → `buildViewmodel` → `makeBot` ×8 → `initInput` → settings → `wireMultiplayer`.
 

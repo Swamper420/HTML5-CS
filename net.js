@@ -150,7 +150,7 @@ export const Net = {
             hp: Math.max(0, Math.min(100, +p.hp || 0)), alive: p.alive !== false, weapon: String(p.weapon || 'deagle').slice(0, 12),
             aiming: !!p.aiming, moving: !!p.moving,
             crouch: !!p.crouch, gnd: p.gnd !== false, wr: Math.max(-1, Math.min(1, p.wr | 0)), dual: !!p.dual,
-            planting: !!p.planting, defusing: !!p.defusing,
+            planting: !!p.planting, defusing: !!p.defusing, harvesting: !!p.harvesting,
             reloading: !!p.reloading, helix: Math.max(0, Math.min(1, +p.helix || 0)),
             nuke: !!p.nuke,
           });

@@ -9,6 +9,7 @@ import { fireZones, nadeProjectiles, tacticalSmokes } from './grenades.js';
 import { colliders } from './map.js';
 import { isMultiplayer, isOnline, remotes } from './multiplayer.js';
 import { hasLOSClear, smokeVolumeRadius } from './smoke.js';
+import { WEED } from './weed.js';
 import { bots, player } from './state.js';
 
 // minimap
@@ -60,6 +61,15 @@ export function drawMinimap(t) {
     g.fillStyle = '#0a0e14'; g.font = 'bold 7px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(s.name, px(s.x), pz(s.z));
   }
+  // weed farm (mid): green dot + radius ring
+  try {
+    g.strokeStyle = 'rgba(157,255,106,0.7)'; g.lineWidth = 1;
+    g.beginPath(); g.arc(px(WEED.x), pz(WEED.z), (WEED.r / world) * S, 0, 7); g.stroke();
+    g.fillStyle = '#4caf50';
+    g.beginPath(); g.arc(px(WEED.x), pz(WEED.z), 3.5, 0, 7); g.fill();
+    g.fillStyle = '#0a0e14'; g.font = 'bold 6px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('🌿', px(WEED.x), pz(WEED.z));
+  } catch (e) {}
   // bomb: planted (blinking red) / dropped (orange) / carrier (ring the carrier)
   const tNow2 = performance.now() / 1000;
   if (BOMB.planted && BOMB.pos) {

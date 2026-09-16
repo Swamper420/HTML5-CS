@@ -21,6 +21,7 @@ import {
 } from './input.js';
 import { isOnline } from './multiplayer.js';
 import { DUAL, isDualCur, updateWorldWeapons } from './pickups.js';
+import { WEED } from './weed.js';
 import { camera, coilLight } from './render.js';
 import { finishReload, playerTryFire } from './shooting.js';
 import { _smokePt, smokePushAt, smokeSlowAt } from './smoke.js';
@@ -420,6 +421,7 @@ export function updatePlayer(dt, t) {
       wr: player.wallRun ? player.wallRun.side : 0,
       planting: !!(player.alive && keys['KeyE'] && playerInPlantSite()),
       defusing: !!(player.alive && keys['KeyE'] && playerNearPlantedBomb()),
+      harvesting: !!WEED.harvesting,
       // sound state: reload + coil energy so remotes hear wind-up/recharge in time
       reloading: player.reloading > 0,
       helix: player.cur === 'helix' ? Math.round(clamp(vmRig.helixRate / 48, 0, 1) * 100) / 100 : 0,

@@ -22,6 +22,7 @@ import { announce, announceRoundEnd, updateHUD } from './hud.js';
 import { setRmbDown } from './input.js';
 import { clearBotsForMP, isMultiplayer, isOnline, isServerMatch, killCoilLights, remotes } from './multiplayer.js';
 import { clearWorldWeapons, setPickupHint } from './pickups.js';
+import { resetWeed } from './weed.js';
 import { resetPlayerBody } from './playerbody.js';
 import { coilLight, renderer, scene } from './render.js';
 import { mySpawnSlot, spawnList, spawnPoint, spawnYawMesh, spawnYawPlayer } from './spawns.js';
@@ -235,6 +236,7 @@ function startRound(first = false, fromNet = false) {
   try { player._lastId = null; player._assistId = null; for (const b of bots) { b._lastId = null; b._assistId = null; } } catch {}
   try { const sb = $('scoreboard'); if (sb) sb.classList.add('hidden'); } catch {}
   bombResetRound(); // online: the server names the single carrier (syncBombFromServer)
+  try { resetWeed(); } catch (e) {}
   const tSite = BOMB.targetSite || 'A';
   const carrierName = BOMB.carrier ? BOMB.carrier.short : ((player.team === 't' && player.hasBomb) ? (player.name || 'YOU') : 'T');
   $('respawn-overlay').classList.add('hidden');
