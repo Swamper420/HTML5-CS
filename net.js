@@ -151,6 +151,7 @@ export const Net = {
             aiming: !!p.aiming, moving: !!p.moving,
             crouch: !!p.crouch, gnd: p.gnd !== false, wr: Math.max(-1, Math.min(1, p.wr | 0)), dual: !!p.dual,
             planting: !!p.planting, defusing: !!p.defusing,
+            reloading: !!p.reloading, helix: Math.max(0, Math.min(1, +p.helix || 0)),
           });
           this._pushSample(r, ct || now, now, p);
         }
