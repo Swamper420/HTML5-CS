@@ -36,7 +36,7 @@ export function deploySmoke(at, owner, t) {
     const old = tacticalSmokes.shift();
     try { for (const pf of old.puffs) { scene.remove(pf.mesh); if (!pf.core) pf.mesh.material.dispose(); } if (old.mat) old.mat.dispose(); } catch (e) {}
   }
-  const vol = { pos: center, radius: def.radius, born: t, until: t + def.duration, ownerTeam: nadeOwnerTeam(owner), puffs: [], drift: new THREE.Vector3(rand(-0.03, 0.03), 0, rand(-0.03, 0.03)), mat: null, fading: false };
+  const vol = { pos: center, radius: def.radius, born: t, until: t + def.duration, ownerTeam: nadeOwnerTeam(owner), puffs: [], drift: smokeWind(center), mat: null, fading: false };
   try {
     const R = def.radius;
     // --- opaque core: overlapping lumpy blobs you physically cannot see through
@@ -72,6 +72,12 @@ export function deploySmoke(at, owner, t) {
   tacticalSmokes.push(vol);
   try { if (isOnline() && owner && owner.isPlayer) { /* throw already relayed; pop is deterministic */ } } catch (e) {}
 }
+// deterministic wind from a position hash: same pop point => same drift on every client
+function smokeWind(center) {
+  const h1 = Math.sin(center.x * 12.9898 + center.z * 78.233) * 43758.5453;
+  const h2 = Math.sin(center.z * 39.425 + center.x * 93.733) * 24634.6345;
+  return new THREE.Vector3(((h1 - Math.floor(h1)) - 0.5) * 0.06, 0, ((h2 - Math.floor(h2)) - 0.5) * 0.06);
+}
 export function disperseSmokes(at, radius, lifeCut) {
   for (const s of tacticalSmokes) {
     if (s.pos.distanceTo(at) < radius + s.radius) {
@@ -95,10 +101,10 @@ export function smokePushAt(p, vx, vz, power = 1) {
     const k = power * clamp(1 - Math.hypot(dx, dz) / (R + 0.001), 0, 1);
     if (k <= 0) continue;
     dense = Math.max(dense, k);
-    s.pos.x = clamp(s.pos.x + vx * k * 0.06, -MAP_HALF + 0.5, MAP_HALF - 0.5);
-    s.pos.z = clamp(s.pos.z + vz * k * 0.06, -MAP_HALF + 0.5, MAP_HALF - 0.5);
-    s.drift.x = clamp((s.drift.x || 0) + vx * k * 0.015, -0.25, 0.25);
-    s.drift.z = clamp((s.drift.z || 0) + vz * k * 0.015, -0.25, 0.25);
+    s.pos.x = clamp(s.pos.x + vx * k * 0.22, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+    s.pos.z = clamp(s.pos.z + vz * k * 0.22, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+    s.drift.x = clamp((s.drift.x || 0) + vx * k * 0.06, -0.25, 0.25);
+    s.drift.z = clamp((s.drift.z || 0) + vz * k * 0.06, -0.25, 0.25);
   }
   return dense;
 }

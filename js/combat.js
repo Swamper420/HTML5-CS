@@ -134,13 +134,17 @@ export function fireHitscan(shooter, origin, dir, wdef, t) {
   const end = origin.clone().add(dir.clone().multiplyScalar(bestT));
   if (tacticalSmokes.length) {
     let dent = null, dentK = 0;
+    const pts = [];
     for (let i = 1; i <= 6; i++) {
       _smokePt.lerpVectors(origin, end, i / 6);
       const k = smokePushAt(_smokePt, dir.x * 12, dir.z * 12, 0.7); // supersonic tunnel through the cloud
+      if (k > 0) pts.push(Math.round(_smokePt.x * 100) / 100, Math.round(_smokePt.y * 100) / 100, Math.round(_smokePt.z * 100) / 100);
       if (k > dentK) { dentK = k; dent = _smokePt.clone(); }
     }
     if (dent && dentK > 0.2) {
       try { spawnSmoke(dent, 0.55, 0.8, 0xd8d4cb); } catch (e) {} // visible punch mark
+      // server-sided via relay: receivers replay the same sample pushes in order (see applyRemoteNade)
+      try { if (shooter.isPlayer && isOnline() && pts.length) Net.sendNade({ action: 'smoke_push', x: dent.x, y: dent.y, z: dent.z, vx: dir.x * 12, vz: dir.z * 12, power: 0.7, pts }); } catch (e) {}
     }
   }
   // effects

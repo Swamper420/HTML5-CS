@@ -140,7 +140,7 @@ export function drawMinimap(t) {
   } catch (e) {}
   // player arrow (greyed out while spectating)
   const x = px(player.pos.x), y = pz(player.pos.z);
-  g.save(); g.translate(x, y); g.rotate(-player.yaw + Math.PI);
+  g.save(); g.translate(x, y); g.rotate(-player.yaw);
   g.fillStyle = player.alive ? '#3dff7a' : 'rgba(140,140,140,0.65)';
   g.beginPath(); g.moveTo(0, -6); g.lineTo(4.5, 5); g.lineTo(-4.5, 5); g.closePath(); g.fill();
   g.restore();

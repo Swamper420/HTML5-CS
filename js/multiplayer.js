@@ -16,7 +16,7 @@ import { restoreSoldierMesh } from './gibs.js';
 import {
   corpseK, goreRemoteDeath, pickFallParams, poseCorpseLimbs, slideCorpseOut, updateRagdoll,
 } from './gore.js';
-import { detonateFlash, detonateHE, throwNade } from './grenades.js';
+import { detonateFlash, detonateHE, tacticalSmokes, throwNade } from './grenades.js';
 import { setSoldierDual, setSoldierGun } from './gunmodels.js';
 import { addKillfeed, announce, playerHitmark, updateHUD } from './hud.js';
 import { igniteMolotov } from './molotov.js';
@@ -24,7 +24,7 @@ import { applyRemoteWeapon } from './pickups.js';
 import { camera, scene } from './render.js';
 import { applyMatchState, checkRoundEnd } from './rounds.js';
 import { renderScoreboard, scoreboardVisible } from './scoreboard.js';
-import { deploySmoke } from './smoke.js';
+import { deploySmoke, smokePushAt, _smokePt } from './smoke.js';
 import { makeSoldier, updateBlob } from './soldier.js';
 import { mySpawnSlot, spawnPoint, spawnYawPlayer } from './spawns.js';
 import { spectateCurrent, updateSpectateOverlay } from './spectate.js';
@@ -214,6 +214,8 @@ export function updateRemoteMeshes(dt, t) {
           e.vx = damp(e.vx || 0, (e.pos.x - (e.prevX !== undefined ? e.prevX : e.pos.x)) * inv, 14, dt);
           e.vz = damp(e.vz || 0, (e.pos.z - (e.prevZ !== undefined ? e.prevZ : e.pos.z)) * inv, 14, dt);
           e.prevX = e.pos.x; e.prevZ = e.pos.z;
+          // remotes stir smoke on every client alike (mirrors movement.js) — no net spam needed
+          try { if (tacticalSmokes.length && (Math.abs(e.vx || 0) + Math.abs(e.vz || 0) > 0.4)) smokePushAt(_smokePt.set(e.pos.x, e.pos.y + 1, e.pos.z), (e.vx || 0) * dt * 8, (e.vz || 0) * dt * 8, 1); } catch (err) {}
           e.crouchK = damp(e.crouchK || 0, r.crouch ? 1 : 0, 11, dt);
           const wallSide = r.wr ? Math.sign(r.wr) : 0;
           animateSoldier(m, {
@@ -408,6 +410,28 @@ function applyRemoteNade(m) {
     if (!isFinite(fuse)) return;
     fuse = clamp(fuse, 0.2, NADE_DEFS[m.nade].fuse + 1.0);
     throwNade(m.nade, origin, vel, owner, fuse, true);
+  } else if (m.action === 'smoke_push') {
+    // Shot-stirred smoke, relayed by the shooter: replay the same sample pushes in order.
+    const pvx = +m.vx, pvz = +m.vz;
+    if (!isFinite(pvx + pvz) || Math.hypot(pvx, pvz) > 40) return;
+    let pw = +m.power;
+    if (!isFinite(pw)) return;
+    pw = clamp(pw, 0, 1.5);
+    const at = new THREE.Vector3(+m.x || 0, +m.y || 1, +m.z || 0);
+    let k = 0;
+    if (Array.isArray(m.pts) && m.pts.length >= 3 && m.pts.length <= 24) {
+      for (let i = 0; i + 2 < m.pts.length; i += 3) {
+        const px = +m.pts[i], py = +m.pts[i + 1], pz = +m.pts[i + 2];
+        if (!isFinite(px + py + pz) || Math.abs(px) > MAP_HALF + 6 || Math.abs(pz) > MAP_HALF + 6) continue;
+        k = Math.max(k, smokePushAt(_smokePt.set(px, py, pz), pvx, pvz, pw));
+      }
+    } else {
+      // legacy single-point push (mixed client versions)
+      if (!isFinite(at.x + at.y + at.z) || Math.abs(at.x) > MAP_HALF + 6 || Math.abs(at.z) > MAP_HALF + 6) return;
+      k = smokePushAt(at, pvx, pvz, pw);
+    }
+    at.set(+m.x || 0, +m.y || 1, +m.z || 0);
+    if (k > 0.2) { try { spawnSmoke(at, 0.55, 0.8, 0xd8d4cb); } catch (e) {} }
   } else if (m.action === 'boom') {
     // in-hand cook from a remote player — detonate at the broadcast position
     const ax = +m.x || 0, ay = +m.y || 1.3, az = +m.z || 0;
